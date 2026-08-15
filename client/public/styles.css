@@ -268,12 +268,25 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 .org-chip.active { border-color: currentColor; }
 .org-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
+/* Envoltorio con scroll horizontal: en pantallas angostas (celular) las 7
+   columnas no se aplastan hasta ser ilegibles — el calendario completo se
+   puede desplazar (o hacer swipe) hacia los lados para ver sábado y domingo,
+   en vez de que esos días queden cortados o directamente no se vean. */
+.cal-grid-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius);
+}
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  /* Ancho mínimo total: evita que las columnas se compriman tanto que el
+     texto se corte de forma rara. Si la pantalla es más angosta que esto,
+     .cal-grid-wrap se encarga de dejarlo desplazable en vez de aplastarlo. */
+  min-width: 700px;
 }
 .cal-dow {
   background: var(--celeste-lighter);
@@ -284,6 +297,14 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 }
 .cal-cell {
   min-height: 108px;
+  /* Sin esto, un título de actividad muy largo (que no puede partirse en dos
+     líneas por el white-space:nowrap de .cal-event) fuerza esta columna a
+     ser más ancha que su 1fr — y como el resto de las columnas se ajustan
+     detrás, la última (domingo) terminaba empujada fuera del recuadro y
+     cortada. Con min-width:0 la celda sí puede achicarse a su 1fr real, y
+     ahí el overflow:hidden + text-overflow:ellipsis de .cal-event recién
+     puede truncar el texto en vez de estirar la columna entera. */
+  min-width: 0;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   padding: 6px;

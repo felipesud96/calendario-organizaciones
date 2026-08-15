@@ -54,6 +54,14 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
+// Corta un título largo a `max` caracteres + "…" para que quepa en las
+// "pastillas" angostas del calendario (el título completo sigue disponible
+// en el tooltip y en el detalle al hacer clic).
+function truncateTitle(s, max = 15) {
+  const str = String(s || '');
+  return str.length > max ? str.slice(0, max).trimEnd() + '…' : str;
+}
+
 function toast(message, type = 'success') {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
@@ -711,7 +719,7 @@ async function renderCalendarView() {
         <div class="cal-daynum">${cellDate.getDate()}</div>
         ${visible.map((it) => `
           <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
-            ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it) + it.title)}
+            ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it))}${esc(truncateTitle(it.title))}
           </button>`).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
       </div>`;
@@ -738,9 +746,11 @@ async function renderCalendarView() {
     </div>
     ${await stakeStatusBarHtml()}
     <div class="org-filters">${chips}</div>
-    <div class="cal-grid">
-      ${DOW_LABELS.map((d) => `<div class="cal-dow">${d}</div>`).join('')}
-      ${cellsHtml}
+    <div class="cal-grid-wrap">
+      <div class="cal-grid">
+        ${DOW_LABELS.map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+        ${cellsHtml}
+      </div>
     </div>
   `;
 
