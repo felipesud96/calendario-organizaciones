@@ -10,7 +10,24 @@ function canEditOrg(user, organizationId) {
 
 function withOrgInfo(item, orgs) {
   const org = orgs.find((o) => o.id === item.organizationId);
-  return { ...item, organizationName: org?.name || '', organizationColor: org?.color || '#999999' };
+  const involvedIds = Array.isArray(item.involvedOrganizationIds) ? item.involvedOrganizationIds : [];
+  const involvedOrganizations = involvedIds
+    .map((id) => orgs.find((o) => o.id === id))
+    .filter(Boolean)
+    .map((o) => ({ id: o.id, name: o.name, color: o.color }));
+  return { ...item, organizationName: org?.name || '', organizationColor: org?.color || '#999999', involvedOrganizations };
+}
+
+// Limpia la lista de "otras organizaciones involucradas": solo IDs de
+// organizaciones que existen de verdad, sin duplicados, y sin incluir a la
+// organización principal (no puede estar "involucrada" consigo misma).
+function normalizeInvolvedOrgIds(raw, primaryOrgId, orgs) {
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  const validIds = new Set(orgs.map((o) => o.id));
+  const primary = Number(primaryOrgId);
+  const ids = arr.map(Number).filter((id) => Number.isFinite(id) && id !== primary && validIds.has(id));
+  return [...new Set(ids)];
 }
 
 export function registerEventRoutes(router) {
@@ -29,13 +46,15 @@ export function registerEventRoutes(router) {
   }));
 
   router.post('/api/events', requireAuth(async (req, res, params, body) => {
-    const { title, description, location, date, startTime, endTime, organizationId } = body || {};
+    const { title, description, location, date, startTime, endTime, organizationId, involvedOrganizationIds } = body || {};
     if (!title || !date || !startTime || !organizationId) {
       return sendJson(res, 400, { error: 'Faltan campos requeridos (día, horario, descripción, organización)' });
     }
     if (!canEditOrg(req.user, organizationId)) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
     }
+    const data0 = load();
+    const cleanInvolved = normalizeInvolvedOrgIds(involvedOrganizationIds, organizationId, data0.organizations);
     const now = new Date().toISOString();
     const event = await withDb((data) => {
       const e = {
@@ -47,6 +66,7 @@ export function registerEventRoutes(router) {
         startTime,
         endTime: endTime || null,
         organizationId: Number(organizationId),
+        involvedOrganizationIds: cleanInvolved,
         createdBy: req.user.id,
         createdAt: now,
         updatedAt: now,
@@ -69,6 +89,10 @@ export function registerEventRoutes(router) {
     }
     const updated = await withDb((d) => {
       const ev = d.events.find((e) => e.id === id);
+      const finalOrgId = body.organizationId !== undefined ? Number(body.organizationId) : ev.organizationId;
+      const involvedOrganizationIds = body.involvedOrganizationIds !== undefined
+        ? normalizeInvolvedOrgIds(body.involvedOrganizationIds, finalOrgId, data.organizations)
+        : (ev.involvedOrganizationIds || []).filter((oid) => oid !== finalOrgId);
       Object.assign(ev, {
         title: body.title ?? ev.title,
         description: body.description ?? ev.description,
@@ -76,7 +100,8 @@ export function registerEventRoutes(router) {
         date: body.date ?? ev.date,
         startTime: body.startTime ?? ev.startTime,
         endTime: body.endTime ?? ev.endTime,
-        organizationId: body.organizationId !== undefined ? Number(body.organizationId) : ev.organizationId,
+        organizationId: finalOrgId,
+        involvedOrganizationIds,
         updatedAt: new Date().toISOString(),
       });
       return ev;

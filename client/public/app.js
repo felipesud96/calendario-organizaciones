@@ -73,6 +73,135 @@ function fmtDateHuman(iso) {
   return `${dow} ${d} de ${MONTH_LABELS[m - 1]}`;
 }
 
+// ---------------- Lugar estandarizado ----------------
+const STANDARD_LOCATIONS = ['Casa Capilla', 'Capilla'];
+
+function locationFieldHtml(idPrefix, existingLocation) {
+  const loc = existingLocation || '';
+  const isStandard = STANDARD_LOCATIONS.includes(loc);
+  const isOtro = !!loc && !isStandard;
+  return `
+    <div class="field">
+      <label>Lugar</label>
+      <select name="locationType" id="${idPrefix}-location-type" required>
+        <option value="" disabled ${!loc ? 'selected' : ''}>Selecciona un lugar…</option>
+        ${STANDARD_LOCATIONS.map((l) => `<option value="${esc(l)}" ${loc === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+        <option value="Otro" ${isOtro ? 'selected' : ''}>Otro (especificar)</option>
+      </select>
+    </div>
+    <div class="field" id="${idPrefix}-location-other-field" style="${isOtro ? '' : 'display:none;'}">
+      <label>¿Cuál lugar?</label>
+      <input type="text" name="locationOther" placeholder="Ej: Estacionamiento" value="${esc(isOtro ? loc : '')}" />
+    </div>`;
+}
+
+function wireLocationField(idPrefix, onChange) {
+  const sel = document.getElementById(`${idPrefix}-location-type`);
+  const otherField = document.getElementById(`${idPrefix}-location-other-field`);
+  sel.addEventListener('change', () => {
+    otherField.style.display = sel.value === 'Otro' ? '' : 'none';
+    if (onChange) onChange();
+  });
+}
+
+function computeLocationFromForm(fd) {
+  const type = fd.get('locationType');
+  if (type === 'Otro') return String(fd.get('locationOther') || '').trim();
+  return type || '';
+}
+
+// ---------------- Actividades en conjunto con otras organizaciones ----------------
+function involvedOrgsFieldHtml(idPrefix, existingIds) {
+  const ids = (existingIds || []).map(Number);
+  return `
+    <div class="field">
+      <label>¿Participan otras organizaciones? (opcional)</label>
+      <div id="${idPrefix}-involved-orgs" style="display:flex; flex-wrap:wrap; gap:8px 14px; padding:4px 2px;">
+        ${state.organizations.map((o) => `
+          <label data-org-id="${o.id}" style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:400; cursor:pointer;">
+            <input type="checkbox" name="involvedOrganizationIds" value="${o.id}" ${ids.includes(o.id) ? 'checked' : ''} />
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+          </label>`).join('')}
+      </div>
+    </div>`;
+}
+
+// La organización principal no puede aparecer también como "participante".
+function refreshInvolvedOrgOptions(idPrefix, primaryOrgId) {
+  document.querySelectorAll(`#${idPrefix}-involved-orgs [data-org-id]`).forEach((row) => {
+    const isPrimary = Number(row.dataset.orgId) === Number(primaryOrgId);
+    row.style.display = isPrimary ? 'none' : '';
+    if (isPrimary) row.querySelector('input').checked = false;
+  });
+}
+
+function computeInvolvedOrgIds(fd) {
+  return fd.getAll('involvedOrganizationIds').map(Number).filter((n) => Number.isFinite(n));
+}
+
+function involvedOrgsBadgesHtml(item) {
+  const involved = item.involvedOrganizations || [];
+  if (!involved.length) return '';
+  return ` · 🤝 ${involved.map((o) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${o.color};margin-right:2px;"></span>${esc(o.name)}`).join(', ')}`;
+}
+
+// ---------------- Choques de horario/lugar con otras organizaciones ----------------
+function toMinutes(t) {
+  const [h, m] = String(t).split(':').map(Number);
+  return h * 60 + m;
+}
+function timesOverlap(aStart, aEnd, bStart, bEnd) {
+  if (!aStart || !bStart) return false;
+  const as = toMinutes(aStart), bs = toMinutes(bStart);
+  const aeRaw = aEnd ? toMinutes(aEnd) : as;
+  const beRaw = bEnd ? toMinutes(bEnd) : bs;
+  // sin hora de término se trata como un bloque mínimo de 1 minuto, así dos
+  // actividades con exactamente la misma hora de inicio siempre chocan.
+  const ae = aeRaw > as ? aeRaw : as + 1;
+  const be = beRaw > bs ? beRaw : bs + 1;
+  return as < be && bs < ae;
+}
+function normalizeLocation(loc) { return String(loc || '').trim().toLowerCase(); }
+
+// Organización "dueña" + organizaciones participantes de una actividad
+// (o de lo que se está por agendar), para saber si dos actividades ya
+// están coordinadas entre sí (comparten alguna organización) o no.
+function orgSetForConflictCheck(item) {
+  const ids = [Number(item.organizationId)];
+  if (Array.isArray(item.involvedOrganizationIds)) ids.push(...item.involvedOrganizationIds.map(Number));
+  if (Array.isArray(item.involvedOrganizations)) ids.push(...item.involvedOrganizations.map((o) => Number(o.id)));
+  return ids;
+}
+
+// Revisa si lo que se está por agendar (actividad o entrevista) choca en
+// horario o en lugar con una ACTIVIDAD de OTRA organización el mismo día.
+// Si ambas comparten alguna organización (como dueña o como participante),
+// no se considera choque — ya están coordinadas a propósito.
+// No compara contra entrevistas (son privadas de cada organización).
+async function findConflictingActivities(candidate, excludeEventId) {
+  if (!candidate.date || !candidate.startTime || !candidate.organizationId) return [];
+  let dayEvents;
+  try { dayEvents = await api(`/events?from=${candidate.date}&to=${candidate.date}`); } catch (e) { return []; }
+  const candidateOrgs = orgSetForConflictCheck(candidate);
+  return dayEvents.filter((ev) => {
+    if (excludeEventId && ev.id === Number(excludeEventId)) return false;
+    const evOrgs = orgSetForConflictCheck(ev);
+    if (candidateOrgs.some((id) => evOrgs.includes(id))) return false;
+    const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, ev.startTime, ev.endTime);
+    const placeConflict = candidate.location && ev.location && normalizeLocation(candidate.location) === normalizeLocation(ev.location);
+    return timeConflict || placeConflict;
+  });
+}
+
+function conflictWarningHtml(conflicts) {
+  return `<div class="hint-box" style="border-color:#f59e0b; background:#fffbeb;">
+    ⚠️ <strong>Posible choque con otra organización</strong> — vuelve a presionar el botón para agendar de todas formas:
+    <ul style="margin:6px 0 0; padding-left:18px;">
+      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong> — ${esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(c.location) : ''}</li>`).join('')}
+    </ul>
+  </div>`;
+}
+
 // ---------------- Auth ----------------
 function setToken(token) {
   state.token = token;
@@ -260,6 +389,9 @@ function canManageAnyInterviews() {
 function canSeeInterviewsTab() {
   return !!state.user && state.user.role !== 'member';
 }
+function canSeeMyActivitiesTab() {
+  return !!state.user && state.user.role === 'leader';
+}
 // Las entrevistas son privadas: cada líder solo ve las de su propia
 // organización, salvo el líder de Obispado, que ve las de todas.
 function canViewAllInterviews() {
@@ -295,6 +427,7 @@ function render() {
     </div>
     <div class="tabs">
       <button class="tab-btn ${state.view === 'calendar' ? 'active' : ''}" data-view="calendar">Calendario</button>
+      ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
       ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
       ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
     </div>
@@ -310,8 +443,10 @@ function render() {
 
 function renderCurrentView() {
   if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
+  if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'calendar') renderCalendarView();
+  else if (state.view === 'myActivities') renderMyActivitiesView();
   else if (state.view === 'interviews') renderInterviewsView();
   else if (state.view === 'admin') renderAdminView();
 }
@@ -474,7 +609,7 @@ function openDayModal(iso) {
                 <span class="org-dot" style="background:${it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : ''}${esc(it.title)}</div>
-                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}</div>
+                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
@@ -512,12 +647,13 @@ function openReadOnlyModal(item, kind) {
       <div class="modal">
         <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : ''}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong></div>
+          <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
           <div class="ro-detail-row">🕐 ${esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
           ${item.location ? `<div class="ro-detail-row">📍 ${esc(item.location)}</div>` : ''}
           ${kind === 'interview' && item.interviewerName ? `<div class="ro-detail-row">🧑‍💼 ${esc(item.interviewerName)}</div>` : ''}
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
+          ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
         </div>
         <div class="modal-footer" style="justify-content:flex-end;">
@@ -539,6 +675,58 @@ function editableOrgOptions(mode) {
   return own ? [own] : [];
 }
 
+async function refreshAfterEventChange() {
+  if (state.view === 'myActivities') { await renderMyActivitiesView(); }
+  else { await loadCalendarData(); if (state.view === 'calendar') renderCalendarView(); }
+}
+
+// ---------------- Mis Actividades ----------------
+// Listado simple (sin navegar mes a mes) de las actividades de la propia
+// organización del líder, con acceso directo a agregar/editar.
+async function renderMyActivitiesView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
+  let list;
+  try { list = await api('/events'); } catch (e) { toast(e.message, 'error'); list = []; }
+  const myOrgId = Number(state.user.organizationId);
+  list = list.filter((ev) => Number(ev.organizationId) === myOrgId || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
+  list = list.slice().sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+  const todayIso = toISODate(new Date());
+  const grouped = {};
+  for (const ev of list) { (grouped[ev.date] ||= []).push(ev); }
+  const dates = Object.keys(grouped).sort();
+
+  container.innerHTML = `
+    <div class="section-header">
+      <div>
+        <h2>Mis Actividades</h2>
+        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, en un listado — sin tener que navegar mes a mes</p>
+      </div>
+      <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
+    </div>
+    <div class="card-list">
+      ${dates.length ? dates.map((d) => `
+        <div style="margin-bottom:6px;">
+          <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
+          ${grouped[d].map((ev) => `
+            <div class="list-card" data-id="${ev.id}" style="cursor:pointer;">
+              <span class="org-dot" style="background:${ev.organizationColor}"></span>
+              <div class="lc-main">
+                <div class="lc-title">${esc(ev.title)}</div>
+                <div class="lc-sub">${ev.location ? `<span class="lc-location">📍 ${esc(ev.location)}</span>` : ''}${ev.description ? (ev.location ? ' · ' : '') + esc(ev.description) : ''}${involvedOrgsBadgesHtml(ev)}</div>
+              </div>
+              <div class="lc-when">${esc(fmtTime(ev.startTime))}${ev.endTime ? ' - ' + esc(fmtTime(ev.endTime)) : ''}</div>
+            </div>`).join('')}
+        </div>`).join('') : '<div class="empty-state">Todavía no tienes actividades agendadas</div>'}
+    </div>
+  `;
+
+  document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
+  container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
+    openItemModal(list.find((ev) => ev.id === Number(card.dataset.id)), 'event');
+  }));
+}
+
 function openEventModal(existing = null) {
   const options = editableOrgOptions('event');
   if (!existing && options.length === 0) { toast('No tienes una organización asignada para crear actividades', 'error'); return; }
@@ -553,19 +741,18 @@ function openEventModal(existing = null) {
           <form id="ev-form">
             <div class="field">
               <label>Organización</label>
-              <select name="${options.length === 1 ? '' : 'organizationId'}" ${options.length === 1 ? 'disabled' : ''} required>
+              <select id="ev-org-select" name="${options.length === 1 ? '' : 'organizationId'}" ${options.length === 1 ? 'disabled' : ''} required>
                 ${options.map((o) => `<option value="${o.id}" ${existing && existing.organizationId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
               </select>
               ${options.length === 1 ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
+            ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
             <div class="field">
               <label>Descripción de la actividad</label>
               <input type="text" name="title" required placeholder="Ej: Reunión de correlación" value="${esc(existing?.title || '')}" />
             </div>
-            <div class="field">
-              <label>Lugar (opcional)</label>
-              <input type="text" name="location" placeholder="Ej: Cultural, salón 2" value="${esc(existing?.location || '')}" />
-            </div>
+            ${locationFieldHtml('ev', existing?.location)}
+            <div id="ev-conflict-warning"></div>
             <div class="field">
               <label>Notas adicionales (opcional)</label>
               <textarea name="description">${esc(existing?.description || '')}</textarea>
@@ -601,20 +788,61 @@ function openEventModal(existing = null) {
   document.getElementById('ev-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ev-modal-backdrop') closeModal(); });
   if (isEdit) document.getElementById('ev-delete').addEventListener('click', async () => {
     if (!confirm('¿Eliminar esta actividad?')) return;
-    try { await api(`/events/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Actividad eliminada'); await shiftMonth(0, true); }
+    try { await api(`/events/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Actividad eliminada'); await refreshAfterEventChange(); }
     catch (e) { toast(e.message, 'error'); }
   });
-  document.getElementById('ev-save').addEventListener('click', async () => {
-    const form = document.getElementById('ev-form');
+
+  let conflictsChecked = false;
+  const saveBtn = document.getElementById('ev-save');
+  const resetConflictCheck = () => {
+    conflictsChecked = false;
+    saveBtn.textContent = isEdit ? 'Guardar cambios' : 'Crear actividad';
+    document.getElementById('ev-conflict-warning').innerHTML = '';
+  };
+  const form = document.getElementById('ev-form');
+  ['date', 'startTime', 'endTime'].forEach((name) => {
+    form.querySelector(`[name="${name}"]`)?.addEventListener('change', resetConflictCheck);
+  });
+  wireLocationField('ev', resetConflictCheck);
+  document.getElementById('ev-location-other-field').querySelector('input').addEventListener('input', resetConflictCheck);
+
+  const orgSelectEl = document.getElementById('ev-org-select');
+  refreshInvolvedOrgOptions('ev', orgSelectEl.value);
+  orgSelectEl.addEventListener('change', () => {
+    refreshInvolvedOrgOptions('ev', orgSelectEl.value);
+    resetConflictCheck();
+  });
+  document.querySelectorAll('#ev-involved-orgs input[type="checkbox"]').forEach((cb) => cb.addEventListener('change', resetConflictCheck));
+
+  saveBtn.addEventListener('click', async () => {
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
+    const location = computeLocationFromForm(fd);
+    if (fd.get('locationType') === 'Otro' && !location) {
+      document.getElementById('ev-error').innerHTML = `<div class="error-msg">Escribe cuál es el lugar</div>`;
+      return;
+    }
     const body = Object.fromEntries(fd.entries());
+    body.location = location;
+    delete body.locationType;
+    delete body.locationOther;
+    body.involvedOrganizationIds = computeInvolvedOrgIds(fd);
+
+    if (!conflictsChecked) {
+      const conflicts = await findConflictingActivities(body, existing?.id);
+      if (conflicts.length) {
+        document.getElementById('ev-conflict-warning').innerHTML = conflictWarningHtml(conflicts);
+        conflictsChecked = true;
+        saveBtn.textContent = 'Agendar de todas formas';
+        return;
+      }
+    }
     try {
       if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body });
       else await api('/events', { method: 'POST', body });
       closeModal();
       toast(isEdit ? 'Actividad actualizada' : 'Actividad creada');
-      await shiftMonth(0, true);
+      await refreshAfterEventChange();
     } catch (e) {
       document.getElementById('ev-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
@@ -704,18 +932,22 @@ function openInterviewModal(existing = null) {
               <label>Nombre del miembro</label>
               <input type="text" name="memberName" required placeholder="Nombre y apellido" value="${esc(existing?.memberName || '')}" />
             </div>
-            <div class="field">
-              <label>Teléfono (opcional)</label>
-              <input type="text" name="memberPhone" placeholder="+56 9 ..." value="${esc(existing?.memberPhone || '')}" />
+            <div class="two-col">
+              <div class="field">
+                <label>Teléfono (opcional)</label>
+                <input type="text" name="memberPhone" placeholder="+56 9 ..." value="${esc(existing?.memberPhone || '')}" />
+              </div>
+              <div class="field">
+                <label>Email del miembro (opcional)</label>
+                <input type="email" name="memberEmail" placeholder="miembro@correo.com" value="${esc(existing?.memberEmail || '')}" />
+              </div>
             </div>
             <div class="field">
               <label>Descripción / motivo</label>
               <textarea name="description" placeholder="Ej: Entrevista de recomendación para el templo">${esc(existing?.description || '')}</textarea>
             </div>
-            <div class="field">
-              <label>Lugar (opcional)</label>
-              <input type="text" name="location" placeholder="Ej: Oficina del Obispo" value="${esc(existing?.location || '')}" />
-            </div>
+            ${locationFieldHtml('iv', existing?.location)}
+            <div id="iv-conflict-warning"></div>
             <div class="field">
               <label>Líder que realizará la entrevista</label>
               <input type="text" name="interviewerName" required placeholder="Nombre del líder" value="${esc(existing?.interviewerName ?? (!isEdit && state.user.role !== 'admin' ? state.user.name : ''))}" />
@@ -730,7 +962,7 @@ function openInterviewModal(existing = null) {
                 <input type="text" name="interviewerPhone" placeholder="+56 9 ..." value="${esc(existing?.interviewerPhone || '')}" />
               </div>
             </div>
-            <div class="hint-box" style="margin-top:0;">Este contacto se usará para enviar un recordatorio antes de la entrevista.</div>
+            <div class="hint-box" style="margin-top:0;">Si cargas el email del líder y/o del miembro, ambos reciben automáticamente: un recordatorio 24 horas antes, un aviso si se cambia la fecha/hora, y un aviso si se cancela.</div>
             <div class="field">
               <label>Día</label>
               <input type="date" name="date" required value="${existing?.date || ''}" />
@@ -765,12 +997,44 @@ function openInterviewModal(existing = null) {
     try { await api(`/interviews/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Entrevista eliminada'); await refreshAfterInterviewChange(); }
     catch (e) { toast(e.message, 'error'); }
   });
-  document.getElementById('iv-save').addEventListener('click', async () => {
-    const form = document.getElementById('iv-form');
-    if (!form.reportValidity()) return;
-    const fd = new FormData(form);
+
+  let ivConflictsChecked = false;
+  const ivSaveBtn = document.getElementById('iv-save');
+  const resetIvConflictCheck = () => {
+    ivConflictsChecked = false;
+    ivSaveBtn.textContent = isEdit ? 'Guardar cambios' : 'Agendar';
+    document.getElementById('iv-conflict-warning').innerHTML = '';
+  };
+  const ivForm = document.getElementById('iv-form');
+  ['date', 'startTime', 'endTime'].forEach((name) => {
+    ivForm.querySelector(`[name="${name}"]`)?.addEventListener('change', resetIvConflictCheck);
+  });
+  wireLocationField('iv', resetIvConflictCheck);
+  document.getElementById('iv-location-other-field').querySelector('input').addEventListener('input', resetIvConflictCheck);
+
+  ivSaveBtn.addEventListener('click', async () => {
+    if (!ivForm.reportValidity()) return;
+    const fd = new FormData(ivForm);
+    const location = computeLocationFromForm(fd);
+    if (fd.get('locationType') === 'Otro' && !location) {
+      document.getElementById('iv-error').innerHTML = `<div class="error-msg">Escribe cuál es el lugar</div>`;
+      return;
+    }
     const body = Object.fromEntries(fd.entries());
+    body.location = location;
+    delete body.locationType;
+    delete body.locationOther;
     if (isEdit) body.organizationId = existing.organizationId;
+
+    if (!ivConflictsChecked) {
+      const conflicts = await findConflictingActivities(body, null);
+      if (conflicts.length) {
+        document.getElementById('iv-conflict-warning').innerHTML = conflictWarningHtml(conflicts);
+        ivConflictsChecked = true;
+        ivSaveBtn.textContent = 'Agendar de todas formas';
+        return;
+      }
+    }
     try {
       if (isEdit) await api(`/interviews/${existing.id}`, { method: 'PUT', body });
       else await api('/interviews', { method: 'POST', body });

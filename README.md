@@ -7,8 +7,17 @@ Interfaz en blanco y celeste, con un color distintivo por organización.
 ## Cómo funciona
 
 - **Calendario**: todos los usuarios ven todas las actividades de todas las organizaciones, coloreadas según a quién pertenecen. Cada actividad tiene día, horario, lugar, descripción y organización. Se puede navegar con las flechas, saltar directo a un mes/año con los menús desplegables, o ir a una fecha específica con el selector "Ir a fecha".
-- **Entrevistas**: sección aparte donde los líderes de Obispado, Cuórum de Élderes y Sociedad de Socorro agendan entrevistas con miembros (nombre del miembro, día, horario, lugar, descripción, y qué líder la realizará con su email/WhatsApp de contacto). Las entrevistas también aparecen en el calendario general (con un ícono 👤) para que nadie agende una actividad encima.
-- **Recordatorios automáticos por email**: cada 15 minutos el servidor revisa qué entrevistas empiezan en ~24 horas y le envía un correo automático al líder que la va a realizar (desde una cuenta de Gmail). Ver "Recordatorios automáticos de entrevistas" más abajo para activarlo.
+- **Mis Actividades**: sección aparte, solo para el perfil Líder, con un listado simple (agrupado por fecha) de todas las actividades de su propia organización — sin tener que navegar mes a mes por el calendario. Desde ahí mismo se agrega y edita, con un clic en cualquier actividad de la lista.
+- **Lugar estandarizado**: al agendar una actividad o entrevista, el campo Lugar es un selector con tres opciones: **Casa Capilla**, **Capilla**, u **Otro** (con un campo de texto para escribirlo). Esto estandariza los lugares más usados y además es lo que permite que la alerta de choques (ver siguiente punto) compare lugares de forma confiable.
+- **Alerta de choque de horario/lugar**: al agendar o editar una actividad o entrevista, si el mismo día choca con una **actividad de otra organización** — ya sea porque el horario se superpone o porque es exactamente el mismo lugar (aunque el horario sea distinto) — aparece una advertencia mostrando con qué organización, actividad, horario y lugar choca, antes de guardar. No bloquea el guardado: si de todas formas quieres agendarlo, presionas el botón de guardar una segunda vez ("Agendar de todas formas"). Esta alerta solo compara contra actividades (no contra entrevistas de otras organizaciones, que son privadas).
+- **Actividades en conjunto con otras organizaciones**: al crear o editar una actividad, además de elegir la organización principal se puede marcar con casillas qué **otras organizaciones participan también** (por ejemplo, una actividad conjunta de Hombres Jóvenes y Mujeres Jóvenes). Esto se puede agregar desde el inicio o sumarlo después editando la actividad. Las organizaciones marcadas como "involucradas" aparecen con un ícono 🤝 junto al detalle de la actividad, y **no disparan la alerta de choque entre sí**: dos actividades que comparten alguna organización (principal o involucrada) nunca se consideran un choque, aunque tengan el mismo horario o lugar. Eso sí, solo el líder de la organización principal (o un administrador) puede editar o eliminar la actividad — a las organizaciones involucradas les aparece en su propia sección "Mis Actividades" para que la vean, pero sin poder modificarla.
+- **Entrevistas**: sección aparte donde los líderes de Obispado, Cuórum de Élderes y Sociedad de Socorro agendan entrevistas con miembros (nombre del miembro, día, horario, lugar, descripción, y qué líder la realizará), con el email de contacto de **los dos participantes**: el líder que la realiza y el miembro que asiste. Las entrevistas también aparecen en el calendario general (con un ícono 👤) para que nadie agende una actividad encima.
+- **Notificaciones automáticas por email**: si cargaste el email del líder y/o del miembro al agendar la entrevista, ambos reciben automáticamente (desde una cuenta de Gmail):
+  - un **recordatorio** 24 horas antes de la entrevista;
+  - un aviso de **cancelación** si la entrevista se elimina;
+  - un aviso de **cambio de fecha/horario** si se reprograma (edición del día u hora).
+
+  Cada aviso se envía solo a quien tenga su email cargado (si falta el de alguno de los dos, simplemente no le llega a esa persona). Ver "Recordatorios automáticos de entrevistas" más abajo para activarlo.
 - **Entrevistas — privacidad**: las entrevistas son información privada de los miembros.
   - El perfil **Miembro** no ve la sección de Entrevistas en absoluto.
   - Cada **Líder** solo ve las entrevistas de su propia organización.
@@ -58,9 +67,13 @@ Ver el archivo **`GUIA-DESPLIEGUE.md`** en la raíz del proyecto: tiene el paso 
 
 En resumen, lo único que de verdad importa es: (1) que el proceso de Node se mantenga corriendo 24/7 (por eso se recomienda el plan Starter de Render y no el gratuito, que se apaga solo), y (2) que los datos se guarden en un disco persistente y no se borren en cada despliegue (por eso se configura la variable `DB_PATH` apuntando al disco).
 
-## Recordatorios automáticos de entrevistas (por email, con tu Gmail)
+## Notificaciones automáticas de entrevistas (por email, con tu Gmail)
 
-Ya está implementado: el servidor revisa cada 15 minutos qué entrevistas empiezan en ~24 horas y, si tienen el email del líder cargado, le envía un correo automático con los datos (miembro, fecha, hora, lugar, detalle). Cada entrevista solo dispara **un** recordatorio (no se repite), y si editas la fecha/hora/email de una entrevista después de enviado el recordatorio, se vuelve a habilitar para la nueva fecha.
+Ya está implementado, y llega a **los dos participantes** (al líder que realiza la entrevista y al miembro que asiste), a cada uno que tenga su email cargado en la entrevista:
+
+- **Recordatorio**: el servidor revisa cada 15 minutos qué entrevistas empiezan en ~24 horas y envía un correo con los datos (miembro, líder, fecha, hora, lugar, detalle). Cada entrevista dispara **un solo** recordatorio (no se repite).
+- **Cancelación**: si se elimina la entrevista, se envía de inmediato un correo avisando que fue cancelada, con los datos que tenía.
+- **Cambio de fecha/horario**: si se edita el día o la hora de una entrevista ya agendada, se envía de inmediato un correo mostrando el horario anterior y el nuevo. (Si además cambia el email de contacto de alguno de los dos, el recordatorio de 24 horas vuelve a habilitarse para la nueva fecha.)
 
 Se eligió enviar los correos **desde tu propia cuenta de Gmail** (en vez de un servicio externo tipo Resend) porque no requiere tener un dominio propio ni crear cuenta en nada nuevo — solo tu Gmail, gratis, y una "contraseña de aplicación". WhatsApp queda descartado por ahora: requiere verificación de negocio con Meta, un número dedicado y plantillas pre-aprobadas, lo que toma días.
 
@@ -72,9 +85,9 @@ Se eligió enviar los correos **desde tu propia cuenta de Gmail** (en vez de un 
 4. En Render, ve a tu servicio → **Environment** y agrega estas dos variables:
    - `GMAIL_USER` = la cuenta completa, ej. `calendariobarriovallegrande@gmail.com`.
    - `GMAIL_APP_PASSWORD` = el código de 16 letras del paso anterior.
-5. Guarda — Render reinicia el servicio solo. Desde ese momento, cualquier entrevista que tenga el email del líder cargado va a recibir su recordatorio 24 horas antes automáticamente, enviado desde esa cuenta de Gmail.
+5. Guarda — Render reinicia el servicio solo. Desde ese momento, toda entrevista con el email del líder y/o del miembro cargado va a recibir sus notificaciones automáticamente, enviadas desde esa cuenta de Gmail.
 
-Gmail permite hasta 500 correos por día en una cuenta normal, muy por sobre lo que necesita un barrio. Si no configuras estas variables, la app sigue funcionando normal — simplemente los recordatorios quedan desactivados (se ve un aviso en los logs del servidor, sin errores para los usuarios).
+Gmail permite hasta 500 correos por día en una cuenta normal, muy por sobre lo que necesita un barrio. Si no configuras estas variables, la app sigue funcionando normal — simplemente las notificaciones quedan desactivadas (se ve un aviso en los logs del servidor, sin errores para los usuarios).
 
 ## Estructura del proyecto
 

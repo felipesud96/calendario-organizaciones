@@ -1,6 +1,7 @@
 import { sendJson } from '../router.js';
 import { load, withDb, nextId } from '../db.js';
 import { requireAuth } from '../guard.js';
+import { sendCancellationEmail, sendRescheduleEmail } from '../notifications.js';
 
 function canScheduleOrg(user, organizationId) {
   if (user.role === 'admin') return true;
@@ -55,7 +56,7 @@ export function registerInterviewRoutes(router) {
 
   router.post('/api/interviews', requireAuth(async (req, res, params, body) => {
     const {
-      memberName, memberPhone, description, location, date, startTime, endTime, organizationId,
+      memberName, memberPhone, memberEmail, description, location, date, startTime, endTime, organizationId,
       interviewerName, interviewerEmail, interviewerPhone,
     } = body || {};
     if (!memberName || !date || !startTime || !organizationId) {
@@ -74,6 +75,7 @@ export function registerInterviewRoutes(router) {
         id: nextId(d, 'interviews'),
         memberName,
         memberPhone: memberPhone || '',
+        memberEmail: memberEmail || '',
         description: description || '',
         location: location || '',
         interviewerName: interviewerName || '',
@@ -102,17 +104,23 @@ export function registerInterviewRoutes(router) {
     if (!canScheduleOrg(req.user, existing.organizationId)) {
       return sendJson(res, 403, { error: 'No tienes permiso para editar esta entrevista' });
     }
+    // se guarda la fecha/hora previas para poder avisar "antes → ahora" si
+    // cambian, antes de que withDb las sobrescriba.
+    const previousSchedule = { date: existing.date, startTime: existing.startTime };
     const updated = await withDb((d) => {
       const iv = d.interviews.find((i) => i.id === id);
       const newDate = body.date ?? iv.date;
       const newStartTime = body.startTime ?? iv.startTime;
       const newInterviewerEmail = body.interviewerEmail ?? iv.interviewerEmail ?? '';
-      // si cambia la fecha/hora o el email de contacto, el recordatorio (si ya
-      // se había enviado) debe poder volver a dispararse para el nuevo dato.
-      const scheduleChanged = newDate !== iv.date || newStartTime !== iv.startTime || newInterviewerEmail !== (iv.interviewerEmail || '');
+      const newMemberEmail = body.memberEmail ?? iv.memberEmail ?? '';
+      const dateOrTimeChanged = newDate !== iv.date || newStartTime !== iv.startTime;
+      // si cambia la fecha/hora o algún email de contacto, el recordatorio
+      // (si ya se había enviado) debe poder volver a dispararse.
+      const contactChanged = newInterviewerEmail !== (iv.interviewerEmail || '') || newMemberEmail !== (iv.memberEmail || '');
       Object.assign(iv, {
         memberName: body.memberName ?? iv.memberName,
         memberPhone: body.memberPhone ?? iv.memberPhone,
+        memberEmail: newMemberEmail,
         description: body.description ?? iv.description,
         location: body.location ?? iv.location ?? '',
         interviewerName: body.interviewerName ?? iv.interviewerName ?? '',
@@ -121,11 +129,15 @@ export function registerInterviewRoutes(router) {
         date: newDate,
         startTime: newStartTime,
         endTime: body.endTime ?? iv.endTime,
-        reminderSent: scheduleChanged ? false : (iv.reminderSent ?? false),
+        reminderSent: (dateOrTimeChanged || contactChanged) ? false : (iv.reminderSent ?? false),
         updatedAt: new Date().toISOString(),
       });
       return iv;
     });
+    if (previousSchedule.date !== updated.date || previousSchedule.startTime !== updated.startTime) {
+      // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo.
+      sendRescheduleEmail(updated, previousSchedule);
+    }
     sendJson(res, 200, withOrgInfo(updated, data.organizations));
   }));
 
@@ -140,6 +152,8 @@ export function registerInterviewRoutes(router) {
     await withDb((d) => {
       d.interviews = d.interviews.filter((i) => i.id !== id);
     });
+    // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo.
+    sendCancellationEmail(existing);
     sendJson(res, 200, { ok: true });
   }));
 }
