@@ -11,6 +11,7 @@ import { registerOrganizationRoutes } from './routes/organizations.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerInterviewRoutes } from './routes/interviews.js';
 import { registerUserRoutes } from './routes/users.js';
+import { registerRegistrationRoutes } from './routes/registration.js';
 import { startReminderScheduler } from './reminders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +24,7 @@ registerOrganizationRoutes(router);
 registerEventRoutes(router);
 registerInterviewRoutes(router);
 registerUserRoutes(router);
+registerRegistrationRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

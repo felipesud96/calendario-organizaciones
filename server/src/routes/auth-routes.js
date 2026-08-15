@@ -7,11 +7,16 @@ export function registerAuthRoutes(router) {
   router.post('/api/auth/login', async (req, res, params, body) => {
     const { email, password } = body || {};
     if (!email || !password) {
-      return sendJson(res, 400, { error: 'Email y contraseña requeridos' });
+      return sendJson(res, 400, { error: 'Usuario y contraseña requeridos' });
     }
     const data = load();
-    const user = data.users.find((u) => u.email === String(email).toLowerCase().trim());
+    const normalizedEmail = String(email).toLowerCase().trim();
+    const user = data.users.find((u) => u.email === normalizedEmail);
     if (!user || !verifyPassword(password, user.passwordHash)) {
+      const pending = data.registrationRequests.some((r) => r.email === normalizedEmail);
+      if (pending) {
+        return sendJson(res, 403, { error: 'Tu solicitud de cuenta está pendiente de aprobación del administrador todavía.' });
+      }
       return sendJson(res, 401, { error: 'Credenciales inválidas' });
     }
     const token = await createSession(user.id);

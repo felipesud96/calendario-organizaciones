@@ -20,7 +20,7 @@ export function registerUserRoutes(router) {
   router.post('/api/users', requireRole(['admin'], async (req, res, params, body) => {
     const { name, email, password, role, organizationId, phone } = body || {};
     if (!name || !email || !password || !role) {
-      return sendJson(res, 400, { error: 'Nombre, email, contraseña y rol son requeridos' });
+      return sendJson(res, 400, { error: 'Nombre, usuario, contraseña y rol son requeridos' });
     }
     if (!VALID_ROLES.includes(role)) {
       return sendJson(res, 400, { error: 'Rol inválido' });
@@ -31,7 +31,7 @@ export function registerUserRoutes(router) {
     const normalizedEmail = String(email).toLowerCase().trim();
     const data = load();
     if (data.users.some((u) => u.email === normalizedEmail)) {
-      return sendJson(res, 409, { error: 'Ya existe un usuario con ese email' });
+      return sendJson(res, 409, { error: 'Ya existe un usuario con ese nombre de usuario' });
     }
     const user = await withDb((d) => {
       const u = {

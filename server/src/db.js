@@ -16,7 +16,8 @@ const EMPTY_DB = {
   events: [],
   interviews: [],
   sessions: [],
-  nextId: { organizations: 1, users: 1, events: 1, interviews: 1 },
+  registrationRequests: [],
+  nextId: { organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1 },
 };
 
 function ensureFile() {

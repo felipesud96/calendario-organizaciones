@@ -111,8 +111,8 @@ function renderLogin() {
         <div id="login-error"></div>
         <form id="login-form">
           <div class="field">
-            <label>Correo electrónico</label>
-            <input type="email" name="email" required autocomplete="username" placeholder="tucorreo@ward.local" />
+            <label>Usuario</label>
+            <input type="text" name="email" required autocomplete="username" placeholder="ej: primaria.presidenta" />
           </div>
           <div class="field">
             <label>Contraseña</label>
@@ -121,7 +121,7 @@ function renderLogin() {
           <button class="btn btn-primary btn-block" type="submit">Ingresar</button>
         </form>
         <div class="hint-box">
-          ¿Primera vez aquí? Pide tus credenciales al administrador del calendario. Si esta es una instalación nueva, revisa el archivo README para las cuentas de ejemplo.
+          ¿No tienes cuenta? <a href="#" id="go-register">Solicita una aquí</a> — un administrador la debe aprobar antes de que puedas ingresar.
         </div>
       </div>
     </div>
@@ -138,6 +138,100 @@ function renderLogin() {
     } catch (err) {
       document.getElementById('login-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
       btn.disabled = false; btn.textContent = 'Ingresar';
+    }
+  });
+  document.getElementById('go-register').addEventListener('click', (e) => { e.preventDefault(); renderRegister(); });
+}
+
+// ---------------- Solicitar cuenta (autorregistro) ----------------
+async function renderRegister() {
+  const root2 = root;
+  root2.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-logo">📅</div>
+        <h1>${esc(APP_NAME)}</h1>
+        <p class="subtitle">Solicita tu cuenta — un administrador la revisa y aprueba</p>
+        <div id="reg-error"></div>
+        <div id="reg-success" style="display:none;"></div>
+        <form id="reg-form">
+          <div class="field">
+            <label>Nombre completo</label>
+            <input type="text" name="name" required placeholder="Tu nombre y apellido" />
+          </div>
+          <div class="field">
+            <label>Usuario</label>
+            <input type="text" name="email" required autocomplete="username" placeholder="ej: juan.perez (no necesita ser un correo)" />
+          </div>
+          <div class="two-col">
+            <div class="field">
+              <label>Contraseña</label>
+              <input type="password" name="password" required minlength="6" autocomplete="new-password" placeholder="mínimo 6 caracteres" />
+            </div>
+            <div class="field">
+              <label>Repetir contraseña</label>
+              <input type="password" name="password2" required minlength="6" autocomplete="new-password" placeholder="••••••••" />
+            </div>
+          </div>
+          <div class="field">
+            <label>¿Cuál es tu perfil?</label>
+            <select name="requestedRole" id="reg-role">
+              <option value="member">Miembro (solo consulta el calendario)</option>
+              <option value="leader">Líder de una organización (edita actividades/entrevistas)</option>
+            </select>
+          </div>
+          <div class="field" id="reg-org-field" style="display:none;">
+            <label>¿De qué organización?</label>
+            <select name="requestedOrganizationId" id="reg-org"></select>
+          </div>
+          <div class="hint-box" style="margin-top:0;">El administrador puede corregir tu perfil si lo eliges mal — no pasa nada si no estás 100% seguro.</div>
+          <button class="btn btn-primary btn-block" type="submit">Enviar solicitud</button>
+        </form>
+        <div class="hint-box">
+          ¿Ya tienes cuenta? <a href="#" id="go-login">Vuelve a ingresar</a>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('go-login').addEventListener('click', (e) => { e.preventDefault(); renderLogin(); });
+
+  try {
+    const orgs = await api('/public/organizations');
+    const orgSelect = document.getElementById('reg-org');
+    orgSelect.innerHTML = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
+  } catch (e) { /* si falla, el selector queda vacío; el backend igual valida */ }
+
+  document.getElementById('reg-role').addEventListener('change', (e) => {
+    document.getElementById('reg-org-field').style.display = e.target.value === 'leader' ? '' : 'none';
+  });
+
+  document.getElementById('reg-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const errBox = document.getElementById('reg-error');
+    errBox.innerHTML = '';
+    if (fd.get('password') !== fd.get('password2')) {
+      errBox.innerHTML = `<div class="error-msg">Las contraseñas no coinciden</div>`;
+      return;
+    }
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const body = {
+        name: fd.get('name'),
+        email: fd.get('email'),
+        password: fd.get('password'),
+        requestedRole: fd.get('requestedRole'),
+        requestedOrganizationId: fd.get('requestedRole') === 'leader' ? fd.get('requestedOrganizationId') : null,
+      };
+      const res = await api('/auth/register', { method: 'POST', body });
+      e.target.style.display = 'none';
+      const successBox = document.getElementById('reg-success');
+      successBox.style.display = '';
+      successBox.innerHTML = `<div class="hint-box" style="border-color:var(--celeste);">✅ ${esc(res.message)}</div>`;
+    } catch (err) {
+      errBox.innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
+      btn.disabled = false; btn.textContent = 'Enviar solicitud';
     }
   });
 }
@@ -697,17 +791,113 @@ async function refreshAfterInterviewChange() {
 // ---------------- Administración ----------------
 async function renderAdminView() {
   const container = document.getElementById('view-root');
+  let pendingCount = 0;
+  try { pendingCount = (await api('/registration-requests')).length; } catch (e) { /* silencioso */ }
   container.innerHTML = `
-    <div class="section-header"><div><h2>Administración</h2><p>Gestiona usuarios y organizaciones</p></div></div>
+    <div class="section-header"><div><h2>Administración</h2><p>Gestiona usuarios, organizaciones y solicitudes de cuenta</p></div></div>
     <div class="subtabs">
       <button class="subtab-btn ${state.adminSubtab === 'users' ? 'active' : ''}" data-tab="users">Usuarios</button>
       <button class="subtab-btn ${state.adminSubtab === 'orgs' ? 'active' : ''}" data-tab="orgs">Organizaciones</button>
+      <button class="subtab-btn ${state.adminSubtab === 'requests' ? 'active' : ''}" data-tab="requests">Solicitudes${pendingCount > 0 ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingCount}</span>` : ''}</button>
     </div>
     <div id="admin-content"></div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.adminSubtab = b.dataset.tab; renderAdminView(); }));
   if (state.adminSubtab === 'users') await renderAdminUsers();
-  else await renderAdminOrgs();
+  else if (state.adminSubtab === 'orgs') await renderAdminOrgs();
+  else await renderAdminRequests();
+}
+
+async function renderAdminRequests() {
+  const content = document.getElementById('admin-content');
+  let items;
+  try { items = await api('/registration-requests'); } catch (e) { toast(e.message, 'error'); items = []; }
+  content.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th>Nombre</th><th>Usuario</th><th>Perfil solicitado</th><th>Organización</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>
+        ${items.length ? items.map((r) => `
+          <tr>
+            <td>${esc(r.name)}</td>
+            <td>${esc(r.email)}</td>
+            <td><span class="role-badge role-${r.requestedRole}">${ROLE_LABELS[r.requestedRole]}</span></td>
+            <td>${esc(r.organizationName || '—')}</td>
+            <td>${esc(fmtDateHuman(r.createdAt.slice(0, 10)))}</td>
+            <td style="text-align:right; white-space:nowrap;">
+              <button class="btn btn-primary btn-sm" data-approve="${r.id}">Aprobar</button>
+              <button class="btn btn-danger btn-sm" data-reject="${r.id}">Rechazar</button>
+            </td>
+          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">No hay solicitudes pendientes</div></td></tr>`}
+      </tbody>
+    </table>
+  `;
+  content.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', () => {
+    openApproveModal(items.find((r) => r.id === Number(b.dataset.approve)));
+  }));
+  content.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('¿Rechazar y eliminar esta solicitud?')) return;
+    try { await api(`/registration-requests/${b.dataset.reject}`, { method: 'DELETE' }); toast('Solicitud rechazada'); renderAdminView(); }
+    catch (e) { toast(e.message, 'error'); }
+  }));
+}
+
+function openApproveModal(reqItem) {
+  if (!reqItem) return;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ar-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Aprobar solicitud</h3><button class="modal-close" id="ar-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ar-error"></div>
+          <form id="ar-form">
+            <div class="field"><label>Nombre completo</label><input type="text" name="name" required value="${esc(reqItem.name)}" /></div>
+            <div class="field"><label>Usuario</label><input type="text" value="${esc(reqItem.email)}" disabled /></div>
+            <div class="field">
+              <label>Perfil (puedes corregirlo antes de aprobar)</label>
+              <select name="role" id="ar-role" required>
+                <option value="admin" ${reqItem.requestedRole === 'admin' ? 'selected' : ''}>Administrador</option>
+                <option value="leader" ${reqItem.requestedRole === 'leader' ? 'selected' : ''}>Líder</option>
+                <option value="member" ${reqItem.requestedRole === 'member' ? 'selected' : ''}>Miembro</option>
+              </select>
+            </div>
+            <div class="field" id="ar-org-field" style="${reqItem.requestedRole === 'leader' ? '' : 'display:none;'}">
+              <label>Organización</label>
+              <select name="organizationId">
+                ${state.organizations.map((o) => `<option value="${o.id}" ${reqItem.requestedOrganizationId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ar-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ar-save">Aprobar cuenta</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('ar-modal-close').addEventListener('click', closeModal);
+  document.getElementById('ar-cancel').addEventListener('click', closeModal);
+  document.getElementById('ar-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ar-modal-backdrop') closeModal(); });
+  document.getElementById('ar-role').addEventListener('change', (e) => {
+    document.getElementById('ar-org-field').style.display = e.target.value === 'leader' ? '' : 'none';
+  });
+  document.getElementById('ar-save').addEventListener('click', async () => {
+    const form = document.getElementById('ar-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = { name: fd.get('name'), role: fd.get('role'), organizationId: fd.get('role') === 'leader' ? fd.get('organizationId') : null };
+    try {
+      await api(`/registration-requests/${reqItem.id}/approve`, { method: 'POST', body });
+      closeModal();
+      toast('Cuenta aprobada — ya puede ingresar con su usuario y contraseña');
+      renderAdminView();
+    } catch (e) {
+      document.getElementById('ar-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 async function renderAdminUsers() {
@@ -720,7 +910,7 @@ async function renderAdminUsers() {
       <button class="btn btn-primary btn-sm" id="user-new">+ Nuevo usuario</button>
     </div>
     <table class="data-table">
-      <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
       <tbody>
         ${users.map((u) => `
           <tr>
@@ -756,7 +946,8 @@ function openUserModal(existing = null) {
           <div id="u-error"></div>
           <form id="u-form">
             <div class="field"><label>Nombre completo</label><input type="text" name="name" required value="${esc(existing?.name || '')}" /></div>
-            <div class="field"><label>Correo electrónico</label><input type="email" name="email" required value="${esc(existing?.email || '')}" /></div>
+            <div class="field"><label>Usuario (nombre de acceso)</label><input type="text" name="email" required value="${esc(existing?.email || '')}" placeholder="ej: primaria.presidenta" /></div>
+            <div class="hint-box" style="margin-top:-4px;">Puede ser un nombre simple, no necesita ser un correo real (ej: "sociedad.socorro"). Solo debe ser único entre todos los usuarios.</div>
             <div class="field"><label>Contraseña ${isEdit ? '(dejar vacío para no cambiar)' : ''}</label><input type="password" name="password" ${isEdit ? '' : 'required'} /></div>
             <div class="field">
               <label>Rol</label>

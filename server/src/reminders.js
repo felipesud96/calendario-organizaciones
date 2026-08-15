@@ -68,7 +68,7 @@ async function checkAndSendReminders() {
 
 export function startReminderScheduler() {
   if (!isEmailConfigured()) {
-    console.log('[recordatorios] desactivados: falta RESEND_API_KEY o REMINDER_FROM_EMAIL en las variables de entorno.');
+    console.log('[recordatorios] desactivados: falta GMAIL_USER o GMAIL_APP_PASSWORD en las variables de entorno.');
     return;
   }
   console.log('[recordatorios] activados vía Resend — revisando cada 15 minutos.');

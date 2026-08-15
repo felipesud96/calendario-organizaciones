@@ -77,7 +77,7 @@ data.users = data.users.filter((u) => !u.email.startsWith('secretario.'));
 save(data);
 
 console.log('Datos de ejemplo creados/actualizados.\n');
-console.log('Usuarios de prueba (email / contraseña / rol):');
+console.log('Usuarios de prueba (usuario / contraseña / rol):');
 for (const [email, pass, label] of credentials) {
   console.log(`  ${email.padEnd(38)} ${pass.padEnd(16)} ${label}`);
 }
