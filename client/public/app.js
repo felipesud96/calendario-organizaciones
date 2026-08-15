@@ -912,33 +912,65 @@ async function renderMyActivitiesLeaderView() {
   container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
   let events, interviews;
   try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
-  // Si otra organización te entrevista a TI (por ejemplo, el líder de
-  // Obispado entrevista al líder de Cuórum de Élderes), esa entrevista debe
-  // aparecerte acá aunque no la haya agendado tu propia organización.
+  // Entrevistas donde el líder es el entrevistado
   try { interviews = await api('/interviews'); } catch (e) { interviews = []; }
+  
   const myOrgId = Number(state.user.organizationId);
-  events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
+  const followedIds = (state.user.followedOrganizationIds || []).map(Number);
+
+  // Filtramos: las de su org, las de barrio, y ahora también las de las organizaciones seguidas
+  events = events.filter((ev) => 
+    Number(ev.organizationId) === myOrgId || 
+    ev.isWardActivity || 
+    (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId) ||
+    followedIds.includes(Number(ev.organizationId)) ||
+    (ev.involvedOrganizations || []).some((o) => followedIds.includes(Number(o.id)))
+  );
+  
   const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
     ...myOwnInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
   ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+  
   const todayIso = toISODate(new Date());
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
 
+  const prefsOpen = state.myActivitiesPrefsOpen ?? false;
+
   container.innerHTML = `
     <div class="section-header">
       <div>
         <h2>Mis Actividades</h2>
-        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
+        <p>Actividades de tu organización, tus entrevistas, y las de otras organizaciones que elijas seguir.</p>
       </div>
-      <div style="display:flex; gap:8px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
         <button class="btn btn-secondary" id="my-act-export">📅 Exportar a mi calendario</button>
         <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
       </div>
     </div>
+
+    <div id="my-act-prefs" style="${prefsOpen ? '' : 'display:none;'} margin-bottom:14px;">
+      <div class="hint-box" style="margin-bottom:10px;">
+        Marca otras organizaciones que te interesan ver aquí. (Tu propia organización y las del Barrio siempre aparecen).
+      </div>
+      <div id="my-act-org-checks" style="display:flex; flex-wrap:wrap; gap:8px 16px; padding:4px 2px; margin-bottom:12px;">
+        ${state.organizations.map((o) => {
+          const isMine = o.id === myOrgId;
+          const isChecked = isMine || followedIds.includes(o.id);
+          return `
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:${isMine ? 'default' : 'pointer'}; opacity:${isMine ? '0.7' : '1'};">
+            <input type="checkbox" name="followOrg" value="${o.id}" ${isChecked ? 'checked' : ''} ${isMine ? 'disabled' : ''} />
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+          </label>`;
+        }).join('')}
+      </div>
+      <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
+    </div>
+
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
         <div style="margin-bottom:6px;">
@@ -948,13 +980,31 @@ async function renderMyActivitiesLeaderView() {
               <span class="org-dot" style="background:${it.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : ''}${it.location ? `${it.kind === 'interview' ? ' · ' : ''}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? (it.location ? ' · ' : '') + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : esc(it.organizationName)}${it.location ? `${it.kind === 'interview' ? ' · ' : ' · '}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
         </div>`).join('') : '<div class="empty-state">Todavía no tienes actividades agendadas</div>'}
     </div>
   `;
+
+  document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
+    state.myActivitiesPrefsOpen = !prefsOpen;
+    renderMyActivitiesLeaderView();
+  });
+
+  document.getElementById('my-act-prefs-save').addEventListener('click', async () => {
+    const checked = Array.from(document.querySelectorAll('#my-act-org-checks input[type="checkbox"]:checked'))
+      .map((cb) => Number(cb.value))
+      .filter(id => id !== myOrgId); // Excluimos la propia para no duplicar datos
+    try {
+      const updatedUser = await api('/auth/me/followed-organizations', { method: 'PUT', body: { followedOrganizationIds: checked } });
+      state.user = updatedUser;
+      state.myActivitiesPrefsOpen = false;
+      toast('Preferencias guardadas');
+      await renderMyActivitiesLeaderView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
