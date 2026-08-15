@@ -34,7 +34,7 @@ function normalizeInvolvedOrgIds(raw, primaryOrgId, orgs) {
 // pueden ver los líderes (y el administrador) de las organizaciones
 // incluidas en la reunión — la principal, las "involucradas" (reunión en
 // conjunto), o todas si es "de todo el Barrio".
-function canSeeMeeting(user, item) {
+export function canSeeMeeting(user, item) {
   if (!item.isMeeting) return true;
   if (user.role === 'admin') return true;
   if (user.role !== 'leader') return false;

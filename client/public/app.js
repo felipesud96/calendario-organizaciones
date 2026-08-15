@@ -519,6 +519,14 @@ function canSeeInterviewsTab() {
 function canSeeMyActivitiesTab() {
   return !!state.user && (state.user.role === 'leader' || state.user.role === 'member');
 }
+// El módulo de Presupuesto es para Líderes y Administrador — los Miembros
+// no lo ven en absoluto.
+function canSeeBudgetTab() {
+  return !!state.user && state.user.role !== 'member';
+}
+function isObispadoUser() {
+  return !!state.user && (state.user.role === 'admin' || !!(state.user.organization && state.user.organization.name === 'Obispado'));
+}
 // Las entrevistas son privadas: cada líder solo ve las de su propia
 // organización, salvo el líder de Obispado, que ve las de todas.
 function canViewAllInterviews() {
@@ -556,6 +564,7 @@ function render() {
       <button class="tab-btn ${state.view === 'calendar' ? 'active' : ''}" data-view="calendar">Calendario</button>
       ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
       ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
+      ${canSeeBudgetTab() ? `<button class="tab-btn ${state.view === 'budget' ? 'active' : ''}" data-view="budget">Presupuesto</button>` : ''}
       ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
     </div>
     <main class="view" id="view-root"></main>
@@ -571,10 +580,12 @@ function render() {
 function renderCurrentView() {
   if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
+  if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
   else if (state.view === 'interviews') renderInterviewsView();
+  else if (state.view === 'budget') renderBudgetView();
   else if (state.view === 'admin') renderAdminView();
 }
 
@@ -754,6 +765,84 @@ function openDayModal(iso) {
 
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
+// ---------------- Exportar "Mis Actividades" a un calendario personal ----------------
+// Genera (o reutiliza) un enlace .ics personal y privado con el mismo
+// contenido que "Mis Actividades", para que cada persona lo agregue como
+// "suscripción de calendario" en Google Calendar, Apple Calendar u Outlook y
+// se mantenga sincronizado solo (no hace falta volver a exportar a mano).
+async function openCalendarExportModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="cal-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>📅 Exportar a mi calendario</h3><button class="modal-close" id="cal-modal-close">×</button></div>
+        <div class="modal-body">
+          <p style="margin-top:0;">Suscríbete con este enlace desde Google Calendar, Apple Calendar u Outlook y tus actividades de "Mis Actividades" van a aparecer ahí también, actualizándose solas (cada app revisa el enlace cada cierto tiempo, no es al instante).</p>
+          <div id="cal-link-loading" class="hint-box">Generando tu enlace…</div>
+          <div id="cal-link-wrap" style="display:none;">
+            <div class="field">
+              <label>Tu enlace personal</label>
+              <input type="text" id="cal-link-input" readonly style="font-size:12.5px;" />
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="cal-copy-btn">Copiar enlace</button>
+              <a class="btn btn-secondary btn-sm" id="cal-download-btn" href="#">Descargar archivo .ics</a>
+              <button type="button" class="btn btn-ghost btn-sm" id="cal-regen-btn">Generar un enlace nuevo</button>
+            </div>
+            <div class="hint-box">
+              <strong>Google Calendar</strong> (desde un computador): "Otros calendarios" (el + de la izquierda) → "Desde URL" → pega el enlace.<br/>
+              <strong>Apple Calendar</strong>: Archivo → "Nueva suscripción de calendario…" → pega el enlace.<br/>
+              <strong>Outlook</strong>: "Agregar calendario" → "Suscribirse desde la web" → pega el enlace.<br/><br/>
+              Este enlace es personal: cualquiera que lo tenga puede ver tus actividades y entrevistas, así que no lo compartas. Si crees que alguien más lo obtuvo, genera uno nuevo — el anterior deja de funcionar.
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div><button class="btn btn-secondary" id="cal-close">Cerrar</button></div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('cal-modal-close').addEventListener('click', closeModal);
+  document.getElementById('cal-close').addEventListener('click', closeModal);
+  document.getElementById('cal-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'cal-modal-backdrop') closeModal(); });
+
+  const renderLink = (token) => {
+    const url = `${location.origin}${API}/calendar/feed.ics?token=${token}`;
+    document.getElementById('cal-link-loading').style.display = 'none';
+    document.getElementById('cal-link-wrap').style.display = '';
+    document.getElementById('cal-link-input').value = url;
+    document.getElementById('cal-download-btn').href = url;
+    document.getElementById('cal-copy-btn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(url);
+        toast('Enlace copiado');
+      } catch (e) {
+        const input = document.getElementById('cal-link-input');
+        input.select();
+        toast('No se pudo copiar automáticamente — selecciónalo y cópialo a mano', 'error');
+      }
+    });
+    document.getElementById('cal-regen-btn').addEventListener('click', async () => {
+      if (!confirm('¿Generar un enlace nuevo? El enlace anterior deja de funcionar — vas a tener que actualizarlo en tu calendario personal.')) return;
+      try {
+        const { token: newToken } = await api('/auth/me/calendar-token/regenerate', { method: 'POST' });
+        renderLink(newToken);
+        toast('Enlace regenerado');
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    });
+  };
+
+  try {
+    const { token } = await api('/auth/me/calendar-token');
+    renderLink(token);
+  } catch (e) {
+    document.getElementById('cal-link-loading').textContent = 'No se pudo generar el enlace: ' + e.message;
+  }
+}
+
 // Abre el modal de edición si la persona tiene permiso sobre la organización
 // del ítem; si no, abre una vista de solo lectura (sin botones de editar/eliminar).
 function openItemModal(item, kind) {
@@ -845,7 +934,10 @@ async function renderMyActivitiesLeaderView() {
         <h2>Mis Actividades</h2>
         <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
       </div>
-      <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-secondary" id="my-act-export">📅 Exportar a mi calendario</button>
+        <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
+      </div>
     </div>
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
@@ -865,6 +957,7 @@ async function renderMyActivitiesLeaderView() {
   `;
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
+  document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
   container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
     const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
     openItemModal(it, it.kind);
@@ -898,7 +991,10 @@ async function renderMyActivitiesMemberView() {
         <h2>Mis Actividades</h2>
         <p>Actividades de las organizaciones que te interesan (como grupo familiar), más las actividades de todo el Barrio 🏘️ y tus propias entrevistas, que siempre aparecen acá.</p>
       </div>
-      <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-secondary" id="my-act-export">📅 Exportar a mi calendario</button>
+        <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
+      </div>
     </div>
     <div id="my-act-prefs" style="${prefsOpen ? '' : 'display:none;'} margin-bottom:14px;">
       <div class="hint-box" style="margin-bottom:10px;">
@@ -930,6 +1026,7 @@ async function renderMyActivitiesMemberView() {
     </div>
   `;
 
+  document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
   document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
     state.myActivitiesPrefsOpen = !prefsOpen;
     renderMyActivitiesMemberView();
@@ -1378,6 +1475,294 @@ async function openInterviewModal(existing = null) {
 async function refreshAfterInterviewChange() {
   if (state.view === 'interviews') renderInterviewsView();
   else { await loadCalendarData(); if (state.view === 'calendar') renderCalendarView(); }
+}
+
+// ---------------- Presupuesto ----------------
+// Trimestral: el líder de Obispado asigna un monto a cada organización
+// (incluida la suya) y puede crear categorías extra que no son de una sola
+// organización (ej. "Actividades de Barrio"). Cada líder ve el presupuesto
+// asignado a su propia organización y registra sus gastos, opcionalmente
+// ligados a una actividad ya creada. El líder de Obispado además puede
+// registrar gastos como Obispado o en cualquier categoría de todo el
+// Barrio. Al cambiar de trimestre no se borra nada: los datos de
+// trimestres anteriores quedan disponibles a modo de historial (de solo
+// lectura), pero no se cuentan en el saldo del trimestre actual.
+function quarterLabelClient(q) {
+  const m = /^(\d{4})-Q([1-4])$/.exec(q || '');
+  return m ? `${m[2]}° trimestre ${m[1]}` : (q || '');
+}
+function fmtMoney(n) {
+  return new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Number(n) || 0);
+}
+// Determina si el usuario actual puede registrar gastos en esta categoría:
+// cada líder solo en la de su propia organización; el líder de Obispado
+// (o el administrador) además en cualquier categoría personalizada.
+function canOperateOnBudgetCategory(cat) {
+  const u = state.user;
+  if (!u) return false;
+  if (u.role === 'admin') return true;
+  if (u.role !== 'leader') return false;
+  if (cat.categoryType === 'organization') return Number(cat.organizationId) === Number(u.organizationId);
+  return isObispadoUser();
+}
+
+async function renderBudgetView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `<div class="section-header"><div><h2>Presupuesto</h2><p>Cargando…</p></div></div>`;
+  let quartersData;
+  try { quartersData = await api('/budget/quarters'); }
+  catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar el presupuesto</div>'; return; }
+  if (!state.budgetQuarter || !quartersData.quarters.includes(state.budgetQuarter)) {
+    state.budgetQuarter = quartersData.currentQuarter;
+  }
+  let budgetData;
+  try { budgetData = await api(`/budget?quarter=${encodeURIComponent(state.budgetQuarter)}`); }
+  catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar el presupuesto</div>'; return; }
+
+  const { quarter, isCurrentQuarter, isObispado, categories } = budgetData;
+
+  container.innerHTML = `
+    <div class="section-header">
+      <div>
+        <h2>Presupuesto</h2>
+        <p>${isObispado
+          ? 'Asigna el presupuesto trimestral de cada organización (incluida Obispado) y registra tus propios gastos o los de actividades de todo el Barrio.'
+          : 'Presupuesto asignado a tu organización para este trimestre, y registro de tus gastos.'}</p>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <select id="budget-quarter-select">
+          ${quartersData.quarters.map((q) => `<option value="${q}" ${q === quarter ? 'selected' : ''}>${esc(quarterLabelClient(q))}${q === quartersData.currentQuarter ? ' (actual)' : ''}</option>`).join('')}
+        </select>
+        ${isObispado ? `<button class="btn btn-secondary" id="budget-new-category">+ Nueva categoría</button>` : ''}
+      </div>
+    </div>
+    ${!isCurrentQuarter ? `<div class="hint-box">Estás viendo un trimestre anterior, a modo de historial de consulta — no se puede editar. Para agregar asignaciones o gastos, vuelve al trimestre actual con el selector de arriba.</div>` : ''}
+    <div class="card-list" id="budget-cats">
+      ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : '<div class="empty-state">Todavía no hay categorías de presupuesto</div>'}
+    </div>
+  `;
+
+  document.getElementById('budget-quarter-select').addEventListener('change', (e) => {
+    state.budgetQuarter = e.target.value;
+    renderBudgetView();
+  });
+  if (isObispado) {
+    document.getElementById('budget-new-category').addEventListener('click', () => openBudgetCategoryModal());
+  }
+  wireBudgetCategoryCards(categories, isCurrentQuarter, isObispado);
+}
+
+function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
+  const canAllocate = isObispado && isCurrentQuarter;
+  const canExpense = canOperateOnBudgetCategory(cat) && isCurrentQuarter;
+  const balanceColor = cat.balance < 0 ? 'var(--danger)' : 'inherit';
+  return `
+    <div class="budget-card" data-cat-type="${cat.categoryType}" data-org-id="${cat.organizationId || ''}" data-cat-id="${cat.budgetCategoryId || ''}">
+      <div class="budget-card-head">
+        <div class="budget-card-name">
+          <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${cat.categoryColor};"></span>
+          <strong style="font-size:15px;">${esc(cat.categoryName)}</strong>
+        </div>
+        <div class="budget-figures">
+          <div><span class="bf-label">Asignado</span><strong>${fmtMoney(cat.assigned)}</strong></div>
+          <div><span class="bf-label">Gastado</span><strong>${fmtMoney(cat.spent)}</strong></div>
+          <div><span class="bf-label">Saldo</span><strong style="color:${balanceColor};">${fmtMoney(cat.balance)}</strong></div>
+        </div>
+      </div>
+      ${canAllocate ? `
+        <div class="budget-alloc-row">
+          <input type="number" min="0" step="1" class="budget-alloc-input" value="${cat.assigned}" />
+          <button type="button" class="btn btn-secondary btn-sm budget-alloc-save">Guardar asignación</button>
+        </div>` : ''}
+      <div class="budget-actions-row">
+        <button type="button" class="btn btn-ghost btn-sm budget-toggle-expenses">${cat.expenses.length ? `Ver gastos (${cat.expenses.length})` : 'Sin gastos registrados'}</button>
+        ${canExpense ? `<button type="button" class="btn btn-primary btn-sm budget-add-expense">+ Registrar gasto</button>` : ''}
+      </div>
+      <div class="budget-expenses-list" style="display:none;">
+        ${cat.expenses.length ? cat.expenses.map((e) => budgetExpenseRowHtml(e, canExpense)).join('') : '<div class="empty-state" style="padding:8px;">Sin gastos registrados</div>'}
+      </div>
+    </div>`;
+}
+
+function budgetExpenseRowHtml(e, canEdit) {
+  return `
+    <div class="budget-expense-row" data-expense-id="${e.id}">
+      <div>
+        <div>${esc(e.description)}${e.eventTitle ? ` · <span style="color:var(--celeste-dark);">🔗 ${esc(e.eventTitle)}</span>` : ''}</div>
+        <div style="color:var(--ink-soft); font-size:12px;">${esc(fmtDateHuman(e.date))}${e.registeredByName ? ' · ' + esc(e.registeredByName) : ''}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <strong>${fmtMoney(e.amount)}</strong>
+        ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm budget-edit-expense" title="Editar">✏️</button><button type="button" class="btn btn-ghost btn-sm budget-delete-expense" title="Eliminar">🗑️</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function wireBudgetCategoryCards(categories) {
+  document.querySelectorAll('#budget-cats > .budget-card').forEach((card, idx) => {
+    const cat = categories[idx];
+    card.querySelector('.budget-toggle-expenses')?.addEventListener('click', () => {
+      const list = card.querySelector('.budget-expenses-list');
+      list.style.display = list.style.display === 'none' ? '' : 'none';
+    });
+    const allocInput = card.querySelector('.budget-alloc-input');
+    const allocSaveBtn = card.querySelector('.budget-alloc-save');
+    if (allocSaveBtn) {
+      allocSaveBtn.addEventListener('click', async () => {
+        const amount = Number(allocInput.value);
+        if (!Number.isFinite(amount) || amount < 0) { toast('Monto inválido', 'error'); return; }
+        try {
+          await api('/budget/allocations', { method: 'PUT', body: {
+            quarter: state.budgetQuarter, categoryType: cat.categoryType,
+            organizationId: cat.organizationId, budgetCategoryId: cat.budgetCategoryId, amount,
+          } });
+          toast('Asignación guardada');
+          renderBudgetView();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    }
+    card.querySelector('.budget-add-expense')?.addEventListener('click', () => openBudgetExpenseModal(cat));
+    card.querySelectorAll('.budget-edit-expense').forEach((btn) => {
+      const row = btn.closest('.budget-expense-row');
+      const expense = cat.expenses.find((e) => e.id === Number(row.dataset.expenseId));
+      btn.addEventListener('click', () => openBudgetExpenseModal(cat, expense));
+    });
+    card.querySelectorAll('.budget-delete-expense').forEach((btn) => {
+      const row = btn.closest('.budget-expense-row');
+      const expenseId = Number(row.dataset.expenseId);
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar este gasto?')) return;
+        try { await api(`/budget/expenses/${expenseId}`, { method: 'DELETE' }); toast('Gasto eliminado'); renderBudgetView(); }
+        catch (e) { toast(e.message, 'error'); }
+      });
+    });
+  });
+}
+
+async function openBudgetExpenseModal(cat, existing = null) {
+  const isEdit = !!existing;
+  let events = [];
+  try {
+    if (cat.categoryType === 'organization') {
+      events = await api(`/events?organizationId=${cat.organizationId}`);
+    } else {
+      const all = await api('/events');
+      events = all.filter((ev) => ev.isWardActivity);
+    }
+  } catch (e) { events = []; }
+  events = events.slice().sort((a, b) => (b.date + b.startTime).localeCompare(a.date + a.startTime));
+
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="be-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isEdit ? 'Editar gasto' : 'Registrar gasto'} — ${esc(cat.categoryName)}</h3><button class="modal-close" id="be-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="be-error"></div>
+          <form id="be-form">
+            <div class="field">
+              <label>Monto</label>
+              <input type="number" name="amount" min="1" step="1" required placeholder="0" value="${existing ? existing.amount : ''}" />
+            </div>
+            <div class="field">
+              <label>Descripción</label>
+              <input type="text" name="description" required placeholder="Ej: Materiales para actividad" value="${esc(existing?.description || '')}" />
+            </div>
+            <div class="field">
+              <label>Fecha</label>
+              <input type="date" name="date" required value="${existing?.date || toISODate(new Date())}" />
+            </div>
+            <div class="field">
+              <label>Actividad relacionada (opcional)</label>
+              <select name="eventId">
+                <option value="">— Ninguna —</option>
+                ${events.map((ev) => `<option value="${ev.id}" ${existing?.eventId === ev.id ? 'selected' : ''}>${esc(fmtDateHuman(ev.date))} · ${esc(ev.title)}</option>`).join('')}
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${isEdit ? `<button class="btn btn-danger" id="be-delete">Eliminar</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="be-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="be-save">${isEdit ? 'Guardar cambios' : 'Registrar'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('be-modal-close').addEventListener('click', closeModal);
+  document.getElementById('be-cancel').addEventListener('click', closeModal);
+  document.getElementById('be-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'be-modal-backdrop') closeModal(); });
+  if (isEdit) document.getElementById('be-delete').addEventListener('click', async () => {
+    if (!confirm('¿Eliminar este gasto?')) return;
+    try { await api(`/budget/expenses/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Gasto eliminado'); renderBudgetView(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+  const form = document.getElementById('be-form');
+  document.getElementById('be-save').addEventListener('click', async () => {
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = Object.fromEntries(fd.entries());
+    body.amount = Number(body.amount);
+    body.eventId = body.eventId ? Number(body.eventId) : null;
+    if (!isEdit) {
+      body.categoryType = cat.categoryType;
+      body.organizationId = cat.organizationId;
+      body.budgetCategoryId = cat.budgetCategoryId;
+    }
+    try {
+      if (isEdit) await api(`/budget/expenses/${existing.id}`, { method: 'PUT', body });
+      else await api('/budget/expenses', { method: 'POST', body });
+      closeModal();
+      toast(isEdit ? 'Gasto actualizado' : 'Gasto registrado');
+      renderBudgetView();
+    } catch (e) {
+      document.getElementById('be-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+function openBudgetCategoryModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="bc-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Nueva categoría de presupuesto</h3><button class="modal-close" id="bc-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="bc-error"></div>
+          <div class="hint-box" style="margin-top:0;">Para gastos que no pertenecen a una sola organización — por ejemplo "Actividades de Barrio", "Mantenimiento del edificio", etc.</div>
+          <form id="bc-form">
+            <div class="field">
+              <label>Nombre de la categoría</label>
+              <input type="text" name="name" required placeholder="Ej: Actividades de Barrio" />
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="bc-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="bc-save">Crear</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('bc-modal-close').addEventListener('click', closeModal);
+  document.getElementById('bc-cancel').addEventListener('click', closeModal);
+  document.getElementById('bc-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'bc-modal-backdrop') closeModal(); });
+  const form = document.getElementById('bc-form');
+  document.getElementById('bc-save').addEventListener('click', async () => {
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      await api('/budget/categories', { method: 'POST', body: { name: fd.get('name') } });
+      closeModal();
+      toast('Categoría creada');
+      renderBudgetView();
+    } catch (e) {
+      document.getElementById('bc-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 // ---------------- Administración ----------------

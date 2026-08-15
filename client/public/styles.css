@@ -336,6 +336,19 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 .list-card .lc-actions { display: flex; gap: 6px; }
 .empty-state { text-align: center; color: var(--ink-soft); font-size: 13.5px; padding: 40px 10px; border: 1.5px dashed var(--border); border-radius: var(--radius); }
 
+/* ---------- Presupuesto ---------- */
+.budget-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--white); margin-bottom: 12px; }
+.budget-card-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.budget-card-name { display: flex; align-items: center; gap: 8px; }
+.budget-figures { display: flex; gap: 18px; font-size: 13.5px; }
+.budget-figures .bf-label { color: var(--ink-soft); font-size: 11.5px; display: block; }
+.budget-alloc-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.budget-alloc-row input[type="number"] { max-width: 160px; }
+.budget-actions-row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px; }
+.budget-expenses-list { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.budget-expense-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed var(--border); }
+.budget-expense-row:last-child { border-bottom: none; }
+
 table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.data-table th {
   text-align: left; padding: 9px 10px; background: var(--celeste-lighter);

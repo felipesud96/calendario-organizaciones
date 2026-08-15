@@ -12,6 +12,8 @@ import { registerEventRoutes } from './routes/events.js';
 import { registerInterviewRoutes } from './routes/interviews.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerRegistrationRoutes } from './routes/registration.js';
+import { registerCalendarRoutes } from './routes/calendar.js';
+import { registerBudgetRoutes } from './routes/budget.js';
 import { startReminderScheduler } from './reminders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,6 +27,8 @@ registerEventRoutes(router);
 registerInterviewRoutes(router);
 registerUserRoutes(router);
 registerRegistrationRoutes(router);
+registerCalendarRoutes(router);
+registerBudgetRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

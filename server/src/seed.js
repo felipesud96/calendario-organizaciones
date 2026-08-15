@@ -74,6 +74,18 @@ credentials.push(['miembro@ward.local', 'miembro123', 'Miembro']);
 // de ejemplo de secretarios que hayan quedado de una siembra anterior.
 data.users = data.users.filter((u) => !u.email.startsWith('secretario.'));
 
+// Categoría de presupuesto de ejemplo para gastos que no son de una sola
+// organización (ej. una actividad de todo el barrio). El líder de Obispado
+// puede crear más desde el módulo de Presupuesto.
+if (!data.budgetCategories.some((c) => c.name === 'Actividades de Barrio')) {
+  data.budgetCategories.push({
+    id: nextId(data, 'budgetCategories'),
+    name: 'Actividades de Barrio',
+    createdBy: null,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 save(data);
 
 console.log('Datos de ejemplo creados/actualizados.\n');

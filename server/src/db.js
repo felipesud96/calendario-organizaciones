@@ -17,7 +17,13 @@ const EMPTY_DB = {
   interviews: [],
   sessions: [],
   registrationRequests: [],
-  nextId: { organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1 },
+  budgetCategories: [],
+  budgetAllocations: [],
+  budgetExpenses: [],
+  nextId: {
+    organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1,
+    budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1,
+  },
 };
 
 function ensureFile() {
