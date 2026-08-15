@@ -146,16 +146,28 @@ export function parseIcsEvents(icsText) {
 
 // ---------------- Descarga del feed ----------------
 
+// Devuelve { notModified: true } si el servidor respondió 304 (el feed
+// sigue igual a la última vez — no es un error, es que no hay nada nuevo
+// que descargar), o { notModified: false, text } con el contenido si hay
+// que parsearlo de nuevo.
 async function fetchIcsText(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'CalendarioBarrioValleGrande/1.0 (+sincronizacion de calendario de Estaca)' },
+      headers: {
+        'User-Agent': 'CalendarioBarrioValleGrande/1.0 (+sincronizacion de calendario de Estaca)',
+        // Le pedimos al servidor (o a cualquier CDN/caché intermedio) que no
+        // nos conteste con una copia en caché — igual manejamos el 304 más
+        // abajo por si de todas formas llega uno.
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
     });
+    if (res.status === 304) return { notModified: true };
     if (!res.ok) throw new Error(`El calendario de Estaca respondió con error ${res.status}`);
-    return await res.text();
+    return { notModified: false, text: await res.text() };
   } finally {
     clearTimeout(timer);
   }
@@ -177,8 +189,17 @@ export async function syncStakeCalendar() {
   }
   const now = new Date().toISOString();
   try {
-    const text = await fetchIcsText(url);
-    const parsed = parseIcsEvents(text);
+    const result = await fetchIcsText(url);
+    if (result.notModified) {
+      // El feed no cambió desde la última vez que se sincronizó — se deja
+      // tal cual lo que ya había guardado (sigue siendo válido) y solo se
+      // actualiza la marca de tiempo. Esto NO es una falla.
+      return withDb((data) => {
+        data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, eventCount: data.stakeEvents.length };
+        return data.stakeCalendar;
+      });
+    }
+    const parsed = parseIcsEvents(result.text);
     return withDb((data) => {
       data.stakeEvents = parsed.map((ev) => ({ id: nextId(data, 'stakeEvents'), ...ev, syncedAt: now }));
       data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, eventCount: data.stakeEvents.length };

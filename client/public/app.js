@@ -2005,7 +2005,13 @@ async function renderAdminStake() {
     body.showNonBlockingEvents = document.getElementById('stake-show-nonblocking').checked;
     try {
       state.stakeCalendar = await api('/stake-calendar', { method: 'PUT', body });
-      toast(state.stakeCalendar.lastSyncOk ? 'Guardado y sincronizado' : 'Guardado, pero la sincronización falló: ' + state.stakeCalendar.lastSyncError, state.stakeCalendar.lastSyncOk ? 'success' : 'error');
+      // Solo se intentó descargar el feed de nuevo si el enlace cambió — si
+      // no cambió (ej. solo se tocó el nombre, las palabras clave, o el
+      // interruptor de "mostrar informativas"), es un guardado puramente
+      // local y no tiene sentido mostrarlo como si hubiera fallado una
+      // sincronización que ni siquiera se intentó.
+      if (!state.stakeCalendar.resynced) toast('Guardado');
+      else toast(state.stakeCalendar.lastSyncOk ? 'Guardado y sincronizado' : 'Guardado, pero la sincronización falló: ' + state.stakeCalendar.lastSyncError, state.stakeCalendar.lastSyncOk ? 'success' : 'error');
       await renderAdminStake();
     } catch (e) {
       document.getElementById('stake-config-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;

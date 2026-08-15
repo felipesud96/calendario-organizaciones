@@ -63,8 +63,9 @@ export function registerStakeRoutes(router) {
     sendJson(res, 200, { conflicts, canOverride: isObispadoLeader(req.user, data) });
   }));
 
-  // Cambiar el enlace, el nombre a mostrar, o las palabras clave "no
-  // restrictivas": Administrador o líder de Obispado.
+  // Cambiar el enlace, el nombre a mostrar, las palabras clave "no
+  // restrictivas", o si se muestran las actividades informativas:
+  // Administrador o líder de Obispado.
   router.put('/api/stake-calendar', requireAuth(async (req, res, params, body) => {
     const data0 = load();
     if (!isObispadoLeader(req.user, data0)) {
@@ -74,20 +75,29 @@ export function registerStakeRoutes(router) {
     if (!url || !/^https?:\/\//i.test(String(url).trim())) {
       return sendJson(res, 400, { error: 'El enlace debe ser una URL válida (http o https)' });
     }
+    const cleanUrl = String(url).trim();
+    const urlChanged = cleanUrl !== data0.stakeCalendar.url;
     const cleanKeywords = Array.isArray(nonBlockingKeywords)
       ? [...new Set(nonBlockingKeywords.map((k) => String(k).trim()).filter(Boolean))]
       : data0.stakeCalendar.nonBlockingKeywords;
     await withDb((data) => {
       data.stakeCalendar = {
         ...data.stakeCalendar,
-        url: String(url).trim(),
+        url: cleanUrl,
         displayName: displayName ? String(displayName).trim() : (data.stakeCalendar.displayName || 'Estaca'),
         nonBlockingKeywords: cleanKeywords,
         showNonBlockingEvents: typeof showNonBlockingEvents === 'boolean' ? showNonBlockingEvents : data.stakeCalendar.showNonBlockingEvents,
       };
     });
-    const meta = await syncStakeCalendar();
-    sendJson(res, 200, meta);
+    // Solo se vuelve a descargar el feed si el ENLACE cambió — el nombre a
+    // mostrar, las palabras clave y el interruptor de "mostrar informativas"
+    // son configuración puramente local, no hace falta (ni tiene sentido)
+    // pegarle a la red cada vez que se guarda algo de eso. Esto además evita
+    // que una falla de red pasajera (o un 304 mal interpretado, ya
+    // corregido) se vea como si el guardado hubiera fallado cuando lo único
+    // que se quería era, por ejemplo, ocultar las actividades informativas.
+    const meta = urlChanged ? await syncStakeCalendar() : load().stakeCalendar;
+    sendJson(res, 200, { ...meta, resynced: urlChanged });
   }));
 
   // Sincronizar ahora: Administrador o líder de Obispado.
