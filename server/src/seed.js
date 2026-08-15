@@ -86,6 +86,25 @@ if (!data.budgetCategories.some((c) => c.name === 'Actividades de Barrio')) {
   });
 }
 
+// Enlace del calendario de Estaca (agrupa varios barrios): sus actividades
+// tienen prioridad y bloquean la creación de actividades de organizaciones o
+// de todo el Barrio que choquen con ellas (ver stakeCalendar.js). Se deja
+// configurado por defecto; el Administrador puede cambiarlo desde
+// Administración → Estaca.
+if (!data.stakeCalendar || !data.stakeCalendar.url) {
+  data.stakeCalendar = {
+    ...data.stakeCalendar,
+    url: 'https://churchofjesuschrist.org/church-calendar/services/ext/v3.0/export/ical/subscribe/c1fcb8a3953a4518b977d428ae968352',
+    displayName: 'Estaca',
+    lastSyncedAt: null,
+    lastSyncOk: null,
+    lastSyncError: null,
+    eventCount: 0,
+    nonBlockingKeywords: data.stakeCalendar?.nonBlockingKeywords || ['entrevista', 'presidencia de estaca', 'sumo consejo', 'presentación anual'],
+    showNonBlockingEvents: typeof data.stakeCalendar?.showNonBlockingEvents === 'boolean' ? data.stakeCalendar.showNonBlockingEvents : true,
+  };
+}
+
 save(data);
 
 console.log('Datos de ejemplo creados/actualizados.\n');

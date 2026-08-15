@@ -1,6 +1,30 @@
 import { sendJson } from '../router.js';
 import { load, withDb, nextId } from '../db.js';
 import { requireAuth } from '../guard.js';
+import { findStakeConflicts } from '../stakeCalendar.js';
+import { isObispadoLeader } from './stake.js';
+
+// Mensaje de error cuando una actividad de organización o de todo el Barrio
+// choca con una actividad de Estaca de las que SÍ bloquean (conferencias,
+// festivales, capacitaciones, etc. — no las puramente informativas, ver
+// stakeCalendar.js → isBlockingStakeEvent). No se puede "pasar por alto"
+// libremente como el aviso de choque entre organizaciones: solo el líder de
+// Obispado (o el Administrador) puede autorizarlo igual, mandando
+// `overrideStakeConflict: true` en el body (ver más abajo).
+function stakeConflictError(conflicts) {
+  const list = conflicts.map((c) => `"${c.title}"${c.startTime ? ` (${c.startTime}${c.endTime ? '–' + c.endTime : ''})` : ' (todo el día)'}`).join(', ');
+  return `Choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'} (tienen prioridad) — ${list}. Requiere autorización del líder de Obispado antes de agendarse.`;
+}
+
+// Devuelve la respuesta 409 para un choque con Estaca, salvo que quien pide
+// tenga permiso (líder de Obispado o Administrador) Y haya mandado la
+// confirmación explícita `overrideStakeConflict: true` — en ese caso no
+// bloquea, deja seguir.
+function blockedByStake(conflicts, body, user, data) {
+  if (!conflicts.length) return null;
+  if (body?.overrideStakeConflict && isObispadoLeader(user, data)) return null;
+  return { error: stakeConflictError(conflicts), stakeConflicts: conflicts, canOverride: isObispadoLeader(user, data) };
+}
 
 function canEditOrg(user, organizationId) {
   if (user.role === 'admin') return true;
@@ -94,6 +118,9 @@ export function registerEventRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
     }
     const data0 = load();
+    const stakeConflicts = findStakeConflicts(data0, { date, startTime, endTime: body.endTime });
+    const stakeBlock = blockedByStake(stakeConflicts, body, req.user, data0);
+    if (stakeBlock) return sendJson(res, 409, stakeBlock);
     const fields = buildEventFields(body, data0.organizations);
     const now = new Date().toISOString();
     const event = await withDb((data) => {
@@ -134,6 +161,15 @@ export function registerEventRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
     }
     const data0 = load();
+    // Se revisa CADA fecha del lote (no solo la primera, a diferencia del
+    // aviso "suave" del cliente): si cualquiera choca con Estaca, se rechaza
+    // el lote completo para no dejar una repetición creada a medias — salvo
+    // que el líder de Obispado (o Administrador) haya autorizado igual.
+    for (const d of cleanDates) {
+      const conflicts = findStakeConflicts(data0, { date: d, startTime, endTime: body.endTime });
+      const stakeBlock = blockedByStake(conflicts, body, req.user, data0);
+      if (stakeBlock) return sendJson(res, 409, { ...stakeBlock, error: `${stakeBlock.error} (fecha: ${d})`, conflictDate: d });
+    }
     const fields = buildEventFields(body, data0.organizations);
     const now = new Date().toISOString();
     const recurrenceGroupId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -165,6 +201,12 @@ export function registerEventRoutes(router) {
     if (!canEditOrg(req.user, existing.organizationId) || !canEditOrg(req.user, targetOrg)) {
       return sendJson(res, 403, { error: 'No tienes permiso para editar este evento' });
     }
+    const finalDate = body.date ?? existing.date;
+    const finalStartTime = body.startTime ?? existing.startTime;
+    const finalEndTime = body.endTime ?? existing.endTime;
+    const stakeConflicts = findStakeConflicts(data, { date: finalDate, startTime: finalStartTime, endTime: finalEndTime });
+    const stakeBlock = blockedByStake(stakeConflicts, body, req.user, data);
+    if (stakeBlock) return sendJson(res, 409, stakeBlock);
     const updated = await withDb((d) => {
       const ev = d.events.find((e) => e.id === id);
       const finalOrgId = body.organizationId !== undefined ? Number(body.organizationId) : ev.organizationId;

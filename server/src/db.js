@@ -20,9 +20,28 @@ const EMPTY_DB = {
   budgetCategories: [],
   budgetAllocations: [],
   budgetExpenses: [],
+  stakeEvents: [],
+  stakeCalendar: {
+    url: '',
+    displayName: 'Estaca',
+    lastSyncedAt: null,
+    lastSyncOk: null,
+    lastSyncError: null,
+    eventCount: 0,
+    // Actividades de Estaca cuyo TÍTULO contenga alguna de estas palabras no
+    // bloquean nada (son informativas: entrevistas, reuniones internas de
+    // Estaca, etc.) — ver stakeCalendar.js → isBlockingStakeEvent().
+    nonBlockingKeywords: ['entrevista', 'presidencia de estaca', 'sumo consejo', 'presentación anual'],
+    // Si el Administrador (o el líder de Obispado) lo desactiva, las
+    // actividades informativas (las que no influyen a la membresía del
+    // barrio) directamente no se muestran en el calendario — solo quedan
+    // visibles las que sí tienen prioridad. No afecta el bloqueo: esas
+    // nunca bloqueaban nada, se trata solo de qué se ve.
+    showNonBlockingEvents: true,
+  },
   nextId: {
     organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1,
-    budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1,
+    budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1, stakeEvents: 1,
   },
 };
 
@@ -46,6 +65,18 @@ export function load() {
   let migrated = false;
   for (const u of data.users) {
     if (u.role === 'secretary') { u.role = 'leader'; migrated = true; }
+  }
+  // migración: bases de datos creadas antes de que existiera la lista de
+  // palabras clave "no restrictivas" del calendario de Estaca.
+  if (!Array.isArray(data.stakeCalendar?.nonBlockingKeywords)) {
+    data.stakeCalendar = { ...data.stakeCalendar, nonBlockingKeywords: [...EMPTY_DB.stakeCalendar.nonBlockingKeywords] };
+    migrated = true;
+  }
+  // migración: bases de datos creadas antes de que existiera la opción de
+  // ocultar del calendario las actividades de Estaca informativas.
+  if (typeof data.stakeCalendar?.showNonBlockingEvents !== 'boolean') {
+    data.stakeCalendar = { ...data.stakeCalendar, showNonBlockingEvents: true };
+    migrated = true;
   }
   if (migrated) save(data);
   return data;

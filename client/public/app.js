@@ -17,6 +17,8 @@ const state = {
   activeOrgIds: null, // null = todas
   events: [],
   interviews: [],
+  stakeEvents: [],
+  stakeCalendar: null,
   interviewOrgFilter: 'all',
   adminSubtab: 'users',
   adminUsers: [],
@@ -39,6 +41,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `Error ${res.status}`);
     err.status = res.status;
+    err.data = data; // ej: { stakeConflicts, canOverride, conflictDate } — ver openEventModal
     throw err;
   }
   return data;
@@ -182,6 +185,13 @@ function eventTitlePrefix(item) {
   return item.isMeeting ? '🔒 ' : '';
 }
 
+// Como eventTitlePrefix, pero también sabe mostrar el prefijo de una
+// actividad de Estaca (sincronizada, sin dueño en el barrio).
+function stakeAwarePrefix(item) {
+  if (item.kind === 'stake') return '';
+  return eventTitlePrefix(item);
+}
+
 // ---------------- Tipo de actividad: Actividad vs. Reunión ----------------
 // Una "Reunión" (ej. Reunión de presidencia de Cuórum) es privada: solo la
 // ven los líderes (y el administrador) de las organizaciones incluidas —
@@ -223,7 +233,7 @@ function recurrenceFieldHtml(idPrefix) {
       <div id="${idPrefix}-recurrence-dates"></div>
       <button type="button" class="btn btn-secondary btn-sm" id="${idPrefix}-recurrence-add-date">+ Agregar fecha</button>
     </div>
-    <div class="hint-box" id="${idPrefix}-recurrence-hint" style="display:none;">Se crea una actividad independiente por cada fecha — después puedes editar o eliminar una fecha puntual sin afectar a las demás. El aviso de choque solo revisa la primera fecha (el campo "Día"); si hace falta, revisa las demás fechas a mano.</div>`;
+    <div class="hint-box" id="${idPrefix}-recurrence-hint" style="display:none;">Se crea una actividad independiente por cada fecha — después puedes editar o eliminar una fecha puntual sin afectar a las demás. El aviso de choque solo revisa la primera fecha (el campo "Día"); si hace falta, revisa las demás fechas a mano. Eso sí: si alguna fecha choca con una actividad de Estaca de las que requieren autorización, el servidor va a rechazar la repetición completa al guardar — a menos que el líder de Obispado la autorice igual.</div>`;
 }
 
 function wireRecurrenceField(idPrefix) {
@@ -326,6 +336,40 @@ function conflictWarningHtml(conflicts) {
     <ul style="margin:6px 0 0; padding-left:18px;">
       ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong> — ${esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(c.location) : ''}</li>`).join('')}
     </ul>
+  </div>`;
+}
+
+// ---------------- Choques con actividades de Estaca (prioridad) ----------------
+// No TODAS las actividades de Estaca bloquean — las puramente informativas
+// (entrevistas, reuniones internas de Estaca, etc.) no cuentan como choque;
+// el servidor decide cuáles sí (ver stakeCalendar.js → isBlockingStakeEvent)
+// así que se le pregunta directo en vez de duplicar esa lógica acá. Devuelve
+// { conflicts, canOverride } — canOverride es true si quien pregunta es el
+// líder de Obispado (o Administrador), el único que puede autorizarlo igual.
+// El servidor vuelve a revisar esto de todas formas al guardar (incluso para
+// cada fecha de una repetición) — esta consulta es solo para avisar de
+// inmediato en el caso más común (una sola fecha) sin esperar el error del
+// servidor.
+async function checkStakeConflicts(candidate) {
+  if (!candidate.date) return { conflicts: [], canOverride: false };
+  try { return await api('/stake-conflicts', { method: 'POST', body: { date: candidate.date, startTime: candidate.startTime, endTime: candidate.endTime } }); }
+  catch (e) { return { conflicts: [], canOverride: false }; }
+}
+
+function stakeConflictWarningHtml(conflicts, canOverride) {
+  const list = `<ul style="margin:6px 0 0; padding-left:18px;">
+      ${conflicts.map((c) => `<li><strong>${esc(c.title)}</strong> · ${c.allDay ? 'Todo el día' : esc(fmtTime(c.startTime)) + (c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : '')}</li>`).join('')}
+    </ul>`;
+  if (canOverride) {
+    return `<div class="hint-box" style="border-color:#f59e0b; background:#fffbeb;">
+      🏛️ <strong>Choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'}</strong> (tienen prioridad) — como líder de Obispado puedes autorizarlo igual: vuelve a presionar el botón para agendarlo de todas formas.
+      ${list}
+    </div>`;
+  }
+  return `<div class="hint-box" style="border-color:#b91c1c; background:#fef2f2; color:#7f1d1d;">
+    🏛️ <strong>No se puede agendar sin autorización — choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'}</strong> (tienen prioridad sobre las de organizaciones y del Barrio):
+    ${list}
+    Elige otro horario o fecha, o pide autorización al líder de Obispado.
   </div>`;
 }
 
@@ -594,12 +638,14 @@ async function loadCalendarData() {
   const gridStart = gridStartDate(state.calMonth);
   const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 41);
   const from = toISODate(gridStart), to = toISODate(gridEnd);
-  const [events, interviews] = await Promise.all([
+  const [events, interviews, stakeEvents] = await Promise.all([
     api(`/events?from=${from}&to=${to}`),
     api(`/interviews?from=${from}&to=${to}`),
+    api(`/stake-events?from=${from}&to=${to}`).catch(() => []),
   ]);
   state.events = events;
   state.interviews = interviews;
+  state.stakeEvents = stakeEvents;
 }
 
 function gridStartDate(monthDate) {
@@ -646,10 +692,15 @@ async function renderCalendarView() {
     const isToday = isSameDay(cellDate, today);
     const dayEvents = state.events.filter((e) => e.date === iso && orgFilterActive(e.organizationId));
     const dayInterviews = state.interviews.filter((iv) => iv.date === iso && orgFilterActive(iv.organizationId));
+    // Las actividades de Estaca no pertenecen a ninguna organización del
+    // barrio, así que se muestran siempre — no las esconden los filtros de
+    // organización de arriba.
+    const dayStake = state.stakeEvents.filter((s) => s.date === iso);
     const items = [
       ...dayEvents.map((e) => ({ ...e, kind: 'event' })),
       ...dayInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.memberName })),
-    ].sort((a, b) => a.startTime.localeCompare(b.startTime));
+      ...dayStake.map((s) => ({ ...s, kind: 'stake' })),
+    ].sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
 
     const MAX_SHOW = 3;
     const visible = items.slice(0, MAX_SHOW);
@@ -659,8 +710,8 @@ async function renderCalendarView() {
       <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
         <div class="cal-daynum">${cellDate.getDate()}</div>
         ${visible.map((it) => `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(fmtTime(it.startTime))} ${esc(eventTitlePrefix(it) + it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
-            ${esc(fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(eventTitlePrefix(it) + it.title)}
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
+            ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it) + it.title)}
           </button>`).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
       </div>`;
@@ -685,6 +736,7 @@ async function renderCalendarView() {
       </div>
       ${canManageAnyEvents() ? `<button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
     </div>
+    ${await stakeStatusBarHtml()}
     <div class="org-filters">${chips}</div>
     <div class="cal-grid">
       ${DOW_LABELS.map((d) => `<div class="cal-dow">${d}</div>`).join('')}
@@ -717,11 +769,75 @@ async function renderCalendarView() {
   container.querySelectorAll('.cal-event').forEach((btn) => btn.addEventListener('click', () => {
     if (btn.dataset.kind === 'event') {
       openItemModal(state.events.find((e) => e.id === Number(btn.dataset.id)), 'event');
-    } else {
+    } else if (btn.dataset.kind === 'interview') {
       openItemModal(state.interviews.find((i) => i.id === Number(btn.dataset.id)), 'interview');
+    } else {
+      // Las actividades de Estaca son de solo lectura para todos — nunca se
+      // pueden editar ni eliminar desde acá, vienen sincronizadas.
+      openReadOnlyModal(state.stakeEvents.find((s) => s.id === Number(btn.dataset.id)), 'stake');
     }
   }));
   container.querySelectorAll('[data-more]').forEach((btn) => btn.addEventListener('click', () => openDayModal(btn.dataset.more)));
+
+  wireStakeStatusBar();
+}
+
+// ---------------- Barra de estado del calendario de Estaca ----------------
+// Visible para Administrador y líder de Obispado: muestra cuándo se
+// sincronizó por última vez y permite forzar una sincronización manual.
+// Se llama a sí misma al renderizar el calendario porque el estado puede
+// cambiar seguido (la sincronización automática corre cada 4 horas) y es
+// información liviana de pedir.
+async function stakeStatusBarHtml() {
+  if (!isObispadoUser()) return '';
+  if (!state.stakeCalendar) {
+    try { state.stakeCalendar = await api('/stake-calendar'); } catch (e) { return ''; }
+  }
+  const sc = state.stakeCalendar;
+  if (!sc || !sc.url) return '';
+  let statusText;
+  if (sc.lastSyncOk === true) {
+    statusText = `✅ Sincronizado ${sc.lastSyncedAt ? fmtRelativeTime(sc.lastSyncedAt) : ''} · ${sc.eventCount} actividad${sc.eventCount === 1 ? '' : 'es'}`;
+  } else if (sc.lastSyncOk === false) {
+    statusText = `⚠️ No se pudo sincronizar (${esc(sc.lastSyncError || 'error desconocido')}) · usando la última copia guardada (${sc.eventCount})`;
+  } else {
+    statusText = 'Sin sincronizar todavía';
+  }
+  return `
+    <div class="stake-status-bar">
+      <span>🏛️ <strong>Calendario de ${esc(sc.displayName || 'Estaca')}</strong> — ${statusText}</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="stake-sync-now">Sincronizar ahora</button>
+    </div>`;
+}
+
+function wireStakeStatusBar() {
+  const btn = document.getElementById('stake-sync-now');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando…';
+    try {
+      state.stakeCalendar = await api('/stake-calendar/sync', { method: 'POST' });
+      toast(state.stakeCalendar.lastSyncOk ? 'Calendario de Estaca sincronizado' : 'No se pudo sincronizar: ' + state.stakeCalendar.lastSyncError, state.stakeCalendar.lastSyncOk ? 'success' : 'error');
+      await loadCalendarData();
+      renderCalendarView();
+    } catch (e) {
+      toast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Sincronizar ahora';
+    }
+  });
+}
+
+function fmtRelativeTime(iso) {
+  const then = new Date(iso).getTime();
+  const diffMin = Math.round((Date.now() - then) / 60000);
+  if (diffMin < 1) return 'recién';
+  if (diffMin < 60) return `hace ${diffMin} min`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `hace ${diffH} h`;
+  const diffD = Math.round(diffH / 24);
+  return `hace ${diffD} día${diffD === 1 ? '' : 's'}`;
 }
 
 async function shiftMonth(delta, forceReplace = false) {
@@ -734,7 +850,8 @@ function openDayModal(iso) {
   const items = [
     ...state.events.filter((e) => e.date === iso).map((e) => ({ ...e, kind: 'event' })),
     ...state.interviews.filter((iv) => iv.date === iso).map((iv) => ({ ...iv, kind: 'interview', title: iv.memberName })),
-  ].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    ...state.stakeEvents.filter((s) => s.date === iso).map((s) => ({ ...s, kind: 'stake' })),
+  ].sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="day-modal-backdrop">
@@ -746,10 +863,10 @@ function openDayModal(iso) {
               <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
                 <span class="org-dot" style="background:${it.organizationColor}"></span>
                 <div class="lc-main">
-                  <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
+                  <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
                   <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
-                <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
+                <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
           </div>
         </div>
@@ -759,7 +876,8 @@ function openDayModal(iso) {
   document.getElementById('day-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'day-modal-backdrop') closeModal(); });
   modalRoot.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
     if (card.dataset.kind === 'event') openItemModal(state.events.find((e) => e.id === Number(card.dataset.id)), 'event');
-    else openItemModal(state.interviews.find((i) => i.id === Number(card.dataset.id)), 'interview');
+    else if (card.dataset.kind === 'interview') openItemModal(state.interviews.find((i) => i.id === Number(card.dataset.id)), 'interview');
+    else openReadOnlyModal(state.stakeEvents.find((s) => s.id === Number(card.dataset.id)), 'stake');
   }));
 }
 
@@ -856,21 +974,23 @@ function openItemModal(item, kind) {
 }
 
 function openReadOnlyModal(item, kind) {
+  if (!item) return;
   const title = kind === 'interview' ? item.memberName : item.title;
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ro-modal-backdrop">
       <div class="modal">
-        <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : eventTitlePrefix(item)}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
+        <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : kind === 'stake' ? '🏛️ ' : eventTitlePrefix(item)}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
         <div class="modal-body">
           <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
-          <div class="ro-detail-row">🕐 ${esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
+          <div class="ro-detail-row">🕐 ${kind === 'stake' && item.allDay ? 'Todo el día' : esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
           ${item.location ? `<div class="ro-detail-row">📍 ${esc(item.location)}</div>` : ''}
           ${kind === 'interview' && item.interviewerName ? `<div class="ro-detail-row">🧑‍💼 ${esc(item.interviewerName)}</div>` : ''}
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
+          ${kind === 'stake' ? `<div class="hint-box" style="margin-top:10px;">🔗 Sincronizada automáticamente desde el calendario de Estaca — no se puede editar aquí. ${item.blocking === false ? 'Es informativa: no bloquea que se agende algo encima.' : 'Tiene prioridad: no se puede agendar algo encima sin autorización del líder de Obispado.'}</div>` : ''}
         </div>
         <div class="modal-footer" style="justify-content:flex-end;">
           <button class="btn btn-secondary" id="ro-modal-close2">Cerrar</button>
@@ -912,65 +1032,33 @@ async function renderMyActivitiesLeaderView() {
   container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
   let events, interviews;
   try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
-  // Entrevistas donde el líder es el entrevistado
+  // Si otra organización te entrevista a TI (por ejemplo, el líder de
+  // Obispado entrevista al líder de Cuórum de Élderes), esa entrevista debe
+  // aparecerte acá aunque no la haya agendado tu propia organización.
   try { interviews = await api('/interviews'); } catch (e) { interviews = []; }
-  
   const myOrgId = Number(state.user.organizationId);
-  const followedIds = (state.user.followedOrganizationIds || []).map(Number);
-
-  // Filtramos: las de su org, las de barrio, y ahora también las de las organizaciones seguidas
-  events = events.filter((ev) => 
-    Number(ev.organizationId) === myOrgId || 
-    ev.isWardActivity || 
-    (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId) ||
-    followedIds.includes(Number(ev.organizationId)) ||
-    (ev.involvedOrganizations || []).some((o) => followedIds.includes(Number(o.id)))
-  );
-  
+  events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
   const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
     ...myOwnInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
   ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-  
   const todayIso = toISODate(new Date());
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
 
-  const prefsOpen = state.myActivitiesPrefsOpen ?? false;
-
   container.innerHTML = `
     <div class="section-header">
       <div>
         <h2>Mis Actividades</h2>
-        <p>Actividades de tu organización, tus entrevistas, y las de otras organizaciones que elijas seguir.</p>
+        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
+      <div style="display:flex; gap:8px;">
         <button class="btn btn-secondary" id="my-act-export">📅 Exportar a mi calendario</button>
         <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
       </div>
     </div>
-
-    <div id="my-act-prefs" style="${prefsOpen ? '' : 'display:none;'} margin-bottom:14px;">
-      <div class="hint-box" style="margin-bottom:10px;">
-        Marca otras organizaciones que te interesan ver aquí. (Tu propia organización y las del Barrio siempre aparecen).
-      </div>
-      <div id="my-act-org-checks" style="display:flex; flex-wrap:wrap; gap:8px 16px; padding:4px 2px; margin-bottom:12px;">
-        ${state.organizations.map((o) => {
-          const isMine = o.id === myOrgId;
-          const isChecked = isMine || followedIds.includes(o.id);
-          return `
-          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:${isMine ? 'default' : 'pointer'}; opacity:${isMine ? '0.7' : '1'};">
-            <input type="checkbox" name="followOrg" value="${o.id}" ${isChecked ? 'checked' : ''} ${isMine ? 'disabled' : ''} />
-            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
-          </label>`;
-        }).join('')}
-      </div>
-      <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
-    </div>
-
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
         <div style="margin-bottom:6px;">
@@ -980,31 +1068,13 @@ async function renderMyActivitiesLeaderView() {
               <span class="org-dot" style="background:${it.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : esc(it.organizationName)}${it.location ? `${it.kind === 'interview' ? ' · ' : ' · '}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : ''}${it.location ? `${it.kind === 'interview' ? ' · ' : ''}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? (it.location ? ' · ' : '') + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
         </div>`).join('') : '<div class="empty-state">Todavía no tienes actividades agendadas</div>'}
     </div>
   `;
-
-  document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
-    state.myActivitiesPrefsOpen = !prefsOpen;
-    renderMyActivitiesLeaderView();
-  });
-
-  document.getElementById('my-act-prefs-save').addEventListener('click', async () => {
-    const checked = Array.from(document.querySelectorAll('#my-act-org-checks input[type="checkbox"]:checked'))
-      .map((cb) => Number(cb.value))
-      .filter(id => id !== myOrgId); // Excluimos la propia para no duplicar datos
-    try {
-      const updatedUser = await api('/auth/me/followed-organizations', { method: 'PUT', body: { followedOrganizationIds: checked } });
-      state.user = updatedUser;
-      state.myActivitiesPrefsOpen = false;
-      toast('Preferencias guardadas');
-      await renderMyActivitiesLeaderView();
-    } catch (e) { toast(e.message, 'error'); }
-  });
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
@@ -1166,9 +1236,11 @@ function openEventModal(existing = null) {
   });
 
   let conflictsChecked = false;
+  let stakeConflictsChecked = false; // solo puede quedar en true si el líder de Obispado ya vio el choque y confirmó
   const saveBtn = document.getElementById('ev-save');
   const resetConflictCheck = () => {
     conflictsChecked = false;
+    stakeConflictsChecked = false;
     saveBtn.textContent = isEdit ? 'Guardar cambios' : 'Crear actividad';
     document.getElementById('ev-conflict-warning').innerHTML = '';
   };
@@ -1205,6 +1277,21 @@ function openEventModal(existing = null) {
     body.involvedOrganizationIds = body.isWardActivity ? [] : computeInvolvedOrgIds(fd);
     body.isMeeting = document.getElementById('ev-type-select').value === 'meeting';
 
+    document.getElementById('ev-error').innerHTML = '';
+
+    if (!stakeConflictsChecked) {
+      const stakeCheck = await checkStakeConflicts(body);
+      if (stakeCheck.conflicts.length) {
+        document.getElementById('ev-conflict-warning').innerHTML = stakeConflictWarningHtml(stakeCheck.conflicts, stakeCheck.canOverride);
+        if (stakeCheck.canOverride) {
+          stakeConflictsChecked = true;
+          saveBtn.textContent = 'Agendar de todas formas';
+        }
+        return; // esperando confirmación (o bloqueado sin remedio si no puede autorizarlo)
+      }
+    }
+    body.overrideStakeConflict = stakeConflictsChecked;
+
     if (!conflictsChecked) {
       const conflicts = await findConflictingActivities(body, existing?.id);
       if (conflicts.length) {
@@ -1214,6 +1301,7 @@ function openEventModal(existing = null) {
         return;
       }
     }
+    document.getElementById('ev-conflict-warning').innerHTML = '';
     const dates = !isEdit ? computeRecurrenceDates('ev', body.date) : [body.date];
     try {
       if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body });
@@ -1223,6 +1311,30 @@ function openEventModal(existing = null) {
       toast(isEdit ? 'Actividad actualizada' : (dates.length > 1 ? `${dates.length} actividades creadas` : 'Actividad creada'));
       await refreshAfterEventChange();
     } catch (e) {
+      // Esto puede pasar sobre todo con una repetición: la revisión rápida
+      // del cliente solo alcanza a chequear la primera fecha, así que el
+      // servidor puede rechazar por una fecha más adelante que choca con
+      // Estaca. Si quien está agendando es el líder de Obispado, se le
+      // ofrece autorizarlo igual (para todo el lote) en vez de solo mostrar
+      // el error y dejarlo sin salida.
+      if (e.data?.stakeConflicts?.length && e.data?.canOverride) {
+        const fechaTxt = e.data.conflictDate ? ` (fecha ${e.data.conflictDate})` : '';
+        if (confirm(`🏛️ Choca con una actividad de Estaca${fechaTxt}. ¿Autorizar y agendar de todas formas como líder de Obispado?`)) {
+          try {
+            const body2 = { ...body, overrideStakeConflict: true };
+            if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body: body2 });
+            else if (dates.length > 1) await api('/events/recurring', { method: 'POST', body: { ...body2, dates } });
+            else await api('/events', { method: 'POST', body: body2 });
+            closeModal();
+            toast(isEdit ? 'Actividad actualizada' : (dates.length > 1 ? `${dates.length} actividades creadas` : 'Actividad creada'));
+            await refreshAfterEventChange();
+            return;
+          } catch (e2) {
+            document.getElementById('ev-error').innerHTML = `<div class="error-msg">${esc(e2.message)}</div>`;
+            return;
+          }
+        }
+      }
       document.getElementById('ev-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
   });
@@ -1826,13 +1938,88 @@ async function renderAdminView() {
       <button class="subtab-btn ${state.adminSubtab === 'users' ? 'active' : ''}" data-tab="users">Usuarios</button>
       <button class="subtab-btn ${state.adminSubtab === 'orgs' ? 'active' : ''}" data-tab="orgs">Organizaciones</button>
       <button class="subtab-btn ${state.adminSubtab === 'requests' ? 'active' : ''}" data-tab="requests">Solicitudes${pendingCount > 0 ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingCount}</span>` : ''}</button>
+      <button class="subtab-btn ${state.adminSubtab === 'stake' ? 'active' : ''}" data-tab="stake">🏛️ Estaca</button>
     </div>
     <div id="admin-content"></div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.adminSubtab = b.dataset.tab; renderAdminView(); }));
   if (state.adminSubtab === 'users') await renderAdminUsers();
   else if (state.adminSubtab === 'orgs') await renderAdminOrgs();
+  else if (state.adminSubtab === 'stake') await renderAdminStake();
   else await renderAdminRequests();
+}
+
+// ---------------- Administración: enlace del calendario de Estaca ----------------
+async function renderAdminStake() {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = `<p>Cargando…</p>`;
+  let sc;
+  try { sc = await api('/stake-calendar'); } catch (e) { toast(e.message, 'error'); sc = { url: '', displayName: 'Estaca' }; }
+
+  const statusHtml = sc.lastSyncOk === true
+    ? `<div class="hint-box" style="border-color:#16a34a; background:#f0fdf4;">✅ Última sincronización: ${esc(fmtRelativeTime(sc.lastSyncedAt))} · ${sc.eventCount} actividad${sc.eventCount === 1 ? '' : 'es'} guardadas</div>`
+    : sc.lastSyncOk === false
+      ? `<div class="hint-box" style="border-color:#b91c1c; background:#fef2f2;">⚠️ Falló la última sincronización (${esc(sc.lastSyncedAt ? fmtRelativeTime(sc.lastSyncedAt) : '')}): ${esc(sc.lastSyncError || 'error desconocido')}. Se sigue usando la última copia guardada (${sc.eventCount} actividades) mientras tanto.</div>`
+      : `<div class="hint-box">Todavía no se ha sincronizado.</div>`;
+
+  const keywordsText = (sc.nonBlockingKeywords || []).join('\n');
+  content.innerHTML = `
+    <div class="hint-box" style="margin-bottom:14px;">
+      La Estaca agrupa a varios barrios. Sus actividades que involucran coordinación entre barrios (conferencias, festivales, capacitaciones, días de servicio, etc.) tienen <strong>prioridad</strong>: nadie puede agendar algo encima sin autorización del líder de Obispado. Las actividades puramente internas de la Estaca (entrevistas, reuniones de presidencia, sumo consejo, etc.) son solo informativas y no restringen nada — abajo se elige cómo distinguirlas. Este enlace es la suscripción pública .ics del calendario de la Estaca en el sitio de la Iglesia — el barrio la sincroniza automáticamente cada pocas horas.
+    </div>
+    ${statusHtml}
+    <form id="stake-config-form" style="max-width:560px; margin-top:14px;">
+      <div class="field">
+        <label>Enlace de suscripción (.ics) del calendario de Estaca</label>
+        <input type="url" name="url" required placeholder="https://churchofjesuschrist.org/church-calendar/services/ext/v3.0/export/ical/subscribe/..." value="${esc(sc.url || '')}" />
+      </div>
+      <div class="field">
+        <label>Nombre a mostrar</label>
+        <input type="text" name="displayName" placeholder="Ej: Estaca Colina Chile" value="${esc(sc.displayName || '')}" />
+      </div>
+      <div class="field">
+        <label>Palabras que NO restringen (una por línea)</label>
+        <textarea name="nonBlockingKeywords" rows="5" placeholder="entrevista&#10;presidencia de estaca&#10;sumo consejo">${esc(keywordsText)}</textarea>
+        <div style="font-size:12px; color:var(--ink-soft, #888); margin-top:4px;">Si el título de una actividad de Estaca contiene alguna de estas palabras (sin importar mayúsculas o tildes), NO bloquea nada — es informativa.</div>
+      </div>
+      <div class="field">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:600;">
+          <input type="checkbox" id="stake-show-nonblocking" ${sc.showNonBlockingEvents !== false ? 'checked' : ''} style="width:auto;" />
+          Mostrar en el calendario las actividades informativas de Estaca
+        </label>
+        <div style="font-size:12px; color:var(--ink-soft, #888); margin-top:4px;">Desmárcalo para que esas actividades (las que no influyen a la membresía del Barrio — entrevistas, reuniones internas, etc.) directamente no aparezcan en el calendario de nadie. Solo van a quedar visibles las actividades de Estaca que sí requieren autorización del líder de Obispado. No afecta el bloqueo: las informativas nunca bloquearon nada, esto es solo si se ven o no.</div>
+      </div>
+    </form>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-primary" id="stake-config-save">Guardar y sincronizar</button>
+      <button class="btn btn-secondary" id="stake-config-sync-now">Sincronizar ahora</button>
+    </div>
+    <div id="stake-config-error" style="margin-top:10px;"></div>
+  `;
+  document.getElementById('stake-config-save').addEventListener('click', async () => {
+    const form = document.getElementById('stake-config-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = Object.fromEntries(fd.entries());
+    body.nonBlockingKeywords = String(body.nonBlockingKeywords || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    body.showNonBlockingEvents = document.getElementById('stake-show-nonblocking').checked;
+    try {
+      state.stakeCalendar = await api('/stake-calendar', { method: 'PUT', body });
+      toast(state.stakeCalendar.lastSyncOk ? 'Guardado y sincronizado' : 'Guardado, pero la sincronización falló: ' + state.stakeCalendar.lastSyncError, state.stakeCalendar.lastSyncOk ? 'success' : 'error');
+      await renderAdminStake();
+    } catch (e) {
+      document.getElementById('stake-config-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+  document.getElementById('stake-config-sync-now').addEventListener('click', async () => {
+    try {
+      state.stakeCalendar = await api('/stake-calendar/sync', { method: 'POST' });
+      toast(state.stakeCalendar.lastSyncOk ? 'Sincronizado' : 'No se pudo sincronizar: ' + state.stakeCalendar.lastSyncError, state.stakeCalendar.lastSyncOk ? 'success' : 'error');
+      await renderAdminStake();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
 }
 
 async function renderAdminRequests() {

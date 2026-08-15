@@ -14,7 +14,9 @@ import { registerUserRoutes } from './routes/users.js';
 import { registerRegistrationRoutes } from './routes/registration.js';
 import { registerCalendarRoutes } from './routes/calendar.js';
 import { registerBudgetRoutes } from './routes/budget.js';
+import { registerStakeRoutes } from './routes/stake.js';
 import { startReminderScheduler } from './reminders.js';
+import { startStakeSyncScheduler } from './stakeCalendar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -29,6 +31,7 @@ registerUserRoutes(router);
 registerRegistrationRoutes(router);
 registerCalendarRoutes(router);
 registerBudgetRoutes(router);
+registerStakeRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -123,4 +126,5 @@ server.listen(PORT, () => {
   console.log(`Servidor del Calendario de Organizaciones escuchando en http://localhost:${PORT}`);
   console.log(`Sirviendo frontend estático desde: ${CLIENT_DIR}`);
   startReminderScheduler();
+  startStakeSyncScheduler();
 });
