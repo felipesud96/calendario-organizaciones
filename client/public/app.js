@@ -114,7 +114,7 @@ function computeLocationFromForm(fd) {
 function involvedOrgsFieldHtml(idPrefix, existingIds) {
   const ids = (existingIds || []).map(Number);
   return `
-    <div class="field">
+    <div class="field" id="${idPrefix}-involved-orgs-field">
       <label>¿Participan otras organizaciones? (opcional)</label>
       <div id="${idPrefix}-involved-orgs" style="display:flex; flex-wrap:wrap; gap:8px 14px; padding:4px 2px;">
         ${state.organizations.map((o) => `
@@ -139,10 +139,137 @@ function computeInvolvedOrgIds(fd) {
   return fd.getAll('involvedOrganizationIds').map(Number).filter((n) => Number.isFinite(n));
 }
 
+// ---------------- Actividad de todo el Barrio ----------------
+// Atajo para no tener que marcar organización por organización: incluye
+// automáticamente a todas. No afecta la alerta de choque (ver
+// orgSetForConflictCheck) porque así una actividad de otra organización que
+// se agende encima sigue mostrando la advertencia — que es justo el caso que
+// se quiere evitar.
+function wardActivityFieldHtml(idPrefix, checked) {
+  return `
+    <div class="field">
+      <label style="display:flex; align-items:center; gap:7px; font-weight:600; cursor:pointer;">
+        <input type="checkbox" id="${idPrefix}-ward-activity" ${checked ? 'checked' : ''} />
+        🏘️ Actividad de todo el Barrio
+      </label>
+      <div class="hint-box" style="margin-top:4px;">Incluye automáticamente a todas las organizaciones, sin tener que marcarlas una por una.</div>
+    </div>`;
+}
+
+function wireWardActivityField(idPrefix, involvedOrgsFieldSelector, onChange) {
+  const checkbox = document.getElementById(`${idPrefix}-ward-activity`);
+  const involvedField = document.querySelector(involvedOrgsFieldSelector);
+  const applyState = () => {
+    involvedField.style.display = checkbox.checked ? 'none' : '';
+    if (checkbox.checked) {
+      involvedField.querySelectorAll('input[type="checkbox"]').forEach((cb) => { cb.checked = false; });
+    }
+  };
+  applyState();
+  checkbox.addEventListener('change', () => { applyState(); if (onChange) onChange(); });
+}
+
 function involvedOrgsBadgesHtml(item) {
+  if (item.isWardActivity) return ` · 🏘️ Actividad de todo el Barrio`;
   const involved = item.involvedOrganizations || [];
   if (!involved.length) return '';
   return ` · 🤝 ${involved.map((o) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${o.color};margin-right:2px;"></span>${esc(o.name)}`).join(', ')}`;
+}
+
+// Prefijo visual para distinguir una Reunión (privada) de una Actividad
+// (pública) en cualquier listado.
+function eventTitlePrefix(item) {
+  return item.isMeeting ? '🔒 ' : '';
+}
+
+// ---------------- Tipo de actividad: Actividad vs. Reunión ----------------
+// Una "Reunión" (ej. Reunión de presidencia de Cuórum) es privada: solo la
+// ven los líderes (y el administrador) de las organizaciones incluidas —
+// nunca los Miembros ni los líderes de otras organizaciones. El servidor es
+// quien filtra esto (ver canSeeMeeting en events.js); acá solo se elige el
+// tipo al crear/editar.
+function eventTypeFieldHtml(idPrefix, isMeeting) {
+  return `
+    <div class="field">
+      <label>Tipo</label>
+      <select id="${idPrefix}-type-select">
+        <option value="activity" ${!isMeeting ? 'selected' : ''}>Actividad (la ve todo el barrio)</option>
+        <option value="meeting" ${isMeeting ? 'selected' : ''}>🔒 Reunión (solo la ven los líderes de la organización)</option>
+      </select>
+    </div>`;
+}
+
+// ---------------- Repetición: semanal o fechas específicas ----------------
+// Al crear (no al editar) se puede generar de una vez varias ocurrencias:
+// todas las semanas hasta una fecha, o un listado de fechas puntuales
+// elegidas a mano (ej. viernes de esta semana, jueves de la próxima, sábado
+// en 3 semanas). Cada ocurrencia queda como una actividad independiente.
+function recurrenceFieldHtml(idPrefix) {
+  return `
+    <div class="field">
+      <label>Repetición</label>
+      <select id="${idPrefix}-recurrence-select">
+        <option value="none" selected>No se repite</option>
+        <option value="weekly">Semanal (mismo día todas las semanas)</option>
+        <option value="custom">Fechas específicas</option>
+      </select>
+    </div>
+    <div class="field" id="${idPrefix}-recurrence-weekly-field" style="display:none;">
+      <label>Repetir cada semana hasta</label>
+      <input type="date" id="${idPrefix}-recurrence-until" />
+    </div>
+    <div class="field" id="${idPrefix}-recurrence-custom-field" style="display:none;">
+      <label>Fechas adicionales (además del "Día" de más abajo)</label>
+      <div id="${idPrefix}-recurrence-dates"></div>
+      <button type="button" class="btn btn-secondary btn-sm" id="${idPrefix}-recurrence-add-date">+ Agregar fecha</button>
+    </div>
+    <div class="hint-box" id="${idPrefix}-recurrence-hint" style="display:none;">Se crea una actividad independiente por cada fecha — después puedes editar o eliminar una fecha puntual sin afectar a las demás. El aviso de choque solo revisa la primera fecha (el campo "Día"); si hace falta, revisa las demás fechas a mano.</div>`;
+}
+
+function wireRecurrenceField(idPrefix) {
+  const select = document.getElementById(`${idPrefix}-recurrence-select`);
+  const weeklyField = document.getElementById(`${idPrefix}-recurrence-weekly-field`);
+  const customField = document.getElementById(`${idPrefix}-recurrence-custom-field`);
+  const hint = document.getElementById(`${idPrefix}-recurrence-hint`);
+  const datesContainer = document.getElementById(`${idPrefix}-recurrence-dates`);
+  const addBtn = document.getElementById(`${idPrefix}-recurrence-add-date`);
+  const applyState = () => {
+    weeklyField.style.display = select.value === 'weekly' ? '' : 'none';
+    customField.style.display = select.value === 'custom' ? '' : 'none';
+    hint.style.display = select.value === 'none' ? 'none' : '';
+  };
+  applyState();
+  select.addEventListener('change', applyState);
+  addBtn.addEventListener('click', () => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-bottom:6px;';
+    row.innerHTML = `<input type="date" class="${idPrefix}-extra-date" /> <button type="button" class="btn btn-ghost btn-sm">✕</button>`;
+    row.querySelector('button').addEventListener('click', () => row.remove());
+    datesContainer.appendChild(row);
+  });
+}
+
+// Calcula la lista final de fechas a crear según el modo de repetición
+// elegido. Devuelve siempre al menos [firstDate] (o [] si no hay fecha).
+function computeRecurrenceDates(idPrefix, firstDate) {
+  const mode = document.getElementById(`${idPrefix}-recurrence-select`).value;
+  if (mode === 'weekly') {
+    const until = document.getElementById(`${idPrefix}-recurrence-until`).value;
+    if (!firstDate || !until) return [firstDate].filter(Boolean);
+    const dates = [];
+    const cur = new Date(`${firstDate}T00:00:00`);
+    const end = new Date(`${until}T00:00:00`);
+    while (cur <= end) {
+      dates.push(toISODate(cur));
+      cur.setDate(cur.getDate() + 7);
+    }
+    return dates.length ? dates : [firstDate];
+  }
+  if (mode === 'custom') {
+    const extra = Array.from(document.querySelectorAll(`.${idPrefix}-extra-date`)).map((el) => el.value).filter(Boolean);
+    return [firstDate, ...extra].filter(Boolean);
+  }
+  return [firstDate].filter(Boolean);
 }
 
 // ---------------- Choques de horario/lugar con otras organizaciones ----------------
@@ -390,7 +517,7 @@ function canSeeInterviewsTab() {
   return !!state.user && state.user.role !== 'member';
 }
 function canSeeMyActivitiesTab() {
-  return !!state.user && state.user.role === 'leader';
+  return !!state.user && (state.user.role === 'leader' || state.user.role === 'member');
 }
 // Las entrevistas son privadas: cada líder solo ve las de su propia
 // organización, salvo el líder de Obispado, que ve las de todas.
@@ -521,8 +648,8 @@ async function renderCalendarView() {
       <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
         <div class="cal-daynum">${cellDate.getDate()}</div>
         ${visible.map((it) => `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(fmtTime(it.startTime))} ${esc(it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
-            ${esc(fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(it.title)}
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(fmtTime(it.startTime))} ${esc(eventTitlePrefix(it) + it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
+            ${esc(fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(eventTitlePrefix(it) + it.title)}
           </button>`).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
       </div>`;
@@ -608,7 +735,7 @@ function openDayModal(iso) {
               <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
                 <span class="org-dot" style="background:${it.organizationColor}"></span>
                 <div class="lc-main">
-                  <div class="lc-title">${it.kind === 'interview' ? '👤 ' : ''}${esc(it.title)}</div>
+                  <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
                   <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
@@ -645,7 +772,7 @@ function openReadOnlyModal(item, kind) {
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ro-modal-backdrop">
       <div class="modal">
-        <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : ''}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
+        <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : eventTitlePrefix(item)}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
         <div class="modal-body">
           <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
@@ -681,26 +808,42 @@ async function refreshAfterEventChange() {
 }
 
 // ---------------- Mis Actividades ----------------
-// Listado simple (sin navegar mes a mes) de las actividades de la propia
-// organización del líder, con acceso directo a agregar/editar.
+// Para Líderes: listado simple (sin navegar mes a mes) de las actividades de
+// la propia organización, con acceso directo a agregar/editar.
+// Para Miembros: listado de las actividades de las organizaciones que la
+// persona elige seguir (por ejemplo, la propia más las de sus hijos), más
+// las actividades de todo el Barrio, que siempre aparecen. Solo lectura.
 async function renderMyActivitiesView() {
+  if (state.user.role === 'leader') return renderMyActivitiesLeaderView();
+  return renderMyActivitiesMemberView();
+}
+
+async function renderMyActivitiesLeaderView() {
   const container = document.getElementById('view-root');
   container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
-  let list;
-  try { list = await api('/events'); } catch (e) { toast(e.message, 'error'); list = []; }
+  let events, interviews;
+  try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
+  // Si otra organización te entrevista a TI (por ejemplo, el líder de
+  // Obispado entrevista al líder de Cuórum de Élderes), esa entrevista debe
+  // aparecerte acá aunque no la haya agendado tu propia organización.
+  try { interviews = await api('/interviews'); } catch (e) { interviews = []; }
   const myOrgId = Number(state.user.organizationId);
-  list = list.filter((ev) => Number(ev.organizationId) === myOrgId || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
-  list = list.slice().sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+  events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
+  const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
+  const list = [
+    ...events.map((ev) => ({ ...ev, kind: 'event' })),
+    ...myOwnInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
+  ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
   const todayIso = toISODate(new Date());
   const grouped = {};
-  for (const ev of list) { (grouped[ev.date] ||= []).push(ev); }
+  for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
 
   container.innerHTML = `
     <div class="section-header">
       <div>
         <h2>Mis Actividades</h2>
-        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, en un listado — sin tener que navegar mes a mes</p>
+        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
       </div>
       <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
     </div>
@@ -708,14 +851,14 @@ async function renderMyActivitiesView() {
       ${dates.length ? dates.map((d) => `
         <div style="margin-bottom:6px;">
           <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
-          ${grouped[d].map((ev) => `
-            <div class="list-card" data-id="${ev.id}" style="cursor:pointer;">
-              <span class="org-dot" style="background:${ev.organizationColor}"></span>
+          ${grouped[d].map((it) => `
+            <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+              <span class="org-dot" style="background:${it.organizationColor}"></span>
               <div class="lc-main">
-                <div class="lc-title">${esc(ev.title)}</div>
-                <div class="lc-sub">${ev.location ? `<span class="lc-location">📍 ${esc(ev.location)}</span>` : ''}${ev.description ? (ev.location ? ' · ' : '') + esc(ev.description) : ''}${involvedOrgsBadgesHtml(ev)}</div>
+                <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
+                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : ''}${it.location ? `${it.kind === 'interview' ? ' · ' : ''}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? (it.location ? ' · ' : '') + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
               </div>
-              <div class="lc-when">${esc(fmtTime(ev.startTime))}${ev.endTime ? ' - ' + esc(fmtTime(ev.endTime)) : ''}</div>
+              <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
         </div>`).join('') : '<div class="empty-state">Todavía no tienes actividades agendadas</div>'}
     </div>
@@ -723,7 +866,87 @@ async function renderMyActivitiesView() {
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
   container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
-    openItemModal(list.find((ev) => ev.id === Number(card.dataset.id)), 'event');
+    const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
+    openItemModal(it, it.kind);
+  }));
+}
+
+async function renderMyActivitiesMemberView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
+  let events, myInterviews;
+  try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
+  // Si algún líder te agendó una entrevista eligiéndote de la lista de
+  // usuarios registrados, el servidor la devuelve acá aunque la sección
+  // Entrevistas no esté disponible para el perfil Miembro.
+  try { myInterviews = await api('/interviews'); } catch (e) { myInterviews = []; }
+  const followedIds = (state.user.followedOrganizationIds || []).map(Number);
+  events = events.filter((ev) => ev.isWardActivity || followedIds.includes(Number(ev.organizationId)) || (ev.involvedOrganizations || []).some((o) => followedIds.includes(Number(o.id))));
+  const list = [
+    ...events.map((ev) => ({ ...ev, kind: 'event' })),
+    ...myInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
+  ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+  const todayIso = toISODate(new Date());
+  const grouped = {};
+  for (const it of list) { (grouped[it.date] ||= []).push(it); }
+  const dates = Object.keys(grouped).sort();
+  const prefsOpen = state.myActivitiesPrefsOpen ?? followedIds.length === 0;
+
+  container.innerHTML = `
+    <div class="section-header">
+      <div>
+        <h2>Mis Actividades</h2>
+        <p>Actividades de las organizaciones que te interesan (como grupo familiar), más las actividades de todo el Barrio 🏘️ y tus propias entrevistas, que siempre aparecen acá.</p>
+      </div>
+      <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
+    </div>
+    <div id="my-act-prefs" style="${prefsOpen ? '' : 'display:none;'} margin-bottom:14px;">
+      <div class="hint-box" style="margin-bottom:10px;">
+        Marca las organizaciones que te interesan — por ejemplo la tuya y las de tus hijos. Las actividades de todo el Barrio 🏘️ siempre van a aparecer, aunque no marques ninguna.
+      </div>
+      <div id="my-act-org-checks" style="display:flex; flex-wrap:wrap; gap:8px 16px; padding:4px 2px; margin-bottom:12px;">
+        ${state.organizations.map((o) => `
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="checkbox" name="followOrg" value="${o.id}" ${followedIds.includes(o.id) ? 'checked' : ''} />
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+          </label>`).join('')}
+      </div>
+      <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
+    </div>
+    <div class="card-list">
+      ${dates.length ? dates.map((d) => `
+        <div style="margin-bottom:6px;">
+          <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
+          ${grouped[d].map((it) => `
+            <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+              <span class="org-dot" style="background:${it.organizationColor}"></span>
+              <div class="lc-main">
+                <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
+                <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · con ${esc(it.interviewerName)}` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+              </div>
+              <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
+            </div>`).join('')}
+        </div>`).join('') : `<div class="empty-state">${followedIds.length ? 'No hay actividades próximas de las organizaciones que elegiste' : 'Elige qué organizaciones te interesan para ver sus actividades acá'}</div>`}
+    </div>
+  `;
+
+  document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
+    state.myActivitiesPrefsOpen = !prefsOpen;
+    renderMyActivitiesMemberView();
+  });
+  document.getElementById('my-act-prefs-save').addEventListener('click', async () => {
+    const checked = Array.from(document.querySelectorAll('#my-act-org-checks input[type="checkbox"]:checked')).map((cb) => Number(cb.value));
+    try {
+      const updatedUser = await api('/auth/me/followed-organizations', { method: 'PUT', body: { followedOrganizationIds: checked } });
+      state.user = updatedUser;
+      state.myActivitiesPrefsOpen = false;
+      toast('Preferencias guardadas');
+      await renderMyActivitiesMemberView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
+    const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
+    openItemModal(it, it.kind);
   }));
 }
 
@@ -746,10 +969,12 @@ function openEventModal(existing = null) {
               </select>
               ${options.length === 1 ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
+            ${eventTypeFieldHtml('ev', !!existing?.isMeeting)}
+            ${wardActivityFieldHtml('ev', !!existing?.isWardActivity)}
             ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
             <div class="field">
               <label>Descripción de la actividad</label>
-              <input type="text" name="title" required placeholder="Ej: Reunión de correlación" value="${esc(existing?.title || '')}" />
+              <input type="text" name="title" required placeholder="Ej: Reunión de presidencia de Cuórum" value="${esc(existing?.title || '')}" />
             </div>
             ${locationFieldHtml('ev', existing?.location)}
             <div id="ev-conflict-warning"></div>
@@ -771,6 +996,7 @@ function openEventModal(existing = null) {
                 <input type="time" name="endTime" value="${existing?.endTime || ''}" />
               </div>
             </div>
+            ${!isEdit ? recurrenceFieldHtml('ev') : ''}
           </form>
         </div>
         <div class="modal-footer">
@@ -813,6 +1039,8 @@ function openEventModal(existing = null) {
     resetConflictCheck();
   });
   document.querySelectorAll('#ev-involved-orgs input[type="checkbox"]').forEach((cb) => cb.addEventListener('change', resetConflictCheck));
+  wireWardActivityField('ev', '#ev-involved-orgs-field', resetConflictCheck);
+  if (!isEdit) wireRecurrenceField('ev');
 
   saveBtn.addEventListener('click', async () => {
     if (!form.reportValidity()) return;
@@ -826,7 +1054,9 @@ function openEventModal(existing = null) {
     body.location = location;
     delete body.locationType;
     delete body.locationOther;
-    body.involvedOrganizationIds = computeInvolvedOrgIds(fd);
+    body.isWardActivity = document.getElementById('ev-ward-activity').checked;
+    body.involvedOrganizationIds = body.isWardActivity ? [] : computeInvolvedOrgIds(fd);
+    body.isMeeting = document.getElementById('ev-type-select').value === 'meeting';
 
     if (!conflictsChecked) {
       const conflicts = await findConflictingActivities(body, existing?.id);
@@ -837,11 +1067,13 @@ function openEventModal(existing = null) {
         return;
       }
     }
+    const dates = !isEdit ? computeRecurrenceDates('ev', body.date) : [body.date];
     try {
       if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body });
+      else if (dates.length > 1) await api('/events/recurring', { method: 'POST', body: { ...body, dates } });
       else await api('/events', { method: 'POST', body });
       closeModal();
-      toast(isEdit ? 'Actividad actualizada' : 'Actividad creada');
+      toast(isEdit ? 'Actividad actualizada' : (dates.length > 1 ? `${dates.length} actividades creadas` : 'Actividad creada'));
       await refreshAfterEventChange();
     } catch (e) {
       document.getElementById('ev-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
@@ -890,7 +1122,7 @@ async function renderInterviewsView() {
             <div class="list-card">
               <span class="org-dot" style="background:${iv.organizationColor}"></span>
               <div class="lc-main">
-                <div class="lc-title">${esc(iv.memberName)}</div>
+                <div class="lc-title">${esc(iv.memberName)}${iv.memberUserId ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
                 <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(iv.location)}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
@@ -909,11 +1141,14 @@ async function renderInterviewsView() {
   }));
 }
 
-function openInterviewModal(existing = null) {
+async function openInterviewModal(existing = null) {
   const options = editableOrgOptions('interview');
   if (!existing && options.length === 0) { toast('No tienes permiso para agendar entrevistas', 'error'); return; }
   const isEdit = !!existing;
+  let directory = [];
+  try { directory = await api('/users/directory'); } catch (e) { directory = []; }
   const modalRoot = document.getElementById('modal-root');
+  const selectedUserId = existing?.memberUserId || '';
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="iv-modal-backdrop">
       <div class="modal">
@@ -929,8 +1164,16 @@ function openInterviewModal(existing = null) {
               ${options.length === 1 && !isEdit ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
             <div class="field">
+              <label>Miembro</label>
+              <select id="iv-member-select">
+                <option value="">✍️ Escribir el nombre a mano (todavía no está registrado)</option>
+                ${directory.map((u) => `<option value="${u.id}" ${String(selectedUserId) === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
+              </select>
+              <input type="hidden" name="memberUserId" id="iv-member-user-id" value="${esc(selectedUserId)}" />
+            </div>
+            <div class="field">
               <label>Nombre del miembro</label>
-              <input type="text" name="memberName" required placeholder="Nombre y apellido" value="${esc(existing?.memberName || '')}" />
+              <input type="text" name="memberName" id="iv-member-name" required placeholder="Nombre y apellido" value="${esc(existing?.memberName || '')}" ${selectedUserId ? 'readonly' : ''} />
             </div>
             <div class="two-col">
               <div class="field">
@@ -1012,6 +1255,21 @@ function openInterviewModal(existing = null) {
   wireLocationField('iv', resetIvConflictCheck);
   document.getElementById('iv-location-other-field').querySelector('input').addEventListener('input', resetIvConflictCheck);
 
+  const memberSelect = document.getElementById('iv-member-select');
+  const memberNameInput = document.getElementById('iv-member-name');
+  const memberUserIdInput = document.getElementById('iv-member-user-id');
+  memberSelect.addEventListener('change', () => {
+    memberUserIdInput.value = memberSelect.value;
+    if (memberSelect.value) {
+      const chosen = directory.find((u) => String(u.id) === memberSelect.value);
+      memberNameInput.value = chosen ? chosen.name : '';
+      memberNameInput.readOnly = true;
+    } else {
+      memberNameInput.readOnly = false;
+    }
+    resetIvConflictCheck();
+  });
+
   ivSaveBtn.addEventListener('click', async () => {
     if (!ivForm.reportValidity()) return;
     const fd = new FormData(ivForm);
@@ -1021,6 +1279,7 @@ function openInterviewModal(existing = null) {
       return;
     }
     const body = Object.fromEntries(fd.entries());
+    body.memberUserId = body.memberUserId ? Number(body.memberUserId) : null;
     body.location = location;
     delete body.locationType;
     delete body.locationOther;

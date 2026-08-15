@@ -31,19 +31,43 @@ function withOrgInfo(item, orgs) {
   return { ...item, organizationName: org?.name || '', organizationColor: org?.color || '#999999' };
 }
 
+// Si el líder eligió a un usuario ya registrado (en vez de escribir el
+// nombre a mano), guardamos su id para que la entrevista le aparezca en su
+// propio "Mis Actividades". Si el id no existe, se ignora (queda como si
+// se hubiera escrito el nombre manualmente).
+function normalizeMemberUserId(raw, users) {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const id = Number(raw);
+  if (!Number.isFinite(id)) return null;
+  return users.some((u) => u.id === id) ? id : null;
+}
+
 export function registerInterviewRoutes(router) {
   // Cualquier usuario autenticado puede VER las entrevistas agendadas
   router.get('/api/interviews', requireAuth(async (req, res) => {
     const data = load();
     const user = req.user;
     if (user.role === 'member') {
-      // Las entrevistas son privadas: el perfil Miembro no accede a ninguna.
-      return sendJson(res, 200, []);
+      // Las entrevistas son privadas: el perfil Miembro no ve las de los
+      // demás, pero sí debe ver la suya propia (cuando el líder la agendó
+      // eligiéndolo de la lista de usuarios registrados) para que le
+      // aparezca en su "Mis Actividades".
+      const own = data.interviews
+        .filter((i) => Number(i.memberUserId) === Number(user.id))
+        .map((i) => withOrgInfo(i, data.organizations))
+        .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+      return sendJson(res, 200, own);
     }
     const query = req.query;
     let items = data.interviews;
     if (!orgSeesAllInterviews(user, data)) {
-      items = items.filter((i) => Number(i.organizationId) === Number(user.organizationId));
+      // Además de las entrevistas que agenda su propia organización, un
+      // líder también debe ver aquellas en las que ÉL es el entrevistado,
+      // aunque las haya agendado otra organización — por ejemplo, si el
+      // líder de Obispado entrevista al líder de Cuórum de Élderes, este
+      // último debe poder verla (aunque no la haya agendado su organización).
+      items = items.filter((i) => Number(i.organizationId) === Number(user.organizationId) || Number(i.memberUserId) === Number(user.id));
     }
     if (query.from) items = items.filter((i) => i.date >= query.from);
     if (query.to) items = items.filter((i) => i.date <= query.to);
@@ -57,7 +81,7 @@ export function registerInterviewRoutes(router) {
   router.post('/api/interviews', requireAuth(async (req, res, params, body) => {
     const {
       memberName, memberPhone, memberEmail, description, location, date, startTime, endTime, organizationId,
-      interviewerName, interviewerEmail, interviewerPhone,
+      interviewerName, interviewerEmail, interviewerPhone, memberUserId,
     } = body || {};
     if (!memberName || !date || !startTime || !organizationId) {
       return sendJson(res, 400, { error: 'Faltan campos requeridos (miembro, día, horario, organización)' });
@@ -74,6 +98,7 @@ export function registerInterviewRoutes(router) {
       const i = {
         id: nextId(d, 'interviews'),
         memberName,
+        memberUserId: normalizeMemberUserId(memberUserId, data.users) || null,
         memberPhone: memberPhone || '',
         memberEmail: memberEmail || '',
         description: description || '',
@@ -117,8 +142,10 @@ export function registerInterviewRoutes(router) {
       // si cambia la fecha/hora o algún email de contacto, el recordatorio
       // (si ya se había enviado) debe poder volver a dispararse.
       const contactChanged = newInterviewerEmail !== (iv.interviewerEmail || '') || newMemberEmail !== (iv.memberEmail || '');
+      const memberUserId = normalizeMemberUserId(body.memberUserId, d.users);
       Object.assign(iv, {
         memberName: body.memberName ?? iv.memberName,
+        memberUserId: memberUserId !== undefined ? memberUserId : (iv.memberUserId ?? null),
         memberPhone: body.memberPhone ?? iv.memberPhone,
         memberEmail: newMemberEmail,
         description: body.description ?? iv.description,

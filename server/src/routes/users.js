@@ -17,6 +17,17 @@ export function registerUserRoutes(router) {
     sendJson(res, 200, users);
   }));
 
+  // Listado liviano (solo id/nombre/organización) para que un líder pueda
+  // elegir, al agendar una entrevista, a un miembro ya registrado en el
+  // sistema en vez de escribir su nombre a mano.
+  router.get('/api/users/directory', requireRole(['admin', 'leader'], async (req, res) => {
+    const data = load();
+    const users = data.users
+      .map((u) => ({ id: u.id, name: u.name, role: u.role, organizationId: u.organizationId }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    sendJson(res, 200, users);
+  }));
+
   router.post('/api/users', requireRole(['admin'], async (req, res, params, body) => {
     const { name, email, password, role, organizationId, phone } = body || {};
     if (!name || !email || !password || !role) {
