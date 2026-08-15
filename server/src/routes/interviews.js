@@ -8,6 +8,18 @@ function canScheduleOrg(user, organizationId) {
   return false;
 }
 
+// Las entrevistas son información privada de los miembros: el perfil Miembro
+// no las ve en absoluto, y cada líder solo ve las de su propia organización,
+// salvo el líder de Obispado, que sí puede ver las de todas las organizaciones.
+function orgSeesAllInterviews(user, data) {
+  if (user.role === 'admin') return true;
+  if (user.role === 'leader') {
+    const org = data.organizations.find((o) => o.id === Number(user.organizationId));
+    return !!org && org.name === 'Obispado';
+  }
+  return false;
+}
+
 function orgAllowsInterviews(data, organizationId) {
   const org = data.organizations.find((o) => o.id === Number(organizationId));
   return !!org && !!org.allowsInterviews;
@@ -22,8 +34,16 @@ export function registerInterviewRoutes(router) {
   // Cualquier usuario autenticado puede VER las entrevistas agendadas
   router.get('/api/interviews', requireAuth(async (req, res) => {
     const data = load();
+    const user = req.user;
+    if (user.role === 'member') {
+      // Las entrevistas son privadas: el perfil Miembro no accede a ninguna.
+      return sendJson(res, 200, []);
+    }
     const query = req.query;
     let items = data.interviews;
+    if (!orgSeesAllInterviews(user, data)) {
+      items = items.filter((i) => Number(i.organizationId) === Number(user.organizationId));
+    }
     if (query.from) items = items.filter((i) => i.date >= query.from);
     if (query.to) items = items.filter((i) => i.date <= query.to);
     if (query.organizationId) items = items.filter((i) => String(i.organizationId) === String(query.organizationId));
@@ -34,7 +54,10 @@ export function registerInterviewRoutes(router) {
   }));
 
   router.post('/api/interviews', requireAuth(async (req, res, params, body) => {
-    const { memberName, memberPhone, description, location, date, startTime, endTime, organizationId } = body || {};
+    const {
+      memberName, memberPhone, description, location, date, startTime, endTime, organizationId,
+      interviewerName, interviewerEmail, interviewerPhone,
+    } = body || {};
     if (!memberName || !date || !startTime || !organizationId) {
       return sendJson(res, 400, { error: 'Faltan campos requeridos (miembro, día, horario, organización)' });
     }
@@ -53,11 +76,15 @@ export function registerInterviewRoutes(router) {
         memberPhone: memberPhone || '',
         description: description || '',
         location: location || '',
+        interviewerName: interviewerName || '',
+        interviewerEmail: interviewerEmail || '',
+        interviewerPhone: interviewerPhone || '',
         date,
         startTime,
         endTime: endTime || null,
         organizationId: Number(organizationId),
         scheduledBy: req.user.id,
+        reminderSent: false,
         createdAt: now,
         updatedAt: now,
       };
@@ -77,14 +104,24 @@ export function registerInterviewRoutes(router) {
     }
     const updated = await withDb((d) => {
       const iv = d.interviews.find((i) => i.id === id);
+      const newDate = body.date ?? iv.date;
+      const newStartTime = body.startTime ?? iv.startTime;
+      const newInterviewerEmail = body.interviewerEmail ?? iv.interviewerEmail ?? '';
+      // si cambia la fecha/hora o el email de contacto, el recordatorio (si ya
+      // se había enviado) debe poder volver a dispararse para el nuevo dato.
+      const scheduleChanged = newDate !== iv.date || newStartTime !== iv.startTime || newInterviewerEmail !== (iv.interviewerEmail || '');
       Object.assign(iv, {
         memberName: body.memberName ?? iv.memberName,
         memberPhone: body.memberPhone ?? iv.memberPhone,
         description: body.description ?? iv.description,
         location: body.location ?? iv.location ?? '',
-        date: body.date ?? iv.date,
-        startTime: body.startTime ?? iv.startTime,
+        interviewerName: body.interviewerName ?? iv.interviewerName ?? '',
+        interviewerEmail: newInterviewerEmail,
+        interviewerPhone: body.interviewerPhone ?? iv.interviewerPhone ?? '',
+        date: newDate,
+        startTime: newStartTime,
         endTime: body.endTime ?? iv.endTime,
+        reminderSent: scheduleChanged ? false : (iv.reminderSent ?? false),
         updatedAt: new Date().toISOString(),
       });
       return iv;

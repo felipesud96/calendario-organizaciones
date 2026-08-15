@@ -11,6 +11,7 @@ import { registerOrganizationRoutes } from './routes/organizations.js';
 import { registerEventRoutes } from './routes/events.js';
 import { registerInterviewRoutes } from './routes/interviews.js';
 import { registerUserRoutes } from './routes/users.js';
+import { startReminderScheduler } from './reminders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -115,4 +116,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Servidor del Calendario de Organizaciones escuchando en http://localhost:${PORT}`);
   console.log(`Sirviendo frontend estático desde: ${CLIENT_DIR}`);
+  startReminderScheduler();
 });

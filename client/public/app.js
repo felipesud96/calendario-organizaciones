@@ -2,6 +2,7 @@
 // Todo el estado vive en el objeto `state`; cada cambio relevante llama a render().
 
 const API = '/api';
+const APP_NAME = 'Calendario Barrio Valle Grande';
 const DOW_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_LABELS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const ROLE_LABELS = { admin: 'Administrador', leader: 'Líder', member: 'Miembro' };
@@ -105,7 +106,7 @@ function renderLogin() {
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">📅</div>
-        <h1>Calendario de Organizaciones</h1>
+        <h1>${esc(APP_NAME)}</h1>
         <p class="subtitle">Actividades y entrevistas de todas las organizaciones en un solo lugar</p>
         <div id="login-error"></div>
         <form id="login-form">
@@ -162,6 +163,16 @@ function canScheduleInterviewsFor(orgId) {
 function canManageAnyInterviews() {
   return state.user.role === 'admin' || state.user.role === 'leader';
 }
+function canSeeInterviewsTab() {
+  return !!state.user && state.user.role !== 'member';
+}
+// Las entrevistas son privadas: cada líder solo ve las de su propia
+// organización, salvo el líder de Obispado, que ve las de todas.
+function canViewAllInterviews() {
+  if (!state.user) return false;
+  if (state.user.role === 'admin') return true;
+  return !!(state.user.organization && state.user.organization.name === 'Obispado');
+}
 
 function initials(name) {
   return name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join('');
@@ -170,11 +181,12 @@ function initials(name) {
 function render() {
   if (!state.user) { renderLogin(); return; }
   const u = state.user;
+  if (u.role === 'member' && state.view === 'interviews') state.view = 'calendar';
   root.innerHTML = `
     <div class="topbar">
       <div class="topbar-left">
         <div class="topbar-logo">📅</div>
-        <div class="topbar-title">Calendario de Organizaciones<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
+        <div class="topbar-title">${esc(APP_NAME)}<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
       </div>
       <div class="topbar-right">
         <div class="user-chip">
@@ -189,7 +201,7 @@ function render() {
     </div>
     <div class="tabs">
       <button class="tab-btn ${state.view === 'calendar' ? 'active' : ''}" data-view="calendar">Calendario</button>
-      <button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>
+      ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
       ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
     </div>
     <main class="view" id="view-root"></main>
@@ -203,6 +215,7 @@ function render() {
 }
 
 function renderCurrentView() {
+  if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'interviews') renderInterviewsView();
@@ -367,7 +380,7 @@ function openDayModal(iso) {
                 <span class="org-dot" style="background:${it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : ''}${esc(it.title)}</div>
-                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}</div>
+                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}</div>
                 </div>
                 <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
@@ -409,6 +422,7 @@ function openReadOnlyModal(item, kind) {
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
           <div class="ro-detail-row">🕐 ${esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
           ${item.location ? `<div class="ro-detail-row">📍 ${esc(item.location)}</div>` : ''}
+          ${kind === 'interview' && item.interviewerName ? `<div class="ro-detail-row">🧑‍💼 ${esc(item.interviewerName)}</div>` : ''}
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
         </div>
@@ -523,7 +537,8 @@ async function loadInterviewsUpcoming() {
 
 async function renderInterviewsView() {
   const container = document.getElementById('view-root');
-  const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews);
+  const seesAll = canViewAllInterviews();
+  const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews && (seesAll || o.id === state.user.organizationId));
   container.innerHTML = `<div class="section-header"><div><h2>Entrevistas</h2><p>Cargando…</p></div></div>`;
   let list;
   try { list = await loadInterviewsUpcoming(); } catch (e) { toast(e.message, 'error'); list = []; }
@@ -536,14 +551,15 @@ async function renderInterviewsView() {
     <div class="section-header">
       <div>
         <h2>Entrevistas</h2>
-        <p>Agendadas por los líderes de Obispado, Cuórum de Élderes y Sociedad de Socorro</p>
+        <p>${seesAll ? 'Agendadas por los líderes de Obispado, Cuórum de Élderes y Sociedad de Socorro' : 'Entrevistas de tu organización · información privada, no visible para otras organizaciones'}</p>
       </div>
       ${canManageAnyInterviews() ? `<button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>` : ''}
     </div>
+    ${interviewOrgs.length > 1 ? `
     <div class="subtabs">
       <button class="subtab-btn ${state.interviewOrgFilter === 'all' ? 'active' : ''}" data-org="all">Todas</button>
       ${interviewOrgs.map((o) => `<button class="subtab-btn ${String(state.interviewOrgFilter) === String(o.id) ? 'active' : ''}" data-org="${o.id}">${esc(o.name)}</button>`).join('')}
-    </div>
+    </div>` : ''}
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
         <div style="margin-bottom:6px;">
@@ -553,7 +569,7 @@ async function renderInterviewsView() {
               <span class="org-dot" style="background:${iv.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${esc(iv.memberName)}</div>
-                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(iv.location)}</span>` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(iv.location)}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
               ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button></div>` : ''}
@@ -606,6 +622,21 @@ function openInterviewModal(existing = null) {
               <label>Lugar (opcional)</label>
               <input type="text" name="location" placeholder="Ej: Oficina del Obispo" value="${esc(existing?.location || '')}" />
             </div>
+            <div class="field">
+              <label>Líder que realizará la entrevista</label>
+              <input type="text" name="interviewerName" required placeholder="Nombre del líder" value="${esc(existing?.interviewerName ?? (!isEdit && state.user.role !== 'admin' ? state.user.name : ''))}" />
+            </div>
+            <div class="two-col">
+              <div class="field">
+                <label>Email del líder (opcional)</label>
+                <input type="email" name="interviewerEmail" placeholder="lider@correo.com" value="${esc(existing?.interviewerEmail ?? (!isEdit && state.user.role !== 'admin' ? state.user.email : ''))}" />
+              </div>
+              <div class="field">
+                <label>WhatsApp del líder (opcional)</label>
+                <input type="text" name="interviewerPhone" placeholder="+56 9 ..." value="${esc(existing?.interviewerPhone || '')}" />
+              </div>
+            </div>
+            <div class="hint-box" style="margin-top:0;">Este contacto se usará para enviar un recordatorio antes de la entrevista.</div>
             <div class="field">
               <label>Día</label>
               <input type="date" name="date" required value="${existing?.date || ''}" />
