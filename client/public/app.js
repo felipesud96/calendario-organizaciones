@@ -1141,6 +1141,99 @@ async function renderInterviewsView() {
   }));
 }
 
+// ---------------- Selector de miembro con autocompletado ----------------
+// En vez de un <select> con todos los usuarios (inmanejable pasados los
+// 100+ miembros de un barrio), se escribe el nombre y van apareciendo las
+// coincidencias para hacer clic. Si la persona no está registrada, se puede
+// seguir escribiendo su nombre a mano en el campo de abajo.
+function normalizeSearchText(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+function memberPickerFieldHtml(idPrefix, selectedUserId, selectedName) {
+  return `
+    <div class="field">
+      <label>Miembro</label>
+      <div id="${idPrefix}-member-chip" style="display:${selectedUserId ? 'flex' : 'none'}; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 10px; border:1px solid var(--border, #d8e3ea); border-radius:8px; background:#f4f8fb;">
+        <span>🔗 Vinculado a <strong id="${idPrefix}-member-chip-name">${esc(selectedName || '')}</strong></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="${idPrefix}-member-unlink">Quitar / escribir a mano</button>
+      </div>
+      <div id="${idPrefix}-member-search-wrap" style="display:${selectedUserId ? 'none' : ''}; position:relative;">
+        <input type="text" name="memberName" id="${idPrefix}-member-name" required autocomplete="off" placeholder="Nombre y apellido (si está registrado, aparecerán coincidencias para elegir)" value="${esc(selectedName || '')}" ${selectedUserId ? 'readonly' : ''} />
+        <div id="${idPrefix}-member-results" style="display:none; position:absolute; left:0; right:0; z-index:30; background:#fff; border:1px solid var(--border, #d8e3ea); border-radius:8px; margin-top:2px; max-height:220px; overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.12);"></div>
+      </div>
+      <input type="hidden" name="memberUserId" id="${idPrefix}-member-user-id" value="${esc(selectedUserId || '')}" />
+    </div>`;
+}
+
+function wireMemberPicker(idPrefix, directory, onChange) {
+  const nameInput = document.getElementById(`${idPrefix}-member-name`);
+  const resultsBox = document.getElementById(`${idPrefix}-member-results`);
+  const hiddenId = document.getElementById(`${idPrefix}-member-user-id`);
+  const chip = document.getElementById(`${idPrefix}-member-chip`);
+  const chipName = document.getElementById(`${idPrefix}-member-chip-name`);
+  const searchWrap = document.getElementById(`${idPrefix}-member-search-wrap`);
+  const unlinkBtn = document.getElementById(`${idPrefix}-member-unlink`);
+
+  const showChip = (name) => {
+    chipName.textContent = name;
+    chip.style.display = 'flex';
+    searchWrap.style.display = 'none';
+  };
+  const showSearch = () => {
+    chip.style.display = 'none';
+    searchWrap.style.display = '';
+    resultsBox.style.display = 'none';
+    resultsBox.innerHTML = '';
+  };
+  const selectUser = (u) => {
+    hiddenId.value = u.id;
+    nameInput.value = u.name;
+    nameInput.readOnly = true;
+    showChip(u.name);
+    resultsBox.style.display = 'none';
+    resultsBox.innerHTML = '';
+    if (onChange) onChange();
+  };
+
+  // El mismo campo sirve para buscar y para escribir el nombre a mano: si al
+  // tipear aparece una coincidencia y se hace clic, queda vinculado; si nadie
+  // coincide (o no se hace clic en nada), lo escrito por el líder queda tal
+  // cual como nombre del miembro — no hay un campo aparte de respaldo.
+  nameInput.addEventListener('input', () => {
+    hiddenId.value = '';
+    const q = normalizeSearchText(nameInput.value);
+    if (!q) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; return; }
+    const matches = directory.filter((u) => normalizeSearchText(u.name).includes(q)).slice(0, 8);
+    if (!matches.length) {
+      resultsBox.innerHTML = `<div style="padding:8px 10px; color:var(--ink-soft, #888); font-size:13px;">Sin coincidencias — se guardará el nombre tal como lo escribas</div>`;
+      resultsBox.style.display = '';
+      return;
+    }
+    resultsBox.innerHTML = matches.map((u) => `<div class="ac-item" data-id="${u.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(u.name)}</div>`).join('');
+    resultsBox.style.display = '';
+    resultsBox.querySelectorAll('.ac-item').forEach((el) => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const u = directory.find((d) => String(d.id) === el.dataset.id);
+        if (u) selectUser(u);
+      });
+      el.addEventListener('mouseenter', () => { el.style.background = '#f0f4f8'; });
+      el.addEventListener('mouseleave', () => { el.style.background = ''; });
+    });
+  });
+  nameInput.addEventListener('focus', () => { if (!nameInput.readOnly && nameInput.value) nameInput.dispatchEvent(new Event('input')); });
+  nameInput.addEventListener('blur', () => { setTimeout(() => { resultsBox.style.display = 'none'; }, 150); });
+  unlinkBtn.addEventListener('click', () => {
+    hiddenId.value = '';
+    nameInput.readOnly = false;
+    nameInput.value = '';
+    showSearch();
+    nameInput.focus();
+    if (onChange) onChange();
+  });
+}
+
 async function openInterviewModal(existing = null) {
   const options = editableOrgOptions('interview');
   if (!existing && options.length === 0) { toast('No tienes permiso para agendar entrevistas', 'error'); return; }
@@ -1163,18 +1256,7 @@ async function openInterviewModal(existing = null) {
               </select>
               ${options.length === 1 && !isEdit ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
-            <div class="field">
-              <label>Miembro</label>
-              <select id="iv-member-select">
-                <option value="">✍️ Escribir el nombre a mano (todavía no está registrado)</option>
-                ${directory.map((u) => `<option value="${u.id}" ${String(selectedUserId) === String(u.id) ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}
-              </select>
-              <input type="hidden" name="memberUserId" id="iv-member-user-id" value="${esc(selectedUserId)}" />
-            </div>
-            <div class="field">
-              <label>Nombre del miembro</label>
-              <input type="text" name="memberName" id="iv-member-name" required placeholder="Nombre y apellido" value="${esc(existing?.memberName || '')}" ${selectedUserId ? 'readonly' : ''} />
-            </div>
+            ${memberPickerFieldHtml('iv', selectedUserId, existing?.memberName)}
             <div class="two-col">
               <div class="field">
                 <label>Teléfono (opcional)</label>
@@ -1255,20 +1337,7 @@ async function openInterviewModal(existing = null) {
   wireLocationField('iv', resetIvConflictCheck);
   document.getElementById('iv-location-other-field').querySelector('input').addEventListener('input', resetIvConflictCheck);
 
-  const memberSelect = document.getElementById('iv-member-select');
-  const memberNameInput = document.getElementById('iv-member-name');
-  const memberUserIdInput = document.getElementById('iv-member-user-id');
-  memberSelect.addEventListener('change', () => {
-    memberUserIdInput.value = memberSelect.value;
-    if (memberSelect.value) {
-      const chosen = directory.find((u) => String(u.id) === memberSelect.value);
-      memberNameInput.value = chosen ? chosen.name : '';
-      memberNameInput.readOnly = true;
-    } else {
-      memberNameInput.readOnly = false;
-    }
-    resetIvConflictCheck();
-  });
+  wireMemberPicker('iv', directory, resetIvConflictCheck);
 
   ivSaveBtn.addEventListener('click', async () => {
     if (!ivForm.reportValidity()) return;
