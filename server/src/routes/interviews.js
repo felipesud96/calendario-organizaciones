@@ -1,0 +1,108 @@
+import { sendJson } from '../router.js';
+import { load, withDb, nextId } from '../db.js';
+import { requireAuth } from '../guard.js';
+
+function canScheduleOrg(user, organizationId) {
+  if (user.role === 'admin') return true;
+  if (user.role === 'leader' && Number(user.organizationId) === Number(organizationId)) return true;
+  return false;
+}
+
+function orgAllowsInterviews(data, organizationId) {
+  const org = data.organizations.find((o) => o.id === Number(organizationId));
+  return !!org && !!org.allowsInterviews;
+}
+
+function withOrgInfo(item, orgs) {
+  const org = orgs.find((o) => o.id === item.organizationId);
+  return { ...item, organizationName: org?.name || '', organizationColor: org?.color || '#999999' };
+}
+
+export function registerInterviewRoutes(router) {
+  // Cualquier usuario autenticado puede VER las entrevistas agendadas
+  router.get('/api/interviews', requireAuth(async (req, res) => {
+    const data = load();
+    const query = req.query;
+    let items = data.interviews;
+    if (query.from) items = items.filter((i) => i.date >= query.from);
+    if (query.to) items = items.filter((i) => i.date <= query.to);
+    if (query.organizationId) items = items.filter((i) => String(i.organizationId) === String(query.organizationId));
+    items = items
+      .map((i) => withOrgInfo(i, data.organizations))
+      .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+    sendJson(res, 200, items);
+  }));
+
+  router.post('/api/interviews', requireAuth(async (req, res, params, body) => {
+    const { memberName, memberPhone, description, location, date, startTime, endTime, organizationId } = body || {};
+    if (!memberName || !date || !startTime || !organizationId) {
+      return sendJson(res, 400, { error: 'Faltan campos requeridos (miembro, día, horario, organización)' });
+    }
+    const data = load();
+    if (!orgAllowsInterviews(data, organizationId)) {
+      return sendJson(res, 400, { error: 'Esta organización no agenda entrevistas' });
+    }
+    if (!canScheduleOrg(req.user, organizationId)) {
+      return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agendar entrevistas' });
+    }
+    const now = new Date().toISOString();
+    const interview = await withDb((d) => {
+      const i = {
+        id: nextId(d, 'interviews'),
+        memberName,
+        memberPhone: memberPhone || '',
+        description: description || '',
+        location: location || '',
+        date,
+        startTime,
+        endTime: endTime || null,
+        organizationId: Number(organizationId),
+        scheduledBy: req.user.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      d.interviews.push(i);
+      return i;
+    });
+    sendJson(res, 201, withOrgInfo(interview, data.organizations));
+  }));
+
+  router.put('/api/interviews/:id', requireAuth(async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data = load();
+    const existing = data.interviews.find((i) => i.id === id);
+    if (!existing) return sendJson(res, 404, { error: 'Entrevista no encontrada' });
+    if (!canScheduleOrg(req.user, existing.organizationId)) {
+      return sendJson(res, 403, { error: 'No tienes permiso para editar esta entrevista' });
+    }
+    const updated = await withDb((d) => {
+      const iv = d.interviews.find((i) => i.id === id);
+      Object.assign(iv, {
+        memberName: body.memberName ?? iv.memberName,
+        memberPhone: body.memberPhone ?? iv.memberPhone,
+        description: body.description ?? iv.description,
+        location: body.location ?? iv.location ?? '',
+        date: body.date ?? iv.date,
+        startTime: body.startTime ?? iv.startTime,
+        endTime: body.endTime ?? iv.endTime,
+        updatedAt: new Date().toISOString(),
+      });
+      return iv;
+    });
+    sendJson(res, 200, withOrgInfo(updated, data.organizations));
+  }));
+
+  router.delete('/api/interviews/:id', requireAuth(async (req, res, params) => {
+    const id = Number(params.id);
+    const data = load();
+    const existing = data.interviews.find((i) => i.id === id);
+    if (!existing) return sendJson(res, 404, { error: 'Entrevista no encontrada' });
+    if (!canScheduleOrg(req.user, existing.organizationId)) {
+      return sendJson(res, 403, { error: 'No tienes permiso para eliminar esta entrevista' });
+    }
+    await withDb((d) => {
+      d.interviews = d.interviews.filter((i) => i.id !== id);
+    });
+    sendJson(res, 200, { ok: true });
+  }));
+}

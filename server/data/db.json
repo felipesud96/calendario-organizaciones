@@ -1,0 +1,163 @@
+{
+  "organizations": [
+    {
+      "id": 1,
+      "name": "Obispado",
+      "color": "#0EA5E9",
+      "allowsInterviews": true
+    },
+    {
+      "id": 2,
+      "name": "Cuórum de Élderes",
+      "color": "#6366F1",
+      "allowsInterviews": true
+    },
+    {
+      "id": 3,
+      "name": "Sociedad de Socorro",
+      "color": "#EC4899",
+      "allowsInterviews": true
+    },
+    {
+      "id": 4,
+      "name": "Escuela Dominical",
+      "color": "#F59E0B",
+      "allowsInterviews": false
+    },
+    {
+      "id": 5,
+      "name": "Hombres Jóvenes",
+      "color": "#10B981",
+      "allowsInterviews": false
+    },
+    {
+      "id": 6,
+      "name": "Mujeres Jóvenes",
+      "color": "#A855F7",
+      "allowsInterviews": false
+    },
+    {
+      "id": 7,
+      "name": "JAS",
+      "color": "#EF4444",
+      "allowsInterviews": false
+    },
+    {
+      "id": 8,
+      "name": "Primaria",
+      "color": "#F97316",
+      "allowsInterviews": false
+    }
+  ],
+  "users": [
+    {
+      "id": 1,
+      "name": "Administrador General",
+      "email": "admin@ward.local",
+      "passwordHash": "f0086b12c97d0bf3258d3096a868551e:eecd1204d1d20749d2610fe9a44334ee47cfa3ae4ae2969614323ccac6a459af74b163c70a210071b559da1e81700aa767af453e34c1a02715a7f3096b225804",
+      "role": "admin",
+      "organizationId": null,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:41.829Z"
+    },
+    {
+      "id": 2,
+      "name": "Líder de Obispado",
+      "email": "lider.obispado@ward.local",
+      "passwordHash": "5169afb4ad53ece19775f76b4a3bd4be:02f30a2906b63db254b9d8ce4ab818fad1801b737d4a247822c90629fe9092df5326f0088b7390e5bed802d3b7396cd511ffc30fb6d174e72c867d572806c7ca",
+      "role": "leader",
+      "organizationId": 1,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:41.885Z"
+    },
+    {
+      "id": 3,
+      "name": "Líder de Cuórum de Élderes",
+      "email": "lider.cuorum.de.elderes@ward.local",
+      "passwordHash": "b375bbdfc7dc50fa685fd34de801fc56:71fe1757d850d6291a11c85985dbd9af82e6ab8ce6588619c5dd03e9f730e2665109a9a9c2cd762ffad5dbfd3bc155470788cf84b7f1c19c5ec4180e25ba04f1",
+      "role": "leader",
+      "organizationId": 2,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:41.933Z"
+    },
+    {
+      "id": 4,
+      "name": "Líder de Sociedad de Socorro",
+      "email": "lider.sociedad.de.socorro@ward.local",
+      "passwordHash": "7c0f7afc569595eea0072fcc4a00c5bf:e37f4684ea93d15d283f0f6fe210b4456032e6dda3adf66b8f77464d8e63be97ff1afe96642fd8ed17c6e41aa4634aff418ae8e5154f9ec868742e3739b60c0d",
+      "role": "leader",
+      "organizationId": 3,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:41.980Z"
+    },
+    {
+      "id": 5,
+      "name": "Líder de Escuela Dominical",
+      "email": "lider.escuela.dominical@ward.local",
+      "passwordHash": "011e991d4b507a1680804d44cc9bc5bf:a6027561280892b73882fb64bb6b4d977d125f72ca4ca1fdcbc2c850a769c95e82ac7021dd0807fc51b6a65b92a0fe368863bfed12e4fe5324f1b582ddd43ecc",
+      "role": "leader",
+      "organizationId": 4,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.028Z"
+    },
+    {
+      "id": 6,
+      "name": "Líder de Hombres Jóvenes",
+      "email": "lider.hombres.jovenes@ward.local",
+      "passwordHash": "1a73643b8eb65dafc450503021aa7058:417ada1da584961073bc2d57c5279158abcf6062fa90f29cd19e477cb17811d0fe482d62322cd659310ace6823b92560623cf894395c6ceb10680b330bcd3b9c",
+      "role": "leader",
+      "organizationId": 5,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.075Z"
+    },
+    {
+      "id": 7,
+      "name": "Líder de Mujeres Jóvenes",
+      "email": "lider.mujeres.jovenes@ward.local",
+      "passwordHash": "a83a08856a7965f2976cf0d565b620f6:df5046efee87bed012d7e64d6624a9212b26067c78a7d99bb15a63a634a758ad0500f847142acf05994973f001dabbd9da2cf4cdbf4a7a0cddee592e78e7de90",
+      "role": "leader",
+      "organizationId": 6,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.123Z"
+    },
+    {
+      "id": 8,
+      "name": "Líder de JAS",
+      "email": "lider.jas@ward.local",
+      "passwordHash": "521df9e7d6208884f10dc5fe3081da20:49b721d0986100ec74b63eb536d650d8996c384f87d395d1a243a76f33ffaa8151d7748ec4557a27d869d0ffbb2198b39ff0214dcfa1da0fa4f603c4513c755f",
+      "role": "leader",
+      "organizationId": 7,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.170Z"
+    },
+    {
+      "id": 9,
+      "name": "Líder de Primaria",
+      "email": "lider.primaria@ward.local",
+      "passwordHash": "4a7b2ba63ad29d1497a9cc3d53cb2b01:38ab06914dc9e2b476c681b4644c83a34e935bc5fa2c33b568cb4ed0797700dbe648bad417ca000c4289011918647f8f4264bb71aad2621d6e56ca33d2f4e14d",
+      "role": "leader",
+      "organizationId": 8,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.218Z"
+    },
+    {
+      "id": 10,
+      "name": "Miembro de Ejemplo",
+      "email": "miembro@ward.local",
+      "passwordHash": "bd80548c7bd0c38d5e91915e2ee62501:a137cb330b5ff658999b074d1c70c920a4aa883475e88119aaab18420cd8c9845764306a0da68e9863163965de35355711617f50fcb74f90ce0c220098781503",
+      "role": "member",
+      "organizationId": null,
+      "phone": null,
+      "createdAt": "2026-08-15T02:19:42.267Z"
+    }
+  ],
+  "events": [],
+  "interviews": [],
+  "sessions": [],
+  "nextId": {
+    "organizations": 9,
+    "users": 11,
+    "events": 1,
+    "interviews": 1
+  }
+}
