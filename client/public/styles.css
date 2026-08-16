@@ -439,6 +439,67 @@ table.data-table tr:last-child td { border-bottom: none; }
 .toast.error { background: var(--danger); }
 .toast.success { background: var(--success); }
 
+/* ---------- Estado (píldoras): Reuniones/Asignaciones, Aseo ---------- */
+.status-pill {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 3px 9px; border-radius: 999px;
+}
+.status-amber { background: #fef3c7; color: #92400e; }
+.status-red { background: var(--danger-light); color: var(--danger); }
+.status-green { background: #dcfce7; color: #15803d; }
+.status-gray { background: #f1f5f9; color: #64748b; }
+
+.commitment-row {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px;
+}
+.commitment-detail-row {
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.commitment-detail-row:last-child { border-bottom: none; }
+
+/* ---------- Aseo del Edificio ---------- */
+.ac-item:hover { background: #f0f4f8; }
+.family-row {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px;
+}
+.cleaning-date-card { flex-direction: column; align-items: stretch; }
+.cleaning-family-rows { margin-top: 8px; }
+.cleaning-family-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-top: 1px solid var(--border);
+}
+.cleaning-family-row:first-child { border-top: none; }
+.cfr-main { flex: 1; min-width: 0; }
+.cfr-name { font-weight: 600; font-size: 13.5px; }
+.cfr-sub { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.cfr-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+/* ---------- Estadísticas ---------- */
+.stats-cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.stat-card {
+  flex: 1; min-width: 160px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; background: var(--white);
+}
+.stat-card-label { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; font-weight: 700; letter-spacing: 0.3px; }
+.stat-card-value { font-size: 24px; font-weight: 800; color: var(--celeste-darker); margin-top: 4px; }
+
+.purpose-balance { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.purpose-row { display: flex; align-items: center; gap: 10px; }
+.purpose-label { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); width: 84px; flex-shrink: 0; }
+.purpose-bar-wrap { flex: 1; height: 10px; background: var(--celeste-lighter); border-radius: 999px; overflow: hidden; }
+.purpose-bar { height: 100%; background: var(--celeste); border-radius: 999px; min-width: 2px; }
+.purpose-count { font-size: 12.5px; font-weight: 700; color: var(--celeste-dark); width: 20px; text-align: right; }
+
+.ranking-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.ranking-card { flex: 1; min-width: 220px; border-radius: var(--radius); padding: 14px 16px; }
+.ranking-top { background: #f0fdf4; border: 1px solid #bbf7d0; }
+.ranking-bottom { background: var(--danger-light); border: 1px solid #fecaca; }
+.ranking-label { font-size: 12px; font-weight: 700; color: var(--ink-soft); margin-bottom: 4px; }
+.ranking-title { font-size: 14px; font-weight: 700; color: var(--ink); }
+.ranking-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+
 @media (max-width: 640px) {
   .cal-cell { min-height: 78px; }
   .cal-month-label { min-width: 0; font-size: 15px; }

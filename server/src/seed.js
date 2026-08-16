@@ -12,6 +12,24 @@ const ORGS = [
   { name: 'Primaria', color: '#F97316', allowsInterviews: false },
 ];
 
+// Nombres de persona de ejemplo para cada líder — a propósito NO se llaman
+// "Líder de <organización>": ese texto genérico solo confundía, dando la
+// impresión de que el selector de responsable de un compromiso (módulo
+// Reuniones) mostraba una etiqueta de rol en vez del nombre real de cada
+// usuario. El código ya soportaba varios líderes por organización (no hay
+// ningún límite de "un líder por organización" en ninguna parte); lo único
+// que hacía falta era que los datos de ejemplo lo reflejaran.
+const LEADER_NAMES = {
+  'Obispado': 'Roberto Fuentes',
+  'Cuórum de Élderes': 'Pedro Salinas',
+  'Sociedad de Socorro': 'Daniela Rojas',
+  'Escuela Dominical': 'Ana Torres',
+  'Hombres Jóvenes': 'Diego Ramírez',
+  'Mujeres Jóvenes': 'Valentina Reyes',
+  'JAS': 'Felipe Contreras',
+  'Primaria': 'Camila Vidal',
+};
+
 function slugify(name) {
   return name
     .toLowerCase()
@@ -63,9 +81,23 @@ credentials.push(['admin@ward.local', 'admin123', 'Administrador']);
 
 for (const org of ORGS) {
   const email = `lider.${slugify(org.name)}@ward.local`;
-  upsertUser({ name: `Líder de ${org.name}`, email, password: 'lider123', role: 'leader', organizationId: orgIds[org.name] });
-  credentials.push([email, 'lider123', `Líder de ${org.name}`]);
+  const name = LEADER_NAMES[org.name] || `Líder de ${org.name}`;
+  upsertUser({ name, email, password: 'lider123', role: 'leader', organizationId: orgIds[org.name] });
+  credentials.push([email, 'lider123', `${name} (Líder de ${org.name})`]);
 }
+
+// Segundo líder de ejemplo en Cuórum de Élderes — a propósito, para mostrar
+// que una organización puede tener más de un líder (ej. presidente y
+// consejero) y que cada uno aparece en los selectores de responsable (módulo
+// Reuniones) por su propio nombre, no por un rótulo genérico compartido.
+upsertUser({
+  name: 'Ignacio Herrera',
+  email: 'lider2.cuorum.de.elderes@ward.local',
+  password: 'lider123',
+  role: 'leader',
+  organizationId: orgIds['Cuórum de Élderes'],
+});
+credentials.push(['lider2.cuorum.de.elderes@ward.local', 'lider123', 'Ignacio Herrera (Líder de Cuórum de Élderes)']);
 
 upsertUser({ name: 'Miembro de Ejemplo', email: 'miembro@ward.local', password: 'miembro123', role: 'member', organizationId: null });
 credentials.push(['miembro@ward.local', 'miembro123', 'Miembro']);

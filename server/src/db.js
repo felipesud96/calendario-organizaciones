@@ -21,6 +21,18 @@ const EMPTY_DB = {
   budgetAllocations: [],
   budgetExpenses: [],
   stakeEvents: [],
+  // Módulo "Reuniones y Asignaciones": cada acta (reunión) tiene sus propios
+  // compromisos anidados (ver routes/meetings.js). Los compromisos se buscan
+  // por id global (nextId 'commitments') a través de todas las actas, así
+  // que no hace falta una colección aparte para ellos.
+  meetings: [],
+  // Módulo "Aseo del Edificio": familias (autocompletado + estadística
+  // histórica) y los turnos de aseo de cada sábado asignados a una familia.
+  families: [],
+  cleaningShifts: [],
+  // Módulo "Estadísticas": una evaluación (opcional) por actividad ya
+  // pasada — asistencia esperada/real y feedback. Ver routes/stats.js.
+  eventEvaluations: [],
   stakeCalendar: {
     url: '',
     displayName: 'Estaca',
@@ -42,6 +54,7 @@ const EMPTY_DB = {
   nextId: {
     organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1,
     budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1, stakeEvents: 1,
+    meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1,
   },
 };
 

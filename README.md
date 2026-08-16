@@ -46,12 +46,28 @@ Interfaz en blanco y celeste, con un color distintivo por organización.
   - **Líder**: ve todo el calendario, y puede crear/editar/eliminar tanto actividades como entrevistas de su propia organización (las entrevistas solo aplican si su organización es Obispado, Cuórum de Élderes o Sociedad de Socorro). Ve el Presupuesto asignado a su organización y registra sus propios gastos; el líder de Obispado además asigna el presupuesto de todas las organizaciones.
   - **Miembro**: solo puede consultar el calendario, sin editar nada, sin ver la sección de Entrevistas y sin ver el módulo de Presupuesto.
 - **Autorregistro con aprobación del administrador**: en vez de que el administrador tenga que crear manualmente los 100+ usuarios del barrio, cualquier persona puede pedir su propia cuenta desde la pantalla de ingreso ("¿No tienes cuenta? Solicita una aquí"), eligiendo su nombre, su usuario, su contraseña y el perfil que cree que le corresponde (Miembro, o Líder de una organización). La cuenta queda **pendiente** — no puede ingresar todavía — hasta que un administrador la revisa en Administración → Solicitudes y la aprueba (pudiendo corregir el perfil u organización si la persona se equivocó) o la rechaza. Así el trabajo del administrador se reduce a aprobar con un clic en vez de tipear cada cuenta a mano.
+- **Reuniones y Asignaciones** (pestaña "Reuniones", Líder y Administrador; los Miembros no la ven): permite dejar registro de las actas de reunión (por ejemplo, "Consejo de Barrio") y los compromisos que salen de ellas, cada uno asignado a una persona puntual con una fecha límite/de verificación.
+  - **Alerta al ingresar**: si tienes compromisos pendientes (o atrasados), al iniciar sesión aparece un aviso "🔔 Tienes X compromisos pendientes, favor revisar" — una sola vez por sesión del navegador, no en cada ingreso a una pestaña.
+  - **Mis Asignaciones**: tu panel personal con los compromisos que te asignaron, con un indicador visual de color (🟡 pendiente, 🔴 atrasado si ya pasó la fecha límite) y un botón "Completar" que despliega un pequeño campo de comentario opcional antes de guardar.
+  - **Reuniones** (Gestión y Actas): con "+ Nueva acta" se crea la reunión (título y fecha) y, opcionalmente ahí mismo o después, se le van agregando compromisos uno por uno (descripción, responsable y fecha límite/verificación — esa fecha es justamente la que determina si el compromiso se ve amarillo o rojo). El selector de "Responsable" depende de quién crea la reunión: el Administrador o el líder de Obispado puede asignar a **cualquier líder o administrador de cualquier organización**; un líder normal solo puede asignar dentro de **su propia organización**. Cada acta activa muestra cuántos compromisos van completados; al abrir el detalle se ve quién ya cumplió el suyo (con su comentario, si dejó uno).
+  - **Actas — privacidad**: por ahora, cada organización ve en este listado solo sus propias actas — igual que en Entrevistas, es el servidor el que aplica el filtro, no algo solo visual. El **líder de Obispado** (y el Administrador) sí ve las actas de **todas** las organizaciones, para tener panorama completo desde el Obispado. Esto no afecta "Mis Asignaciones": si te asignaron un compromiso desde el acta de otra organización (por ejemplo, el Obispado te pidió algo en el "Consejo de Barrio"), igual te aparece ahí — lo que queda acotado es solo poder *navegar* el libro de actas de una organización que no es la tuya.
+  - **Verificación y Cierre**: el botón "✅ Verificar y Archivar" (visible solo para quien creó el acta, o el Administrador) cierra la reunión — pasa a "📁 Reuniones Pasadas" como historial de solo lectura, y cualquier compromiso que haya quedado sin completar se documenta ahí mismo como "no cumplida" y **desaparece del "Mis Asignaciones" de esa persona** (ya no tiene sentido seguir mostrándolo como pendiente de una reunión cerrada).
+- **Aseo del Edificio** (pestaña "Aseo del Edificio", **oculta para Miembros y para Líderes que no sean del Obispado** — solo la ven el Administrador o quien lidera la organización Obispado): coordina el turno de aseo de los sábados. Un turno es, ante todo, **una fecha** — a la que se le puede asignar **una o varias familias** a la vez, para que el listado no termine con una fila por cada familia de cada semana, sino una tarjeta por sábado con todas sus familias adentro.
+  - **"+ Nuevo turno"**: se elige el sábado y se escribe el nombre de la primera familia en un campo con autocompletado — si es la primera vez que se escribe ese nombre (por ejemplo "Familia Pino"), queda guardada en la base de datos de familias del barrio; la próxima vez que se empiece a tipear, ya aparece para elegir con un clic (sin importar mayúsculas ni tildes al buscar). Con "+ Agregar otra familia" se suman más filas de familia al mismo turno antes de guardar, todas para ese mismo sábado.
+  - **Agregar familias después**: cada tarjeta de turno (fecha) tiene su propio botón "+ Agregar familia a este turno", por si hace falta sumar otra familia a un sábado que ya tenía turno creado, sin duplicar la fecha.
+  - **Estadística en vivo**: al elegir (o terminar de tipear) una familia, en su propia fila del formulario aparece de inmediato su historial — "Ha ido 3 veces · Última vez: 15 de mayo", o "Nunca ha participado" si es la primera vez.
+  - **Confirmación de cumplimiento**: dentro de la tarjeta de cada turno, cada familia asignada tiene sus propios botones rápidos ✅ "Sí fue" y ❌ "No fue" (para marcar el domingo siguiente, por ejemplo) y un botón 🗑️ para quitarla del turno si se agregó por error. Solo "Sí fue" cuenta para la estadística histórica de esa familia — "No fue" no suma, y son independientes entre las distintas familias de un mismo turno.
+- **Estadísticas** (pestaña "Estadísticas", Líder y Administrador; los Miembros no la ven) y limpieza automática del calendario personal:
+  - **"Mis Actividades" ya no se llena de actividades viejas**: cualquier actividad cuya fecha ya pasó desaparece automáticamente de ese listado (tanto para Líder como para Miembro), para que la pantalla se mantenga siempre enfocada en lo que viene.
+  - **Propósito de la actividad**: al crear una actividad ahora hay un campo obligatorio "Propósito" con cinco opciones — Espiritual, Físico, Académico, Social o Servicio — que después se usa para el balance del año en el Panel de Control.
+  - **Bandeja de Evaluación**: lista automáticamente tus propias actividades que ya pasaron de fecha y todavía no evaluaste. El botón "Evaluar" pide tres datos — Asistencia Esperada/Potencial, Asistencia Real, y un Feedback en texto libre — y al guardar la actividad desaparece de la bandeja.
+  - **Panel de Control (Dashboard)**: resumen de la organización (el líder ve la suya; el Administrador puede ver "Todo el Barrio" o elegir una organización puntual), con selector de año. Muestra: (1) el **balance del año por Propósito** de las actividades ya evaluadas, en una barra por cada una de las 5 categorías; (2) el **% de éxito de asistencia general** (asistencia real acumulada contra la esperada acumulada, de todas las actividades evaluadas del año); y (3) un **ranking automático** con la actividad "🏆 Más exitosa" y "📉 Menos exitosa" del año según ese mismo porcentaje individual.
 
 ## Tecnología
 
 Este proyecto se construyó **sin dependencias externas**: el backend usa únicamente el runtime estándar de Node.js (`http`, `crypto`, `fs`) y el frontend es HTML/CSS/JavaScript puro, sin frameworks ni paso de compilación. Esto lo hace muy liviano y fácil de desplegar en cualquier lugar que corra Node 18+, sin `npm install` y sin sorpresas de versiones de paquetes.
 
-- `server/` — API REST (autenticación, organizaciones, eventos, entrevistas, usuarios, presupuesto, calendario de Estaca) y guarda los datos en `server/data/db.json`.
+- `server/` — API REST (autenticación, organizaciones, eventos, entrevistas, usuarios, presupuesto, calendario de Estaca, reuniones/asignaciones, aseo del edificio, estadísticas) y guarda los datos en `server/data/db.json`.
 - `client/public/` — la interfaz web (se sirve directamente desde el mismo servidor).
 
 > Nota técnica: los datos se guardan en un archivo JSON en vez de una base de datos SQL tradicional. Para el tamaño de un barrio (decenas de usuarios, cientos de eventos al año) esto funciona perfectamente bien y evita instalar un motor de base de datos. Si en el futuro el proyecto crece mucho, migrar `server/src/db.js` a Postgres/MySQL es un cambio acotado porque el resto del código solo llama a `load()` / `save()` / `withDb()`.
@@ -74,9 +90,12 @@ Abre `http://localhost:4000` en tu navegador.
 |---|---|---|
 | Administrador | admin@ward.local | admin123 |
 | Líder (uno por organización; en Obispado, Cuórum de Élderes y Sociedad de Socorro también agenda entrevistas) | lider.obispado@ward.local, lider.primaria@ward.local, etc. | lider123 |
+| Líder — segundo líder de ejemplo en la misma organización | lider2.cuorum.de.elderes@ward.local | lider123 |
 | Miembro | miembro@ward.local | miembro123 |
 
 > Nota: el campo "Usuario" **no necesita ser un correo real** — es solo un nombre único para ingresar (puede ser `primaria.presidenta`, `juan.perez`, lo que prefieras). Los de la tabla de ejemplo tienen forma de email por costumbre, pero no reciben ni envían nada.
+>
+> **Una organización puede tener más de un líder** (por ejemplo, presidente y consejero, o presidente y secretario) — no hay ningún límite de "un líder por organización" en la app; cualquier cantidad de cuentas puede tener `role: leader` con el mismo `organizationId`. Por eso el seed incluye a propósito un segundo líder de ejemplo en Cuórum de Élderes (`lider2.cuorum.de.elderes@ward.local`): así, al crear un compromiso en el módulo Reuniones para esa organización, el selector de "Responsable" muestra a cada líder por su **nombre real** (no por un rótulo genérico), y queda claro cuál de los dos es cada uno.
 
 **Importante:** cambia estas contraseñas (o crea usuarios nuevos y elimina estos) antes de usar la app con datos reales, desde el panel de Administración → Usuarios.
 
@@ -125,7 +144,14 @@ calendario-ward/
 │   │       ├── organizations.js
 │   │       ├── events.js
 │   │       ├── interviews.js
-│   │       └── users.js
+│   │       ├── users.js
+│   │       ├── registration.js
+│   │       ├── calendar.js
+│   │       ├── budget.js
+│   │       ├── stake.js
+│   │       ├── meetings.js       # Reuniones y Asignaciones
+│   │       ├── cleaning.js       # Aseo del Edificio
+│   │       └── stats.js          # Estadísticas
 │   └── data/db.json          # "base de datos" (se crea automáticamente)
 └── client/
     └── public/

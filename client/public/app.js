@@ -7,6 +7,9 @@ const DOW_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_LABELS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const ROLE_LABELS = { admin: 'Administrador', leader: 'Líder', member: 'Miembro' };
 const COLOR_PALETTE = ['#0EA5E9','#6366F1','#EC4899','#F59E0B','#10B981','#A855F7','#EF4444','#F97316','#14B8A6','#84CC16','#F43F5E','#8B5CF6'];
+// Debe coincidir con PURPOSE_OPTIONS en server/src/routes/events.js — el
+// balance del año del módulo Estadísticas se arma según estas categorías.
+const PURPOSE_OPTIONS = ['Espiritual', 'Físico', 'Académico', 'Social', 'Servicio'];
 
 const state = {
   token: localStorage.getItem('cow_token') || null,
@@ -23,6 +26,10 @@ const state = {
   adminSubtab: 'users',
   adminUsers: [],
   loading: false,
+  meetingsSubtab: 'mine',
+  statsSubtab: 'pending',
+  statsYear: null,
+  statsOrgId: null,
 };
 
 const root = document.getElementById('app');
@@ -395,10 +402,52 @@ async function boot() {
     state.organizations = await api('/organizations');
     await loadCalendarData();
     render();
+    maybeShowAssignmentsAlert();
   } catch (e) {
     setToken(null);
     renderLogin();
   }
+}
+
+// ---------------- Alerta de compromisos pendientes (al iniciar sesión) ----------------
+// Se muestra como mucho una vez por sesión de navegador (sessionStorage se
+// borra al cerrar la pestaña) — así no interrumpe la navegación posterior
+// aunque la persona siga entrando y saliendo de vistas durante el día.
+async function maybeShowAssignmentsAlert() {
+  if (sessionStorage.getItem('assignmentsAlertShown')) return;
+  sessionStorage.setItem('assignmentsAlertShown', '1');
+  if (!state.user || (state.user.role !== 'admin' && state.user.role !== 'leader')) return;
+  try {
+    const data = await api('/my-assignments');
+    if (data.total > 0) showAssignmentsAlertModal(data.total);
+  } catch (e) { /* silencioso: no molestar con un error por esto */ }
+}
+
+function showAssignmentsAlertModal(count) {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="assign-alert-backdrop">
+      <div class="modal" style="max-width:380px; text-align:center;">
+        <div class="modal-body" style="padding-top:28px;">
+          <div style="font-size:38px; margin-bottom:8px;">🔔</div>
+          <p style="font-size:15px; font-weight:700; color:var(--ink); margin:0 0 6px;">Tienes ${count} compromiso${count === 1 ? '' : 's'} pendiente${count === 1 ? '' : 's'}, favor revisar</p>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 20px;">Pestaña Reuniones → Mis Asignaciones</p>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-block" id="assign-alert-later">Más tarde</button>
+            <button class="btn btn-primary btn-block" id="assign-alert-view">Ver ahora</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('assign-alert-later').addEventListener('click', closeModal);
+  document.getElementById('assign-alert-backdrop').addEventListener('click', (e) => { if (e.target.id === 'assign-alert-backdrop') closeModal(); });
+  document.getElementById('assign-alert-view').addEventListener('click', () => {
+    closeModal();
+    state.view = 'meetings';
+    state.meetingsSubtab = 'mine';
+    render();
+  });
 }
 
 async function logout() {
@@ -579,6 +628,19 @@ function canSeeBudgetTab() {
 function isObispadoUser() {
   return !!state.user && (state.user.role === 'admin' || !!(state.user.organization && state.user.organization.name === 'Obispado'));
 }
+// "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
+// Administrador — los Miembros no las ven en absoluto.
+function canSeeMeetingsTab() {
+  return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
+}
+function canSeeStatsTab() {
+  return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
+}
+// "Aseo del Edificio": estrictamente oculto salvo Administrador o líder de
+// Obispado (reutiliza isObispadoUser, la misma regla que Estaca/Presupuesto).
+function canSeeCleaningTab() {
+  return isObispadoUser();
+}
 // Las entrevistas son privadas: cada líder solo ve las de su propia
 // organización, salvo el líder de Obispado, que ve las de todas.
 function canViewAllInterviews() {
@@ -617,6 +679,9 @@ function render() {
       ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
       ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
       ${canSeeBudgetTab() ? `<button class="tab-btn ${state.view === 'budget' ? 'active' : ''}" data-view="budget">Presupuesto</button>` : ''}
+      ${canSeeMeetingsTab() ? `<button class="tab-btn ${state.view === 'meetings' ? 'active' : ''}" data-view="meetings">Reuniones</button>` : ''}
+      ${canSeeCleaningTab() ? `<button class="tab-btn ${state.view === 'cleaning' ? 'active' : ''}" data-view="cleaning">Aseo del Edificio</button>` : ''}
+      ${canSeeStatsTab() ? `<button class="tab-btn ${state.view === 'stats' ? 'active' : ''}" data-view="stats">Estadísticas</button>` : ''}
       ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
     </div>
     <main class="view" id="view-root"></main>
@@ -633,11 +698,17 @@ function renderCurrentView() {
   if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
   if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
+  if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
+  if (state.view === 'cleaning' && !canSeeCleaningTab()) state.view = 'calendar';
+  if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
   else if (state.view === 'interviews') renderInterviewsView();
   else if (state.view === 'budget') renderBudgetView();
+  else if (state.view === 'meetings') renderMeetingsView();
+  else if (state.view === 'cleaning') renderCleaningView();
+  else if (state.view === 'stats') renderStatsView();
   else if (state.view === 'admin') renderAdminView();
 }
 
@@ -1072,11 +1143,14 @@ async function renderMyActivitiesLeaderView() {
     || followedIds.includes(Number(ev.organizationId))
     || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId || followedIds.includes(Number(o.id))));
   const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
+  const todayIso = toISODate(new Date());
+  // Las actividades cuya fecha ya pasó desaparecen de este listado para
+  // mantener la pantalla limpia (siguen existiendo — se pueden seguir
+  // viendo en el Calendario si hace falta revisar el historial).
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
     ...myOwnInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
-  ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-  const todayIso = toISODate(new Date());
+  ].filter((it) => it.date >= todayIso).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
@@ -1158,11 +1232,14 @@ async function renderMyActivitiesMemberView() {
   try { myInterviews = await api('/interviews'); } catch (e) { myInterviews = []; }
   const followedIds = (state.user.followedOrganizationIds || []).map(Number);
   events = events.filter((ev) => ev.isWardActivity || followedIds.includes(Number(ev.organizationId)) || (ev.involvedOrganizations || []).some((o) => followedIds.includes(Number(o.id))));
+  const todayIso = toISODate(new Date());
+  // Las actividades cuya fecha ya pasó desaparecen de este listado para
+  // mantener la pantalla limpia (siguen visibles en el Calendario si hace
+  // falta revisar el historial).
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
     ...myInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
-  ].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
-  const todayIso = toISODate(new Date());
+  ].filter((it) => it.date >= todayIso).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
@@ -1255,6 +1332,13 @@ function openEventModal(existing = null) {
             <div class="field">
               <label>Descripción de la actividad</label>
               <input type="text" name="title" required placeholder="Ej: Reunión de presidencia de Cuórum" value="${esc(existing?.title || '')}" />
+            </div>
+            <div class="field">
+              <label>Propósito</label>
+              <select name="purpose" required>
+                <option value="" disabled ${!existing?.purpose ? 'selected' : ''}>Selecciona un propósito…</option>
+                ${PURPOSE_OPTIONS.map((p) => `<option value="${p}" ${existing?.purpose === p ? 'selected' : ''}>${p}</option>`).join('')}
+              </select>
             </div>
             ${locationFieldHtml('ev', existing?.location)}
             <div id="ev-conflict-warning"></div>
@@ -2369,6 +2453,693 @@ function openOrgModal(existing = null) {
       document.getElementById('org-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
   });
+}
+
+// ==================================================================
+// ---------------- Reuniones y Asignaciones ----------------
+// ==================================================================
+// "Mis Asignaciones": panel personal de compromisos pendientes/atrasados.
+// "Reuniones": actas — crear, agregar compromisos, ver detalle y archivar
+// ("Verificar y Archivar" cierra el acta; los compromisos que sigan
+// pendientes quedan documentados como "no cumplida" en el historial).
+
+async function renderMeetingsView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header"><div><h2>Reuniones y Asignaciones</h2><p>Actas de reuniones, compromisos y tus propias asignaciones pendientes</p></div></div>
+    <div class="subtabs">
+      <button class="subtab-btn ${state.meetingsSubtab === 'mine' ? 'active' : ''}" data-tab="mine">Mis Asignaciones</button>
+      <button class="subtab-btn ${state.meetingsSubtab === 'manage' ? 'active' : ''}" data-tab="manage">Reuniones</button>
+    </div>
+    <div id="meetings-content"></div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.meetingsSubtab = b.dataset.tab; renderMeetingsView(); }));
+  if (state.meetingsSubtab === 'mine') await renderMyAssignments();
+  else await renderMeetingsManage();
+}
+
+async function renderMyAssignments() {
+  const content = document.getElementById('meetings-content');
+  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let data;
+  try { data = await api('/my-assignments'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  content.innerHTML = data.commitments.length
+    ? `<div class="card-list">${data.commitments.map(assignmentCardHtml).join('')}</div>`
+    : '<div class="empty-state">No tienes compromisos pendientes 🎉</div>';
+  wireAssignmentCards();
+}
+
+function assignmentCardHtml(c) {
+  const isOverdue = c.displayStatus === 'overdue';
+  return `
+    <div class="list-card assignment-card" data-id="${c.id}" style="align-items:flex-start; flex-direction:column; gap:8px;">
+      <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
+        <div class="lc-main">
+          <div class="lc-title">${esc(c.description)}</div>
+          <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+        </div>
+        <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
+      </div>
+      <div>
+        <button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button>
+      </div>
+      <div class="assignment-complete-form" style="display:none; width:100%;">
+        <textarea class="assignment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
+        <button type="button" class="btn btn-primary btn-sm assignment-complete-save">Guardar</button>
+      </div>
+    </div>`;
+}
+
+function wireAssignmentCards() {
+  document.querySelectorAll('.assignment-card').forEach((card) => {
+    const id = Number(card.dataset.id);
+    const form = card.querySelector('.assignment-complete-form');
+    card.querySelector('.assignment-complete-toggle').addEventListener('click', () => {
+      form.style.display = form.style.display === 'none' ? '' : 'none';
+    });
+    card.querySelector('.assignment-complete-save').addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.disabled = true;
+      const comment = card.querySelector('.assignment-comment').value.trim();
+      try {
+        await api(`/commitments/${id}/complete`, { method: 'PUT', body: { comment } });
+        toast('Compromiso completado');
+        await renderMyAssignments();
+      } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
+    });
+  });
+}
+
+async function renderMeetingsManage() {
+  const content = document.getElementById('meetings-content');
+  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let meetings;
+  try { meetings = await api('/meetings'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const active = meetings.filter((m) => m.status === 'active');
+  const archived = meetings.filter((m) => m.status === 'archived');
+  content.innerHTML = `
+    <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+      <button class="btn btn-primary" id="meeting-new">+ Nueva acta</button>
+    </div>
+    <div class="card-list">
+      ${active.length ? active.map((m) => meetingCardHtml(m)).join('') : '<div class="empty-state">No hay actas activas</div>'}
+    </div>
+    ${archived.length ? `
+      <div style="margin-top:22px;">
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📁 Reuniones Pasadas</h3>
+        <div class="card-list">${archived.map((m) => meetingCardHtml(m)).join('')}</div>
+      </div>` : ''}
+  `;
+  document.getElementById('meeting-new').addEventListener('click', () => openMeetingModal());
+  wireMeetingCards(meetings);
+}
+
+function meetingCardHtml(m) {
+  const done = m.commitments.filter((c) => c.status === 'completed').length;
+  const total = m.commitments.length;
+  return `
+    <div class="list-card meeting-card" data-id="${m.id}" style="cursor:pointer;">
+      <div class="lc-main">
+        <div class="lc-title">${esc(m.title)}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
+        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · ${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}</div>
+      </div>
+    </div>`;
+}
+
+function wireMeetingCards(meetings) {
+  document.querySelectorAll('.meeting-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const m = meetings.find((x) => x.id === Number(card.dataset.id));
+      if (m) openMeetingDetailModal(m);
+    });
+  });
+}
+
+function commitmentStatusPillHtml(c) {
+  const map = {
+    pending: ['status-amber', 'Pendiente'],
+    overdue: ['status-red', 'Atrasado'],
+    completed: ['status-green', 'Completado'],
+    not_fulfilled: ['status-gray', 'No cumplida'],
+  };
+  const [cls, label] = map[c.displayStatus] || ['status-gray', c.status];
+  return `<span class="status-pill ${cls}">${label}</span>`;
+}
+
+async function openMeetingModal() {
+  let assignable;
+  try { assignable = await api('/meetings/assignable-users'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  if (!assignable.length) { toast('No hay líderes disponibles para asignar compromisos todavía', 'error'); return; }
+
+  const commitmentRowHtml = () => `
+    <div class="commitment-row">
+      <div class="field" style="margin-bottom:8px;">
+        <label>Compromiso</label>
+        <input type="text" class="cr-desc" required placeholder="Ej: Coordinar transporte" />
+      </div>
+      <div class="two-col">
+        <div class="field">
+          <label>Responsable</label>
+          <select class="cr-assignee" required>
+            <option value="" disabled selected>Elegir…</option>
+            ${assignable.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Fecha límite / verificación</label>
+          <input type="date" class="cr-due" required />
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm cr-remove">🗑️ Quitar compromiso</button>
+    </div>`;
+
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="mt-modal-backdrop">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h3>Nueva acta</h3><button class="modal-close" id="mt-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="mt-error"></div>
+          <form id="mt-form">
+            <div class="field">
+              <label>Título del acta</label>
+              <input type="text" name="title" required placeholder="Ej: Consejo de Barrio" />
+            </div>
+            <div class="field">
+              <label>Fecha de la reunión</label>
+              <input type="date" name="date" required value="${toISODate(new Date())}" />
+            </div>
+            <div class="field">
+              <label>Compromisos (opcional — también se pueden agregar después)</label>
+              <div id="mt-commitments"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="mt-add-commitment">+ Agregar compromiso</button>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="mt-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="mt-save">Crear acta</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const commitmentsBox = document.getElementById('mt-commitments');
+  const wireRow = (row) => {
+    row.querySelector('.cr-remove').addEventListener('click', () => row.remove());
+  };
+  const addRow = () => {
+    commitmentsBox.insertAdjacentHTML('beforeend', commitmentRowHtml());
+    wireRow(commitmentsBox.lastElementChild);
+  };
+  document.getElementById('mt-add-commitment').addEventListener('click', addRow);
+  addRow();
+
+  document.getElementById('mt-modal-close').addEventListener('click', closeModal);
+  document.getElementById('mt-cancel').addEventListener('click', closeModal);
+  document.getElementById('mt-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'mt-modal-backdrop') closeModal(); });
+
+  document.getElementById('mt-save').addEventListener('click', async () => {
+    const form = document.getElementById('mt-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const commitments = Array.from(document.querySelectorAll('#mt-commitments .commitment-row'))
+      .map((row) => ({
+        description: row.querySelector('.cr-desc').value.trim(),
+        assignedToUserId: Number(row.querySelector('.cr-assignee').value),
+        dueDate: row.querySelector('.cr-due').value,
+      }))
+      .filter((c) => c.description);
+    try {
+      await api('/meetings', { method: 'POST', body: { title: fd.get('title'), date: fd.get('date'), commitments } });
+      closeModal();
+      toast('Acta creada');
+      await renderMeetingsManage();
+    } catch (e) {
+      document.getElementById('mt-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+async function openMeetingDetailModal(m) {
+  const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="md-modal-backdrop">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h3>${esc(m.title)}</h3><button class="modal-close" id="md-modal-close">×</button></div>
+        <div class="modal-body">
+          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}</div>
+          <div id="md-commitments">
+            ${m.commitments.length ? m.commitments.map((c) => `
+              <div class="commitment-detail-row">
+                <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+                  <div style="min-width:0;">
+                    <div style="font-weight:600; font-size:13.5px;">${esc(c.description)}</div>
+                    <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Responsable: ${esc(c.assignedToName)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+                    ${c.status === 'completed' && c.completionComment ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">💬 "${esc(c.completionComment)}"</div>` : ''}
+                  </div>
+                  ${commitmentStatusPillHtml(c)}
+                </div>
+              </div>`).join('') : '<div class="empty-state">Sin compromisos todavía</div>'}
+          </div>
+          ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
+        </div>
+        <div class="modal-footer">
+          <div>${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}</div>
+          <div><button class="btn btn-secondary" id="md-close">Cerrar</button></div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('md-modal-close').addEventListener('click', closeModal);
+  document.getElementById('md-close').addEventListener('click', closeModal);
+  document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
+  if (canEdit) {
+    document.getElementById('md-add-commitment').addEventListener('click', () => openAddCommitmentModal(m));
+    document.getElementById('md-archive').addEventListener('click', async () => {
+      if (!confirm('¿Verificar y archivar esta acta? Los compromisos que sigan pendientes quedarán documentados como "no cumplida" y ya no aparecerán en "Mis Asignaciones" de nadie.')) return;
+      try {
+        await api(`/meetings/${m.id}/archive`, { method: 'PUT' });
+        closeModal();
+        toast('Acta archivada');
+        await renderMeetingsManage();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+}
+
+async function openAddCommitmentModal(m) {
+  let assignable;
+  try { assignable = await api('/meetings/assignable-users'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ac-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Agregar compromiso</h3><button class="modal-close" id="ac-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ac-error"></div>
+          <form id="ac-form">
+            <div class="field"><label>Compromiso</label><input type="text" name="description" required placeholder="Ej: Coordinar transporte" /></div>
+            <div class="field">
+              <label>Responsable</label>
+              <select name="assignedToUserId" required>
+                <option value="" disabled selected>Elegir…</option>
+                ${assignable.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required /></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ac-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ac-save">Agregar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('ac-modal-close').addEventListener('click', closeModal);
+  document.getElementById('ac-cancel').addEventListener('click', closeModal);
+  document.getElementById('ac-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ac-modal-backdrop') closeModal(); });
+  document.getElementById('ac-save').addEventListener('click', async () => {
+    const form = document.getElementById('ac-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      const updated = await api(`/meetings/${m.id}/commitments`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+      closeModal();
+      toast('Compromiso agregado');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('ac-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// ==================================================================
+// ---------------- Aseo del Edificio ----------------
+// ==================================================================
+// Estrictamente oculto salvo Administrador o líder de Obispado (ver
+// canSeeCleaningTab). Turnos de aseo de los sábados asignados a una
+// familia, con autocompletado (y creación automática la primera vez que se
+// escribe un nombre nuevo) más estadística histórica en vivo.
+
+async function renderCleaningView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `<div class="section-header"><div><h2>Aseo del Edificio</h2><p>Cargando…</p></div></div>`;
+  let shifts;
+  try { shifts = await api('/cleaning/shifts'); }
+  catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  // Un turno es una fecha (el sábado de aseo) con una o varias familias
+  // asignadas ese mismo día — se agrupa acá por fecha para que el listado
+  // muestre una tarjeta por sábado, no una fila por cada familia.
+  const byDate = new Map();
+  shifts.forEach((s) => { if (!byDate.has(s.date)) byDate.set(s.date, []); byDate.get(s.date).push(s); });
+  const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
+  container.innerHTML = `
+    <div class="section-header">
+      <div><h2>Aseo del Edificio</h2><p>Turnos de aseo de los sábados — cada turno puede tener una o varias familias asignadas</p></div>
+      <button class="btn btn-primary" id="cs-new">+ Nuevo turno</button>
+    </div>
+    <div class="card-list">
+      ${dates.length ? dates.map((d) => cleaningDateCardHtml(d, byDate.get(d))).join('') : '<div class="empty-state">Todavía no hay turnos asignados</div>'}
+    </div>
+  `;
+  document.getElementById('cs-new').addEventListener('click', () => openCleaningShiftModal());
+  wireCleaningShiftCards();
+}
+
+function cleaningStatusPillHtml(status) {
+  if (status === 'done') return `<span class="status-pill status-green">✅ Sí fue</span>`;
+  if (status === 'not_done') return `<span class="status-pill status-red">❌ No fue</span>`;
+  return `<span class="status-pill status-amber">Por confirmar</span>`;
+}
+
+function cleaningDateCardHtml(date, entries) {
+  return `
+    <div class="list-card cleaning-date-card">
+      <div class="lc-main" style="width:100%;">
+        <div class="lc-title">🧹 ${esc(fmtDateHuman(date))}</div>
+        <div class="cleaning-family-rows">
+          ${entries.map(cleaningFamilyRowHtml).join('')}
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm cs-add-family" data-date="${esc(date)}" style="margin-top:10px;">+ Agregar familia a este turno</button>
+      </div>
+    </div>`;
+}
+
+function cleaningFamilyRowHtml(s) {
+  return `
+    <div class="cleaning-family-row" data-id="${s.id}">
+      <div class="cfr-main">
+        <div class="cfr-name">${esc(s.familyName)}</div>
+        <div class="cfr-sub">${s.timesDone} vez${s.timesDone === 1 ? '' : 'es'} en total${s.lastDoneDate ? ' · última vez ' + esc(fmtDateHuman(s.lastDoneDate)) : ''}</div>
+      </div>
+      ${cleaningStatusPillHtml(s.status)}
+      <div class="cfr-actions">
+        <button type="button" class="btn btn-ghost btn-sm cs-mark" data-status="done" title="Sí fue">✅</button>
+        <button type="button" class="btn btn-ghost btn-sm cs-mark" data-status="not_done" title="No fue">❌</button>
+        <button type="button" class="btn btn-ghost btn-sm cs-remove" title="Quitar del turno">🗑️</button>
+      </div>
+    </div>`;
+}
+
+function wireCleaningShiftCards() {
+  document.querySelectorAll('.cleaning-family-row').forEach((row) => {
+    const id = Number(row.dataset.id);
+    row.querySelectorAll('.cs-mark').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api(`/cleaning/shifts/${id}/mark`, { method: 'PUT', body: { status: btn.dataset.status } });
+          toast('Turno actualizado');
+          await renderCleaningView();
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
+    row.querySelector('.cs-remove').addEventListener('click', async () => {
+      if (!confirm('¿Quitar esta familia del turno?')) return;
+      try {
+        await api(`/cleaning/shifts/${id}`, { method: 'DELETE' });
+        toast('Familia quitada del turno');
+        await renderCleaningView();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+  document.querySelectorAll('.cs-add-family').forEach((btn) => {
+    btn.addEventListener('click', () => openCleaningShiftModal(btn.dataset.date));
+  });
+}
+
+// presetDate: si viene con valor, el modal funciona en modo "agregar
+// familia a un turno que ya existe" (fecha fija, no editable); si no,
+// funciona en modo "turno nuevo" (se elige la fecha, y se le pueden
+// agregar de una varias familias con "+ Agregar otra familia" — así el
+// turno de un sábado puede quedar con más de una familia sin tener que
+// crear un turno aparte por cada una).
+async function openCleaningShiftModal(presetDate) {
+  let families;
+  try { families = await api('/cleaning/families'); } catch (e) { families = []; }
+  const isAdd = !!presetDate;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="cs-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isAdd ? 'Agregar familia al turno' : 'Nuevo turno de aseo'}</h3><button class="modal-close" id="cs-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="cs-error"></div>
+          <form id="cs-form">
+            <div class="field">
+              <label>Sábado de aseo</label>
+              <input type="date" name="date" required value="${esc(presetDate || '')}" ${isAdd ? 'readonly' : ''} />
+            </div>
+            <div class="field">
+              <label>Familias</label>
+              <div id="cs-family-rows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="cs-add-row">+ Agregar otra familia</button>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="cs-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="cs-save">${isAdd ? 'Agregar' : 'Crear turno'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('cs-modal-close').addEventListener('click', closeModal);
+  document.getElementById('cs-cancel').addEventListener('click', closeModal);
+  document.getElementById('cs-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'cs-modal-backdrop') closeModal(); });
+
+  const familyRowHtml = () => `
+    <div class="family-row">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <div style="flex:1; position:relative;">
+          <input type="text" class="fr-name" required autocomplete="off" placeholder="Ej: Familia Pino" />
+          <div class="fr-results" style="display:none; position:absolute; left:0; right:0; z-index:30; background:#fff; border:1px solid var(--border); border-radius:8px; margin-top:2px; max-height:200px; overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.12);"></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm fr-remove" title="Quitar esta familia">🗑️</button>
+      </div>
+      <div class="fr-stats hint-box" style="margin-top:6px; display:none;"></div>
+    </div>`;
+
+  const wireFamilyRow = (row) => {
+    const nameInput = row.querySelector('.fr-name');
+    const resultsBox = row.querySelector('.fr-results');
+    const statsBox = row.querySelector('.fr-stats');
+    const showStatsFor = (family) => {
+      if (!family) { statsBox.style.display = 'none'; return; }
+      statsBox.style.display = '';
+      statsBox.textContent = family.timesDone > 0
+        ? `Ha ido ${family.timesDone} ${family.timesDone === 1 ? 'vez' : 'veces'} · Última vez: ${fmtDateHuman(family.lastDoneDate)}`
+        : 'Nunca ha participado';
+    };
+    nameInput.addEventListener('input', () => {
+      const q = normalizeSearchText(nameInput.value);
+      if (!q) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; statsBox.style.display = 'none'; return; }
+      const matches = families.filter((f) => normalizeSearchText(f.name).includes(q)).slice(0, 8);
+      const exact = families.find((f) => normalizeSearchText(f.name) === q);
+      // Si no hay coincidencia exacta todavía, es una familia nueva — nunca
+      // participó, por definición (recién se va a crear al guardar el turno).
+      showStatsFor(exact || { timesDone: 0, lastDoneDate: null });
+      if (!matches.length) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; return; }
+      resultsBox.innerHTML = matches.map((f) => `<div class="ac-item" data-id="${f.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(f.name)}</div>`).join('');
+      resultsBox.style.display = '';
+      resultsBox.querySelectorAll('.ac-item').forEach((el) => {
+        el.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const f = families.find((x) => String(x.id) === el.dataset.id);
+          if (f) { nameInput.value = f.name; showStatsFor(f); resultsBox.style.display = 'none'; }
+        });
+      });
+    });
+    nameInput.addEventListener('blur', () => setTimeout(() => { resultsBox.style.display = 'none'; }, 150));
+    row.querySelector('.fr-remove').addEventListener('click', () => {
+      const box = row.parentElement;
+      if (box.children.length > 1) row.remove(); // siempre queda al menos una fila
+    });
+  };
+
+  const rowsBox = document.getElementById('cs-family-rows');
+  const addRow = () => {
+    rowsBox.insertAdjacentHTML('beforeend', familyRowHtml());
+    wireFamilyRow(rowsBox.lastElementChild);
+  };
+  document.getElementById('cs-add-row').addEventListener('click', addRow);
+  addRow();
+
+  document.getElementById('cs-save').addEventListener('click', async () => {
+    const form = document.getElementById('cs-form');
+    if (!form.reportValidity()) return;
+    const names = Array.from(rowsBox.querySelectorAll('.fr-name')).map((i) => i.value.trim()).filter(Boolean);
+    if (!names.length) { document.getElementById('cs-error').innerHTML = '<div class="error-msg">Agrega al menos una familia</div>'; return; }
+    try {
+      await api('/cleaning/shifts', { method: 'POST', body: { date: form.date.value, families: names } });
+      closeModal();
+      toast(isAdd ? 'Familia agregada al turno' : 'Turno creado');
+      await renderCleaningView();
+    } catch (e) {
+      document.getElementById('cs-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// ==================================================================
+// ---------------- Estadísticas ----------------
+// ==================================================================
+// "Bandeja de Evaluación": actividades propias ya pasadas sin evaluar.
+// "Panel de Control": balance del año por Propósito, % de éxito de
+// asistencia, y ranking de la actividad más y menos exitosa.
+
+async function renderStatsView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header"><div><h2>Estadísticas</h2><p>Evalúa tus actividades pasadas y revisa el resumen del año</p></div></div>
+    <div class="subtabs">
+      <button class="subtab-btn ${state.statsSubtab === 'pending' ? 'active' : ''}" data-tab="pending">Bandeja de Evaluación</button>
+      <button class="subtab-btn ${state.statsSubtab === 'dashboard' ? 'active' : ''}" data-tab="dashboard">Panel de Control</button>
+    </div>
+    <div id="stats-content"></div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.statsSubtab = b.dataset.tab; renderStatsView(); }));
+  if (state.statsSubtab === 'pending') await renderStatsPending();
+  else await renderStatsDashboard();
+}
+
+async function renderStatsPending() {
+  const content = document.getElementById('stats-content');
+  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let items;
+  try { items = await api('/stats/pending-evaluations'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  content.innerHTML = items.length
+    ? `<div class="card-list">${items.map(pendingEvalCardHtml).join('')}</div>`
+    : '<div class="empty-state">No hay actividades pendientes de evaluar 🎉</div>';
+  content.querySelectorAll('.pe-evaluate').forEach((btn) => {
+    const ev = items.find((e) => e.id === Number(btn.dataset.id));
+    if (ev) btn.addEventListener('click', () => openEvaluationModal(ev));
+  });
+}
+
+function pendingEvalCardHtml(ev) {
+  return `
+    <div class="list-card">
+      <span class="org-dot" style="background:${ev.organizationColor}"></span>
+      <div class="lc-main">
+        <div class="lc-title">${esc(ev.title)}</div>
+        <div class="lc-sub">${esc(ev.organizationName)} · ${esc(fmtDateHuman(ev.date))}${ev.purpose ? ' · ' + esc(ev.purpose) : ''}</div>
+      </div>
+      <button type="button" class="btn btn-primary btn-sm pe-evaluate" data-id="${ev.id}">Evaluar</button>
+    </div>`;
+}
+
+async function openEvaluationModal(ev) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="pe-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Evaluar — ${esc(ev.title)}</h3><button class="modal-close" id="pe-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="pe-error"></div>
+          <form id="pe-form">
+            <div class="two-col">
+              <div class="field"><label>Asistencia esperada</label><input type="number" name="expectedAttendance" min="0" step="1" required /></div>
+              <div class="field"><label>Asistencia real</label><input type="number" name="actualAttendance" min="0" step="1" required /></div>
+            </div>
+            <div class="field"><label>Feedback</label><textarea name="feedback" placeholder="¿Cómo resultó la actividad?"></textarea></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="pe-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="pe-save">Guardar evaluación</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('pe-modal-close').addEventListener('click', closeModal);
+  document.getElementById('pe-cancel').addEventListener('click', closeModal);
+  document.getElementById('pe-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'pe-modal-backdrop') closeModal(); });
+  document.getElementById('pe-save').addEventListener('click', async () => {
+    const form = document.getElementById('pe-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      await api('/stats/evaluations', { method: 'POST', body: { eventId: ev.id, expectedAttendance: fd.get('expectedAttendance'), actualAttendance: fd.get('actualAttendance'), feedback: fd.get('feedback') } });
+      closeModal();
+      toast('Evaluación guardada');
+      await renderStatsPending();
+    } catch (e) {
+      document.getElementById('pe-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+async function renderStatsDashboard() {
+  const content = document.getElementById('stats-content');
+  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  const params = [];
+  if (state.statsYear) params.push(`year=${state.statsYear}`);
+  if (state.user.role === 'admin' && state.statsOrgId) params.push(`organizationId=${state.statsOrgId}`);
+  let data;
+  try { data = await api(`/stats/dashboard${params.length ? '?' + params.join('&') : ''}`); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  state.statsYear = data.year;
+  const purposeEntries = Object.entries(data.purposeBalance);
+  const maxCount = Math.max(1, ...purposeEntries.map(([, v]) => v));
+  content.innerHTML = `
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
+      ${data.canPickOrganization ? `
+        <select id="stats-org-select">
+          <option value="">Todo el Barrio</option>
+          ${state.organizations.map((o) => `<option value="${o.id}" ${String(data.organizationId) === String(o.id) ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+        </select>` : ''}
+      <select id="stats-year-select">
+        ${data.years.map((y) => `<option value="${y}" ${y === data.year ? 'selected' : ''}>${y}</option>`).join('')}
+      </select>
+    </div>
+    <div class="stats-cards">
+      <div class="stat-card">
+        <div class="stat-card-label">Actividades evaluadas</div>
+        <div class="stat-card-value">${data.evaluatedCount} <span style="font-size:13px; font-weight:400; color:var(--ink-soft);">de ${data.totalActivitiesInYear}</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">% de éxito de asistencia</div>
+        <div class="stat-card-value">${data.overallSuccessPct !== null ? data.overallSuccessPct + '%' : '—'}</div>
+      </div>
+    </div>
+    <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>Balance del año por Propósito</strong></div>
+    <div class="purpose-balance">
+      ${purposeEntries.map(([p, v]) => `
+        <div class="purpose-row">
+          <span class="purpose-label">${esc(p)}</span>
+          <div class="purpose-bar-wrap"><div class="purpose-bar" style="width:${(v / maxCount) * 100}%;"></div></div>
+          <span class="purpose-count">${v}</span>
+        </div>`).join('')}
+    </div>
+    <div class="ranking-row">
+      <div class="ranking-card ranking-top">
+        <div class="ranking-label">🏆 Más exitosa</div>
+        ${data.topActivity ? `<div class="ranking-title">${esc(data.topActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(data.topActivity.date))} · ${data.topActivity.pct}% (${data.topActivity.actualAttendance}/${data.topActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
+      </div>
+      <div class="ranking-card ranking-bottom">
+        <div class="ranking-label">📉 Menos exitosa</div>
+        ${data.bottomActivity ? `<div class="ranking-title">${esc(data.bottomActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(data.bottomActivity.date))} · ${data.bottomActivity.pct}% (${data.bottomActivity.actualAttendance}/${data.bottomActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
+      </div>
+    </div>
+  `;
+  document.getElementById('stats-year-select').addEventListener('change', (e) => { state.statsYear = Number(e.target.value); renderStatsDashboard(); });
+  const orgSelect = document.getElementById('stats-org-select');
+  if (orgSelect) orgSelect.addEventListener('change', (e) => { state.statsOrgId = e.target.value || null; renderStatsDashboard(); });
 }
 
 boot();

@@ -15,6 +15,9 @@ import { registerRegistrationRoutes } from './routes/registration.js';
 import { registerCalendarRoutes } from './routes/calendar.js';
 import { registerBudgetRoutes } from './routes/budget.js';
 import { registerStakeRoutes } from './routes/stake.js';
+import { registerMeetingRoutes } from './routes/meetings.js';
+import { registerCleaningRoutes } from './routes/cleaning.js';
+import { registerStatsRoutes } from './routes/stats.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 
@@ -32,6 +35,9 @@ registerRegistrationRoutes(router);
 registerCalendarRoutes(router);
 registerBudgetRoutes(router);
 registerStakeRoutes(router);
+registerMeetingRoutes(router);
+registerCleaningRoutes(router);
+registerStatsRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

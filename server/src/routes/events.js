@@ -26,7 +26,14 @@ function blockedByStake(conflicts, body, user, data) {
   return { error: stakeConflictError(conflicts), stakeConflicts: conflicts, canOverride: isObispadoLeader(user, data) };
 }
 
-function canEditOrg(user, organizationId) {
+// Categorías de "Propósito" de una actividad — alimentan el balance del año
+// del módulo Estadísticas (ver routes/stats.js). Es un campo obligatorio al
+// crear una actividad nueva; las actividades creadas antes de que existiera
+// este campo simplemente quedan sin propósito (purpose: null) y no se
+// cuentan en ese balance.
+export const PURPOSE_OPTIONS = ['Espiritual', 'Físico', 'Académico', 'Social', 'Servicio'];
+
+export function canEditOrg(user, organizationId) {
   if (user.role === 'admin') return true;
   if (user.role === 'leader' && Number(user.organizationId) === Number(organizationId)) return true;
   return false;
@@ -72,7 +79,7 @@ export function canSeeMeeting(user, item) {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function buildEventFields(body, orgs) {
-  const { title, description, location, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting } = body || {};
+  const { title, description, location, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose } = body || {};
   const wardWide = !!isWardActivity;
   // Si es "de todo el Barrio" no hace falta guardar la lista de
   // organizaciones involucradas: se asume que participan todas.
@@ -87,6 +94,7 @@ function buildEventFields(body, orgs) {
     involvedOrganizationIds: cleanInvolved,
     isWardActivity: wardWide,
     isMeeting: !!isMeeting,
+    purpose: purpose || null,
   };
 }
 
@@ -110,9 +118,12 @@ export function registerEventRoutes(router) {
   }));
 
   router.post('/api/events', requireAuth(async (req, res, params, body) => {
-    const { title, date, startTime, organizationId } = body || {};
+    const { title, date, startTime, organizationId, purpose } = body || {};
     if (!title || !date || !startTime || !organizationId) {
       return sendJson(res, 400, { error: 'Faltan campos requeridos (día, horario, descripción, organización)' });
+    }
+    if (!PURPOSE_OPTIONS.includes(purpose)) {
+      return sendJson(res, 400, { error: 'Falta el propósito de la actividad (Espiritual, Físico, Académico, Social o Servicio)' });
     }
     if (!canEditOrg(req.user, organizationId)) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
@@ -146,9 +157,12 @@ export function registerEventRoutes(router) {
   // comparten un "recurrenceGroupId" por si en el futuro se quiere
   // gestionarlas en conjunto.
   router.post('/api/events/recurring', requireAuth(async (req, res, params, body) => {
-    const { title, dates, startTime, organizationId } = body || {};
+    const { title, dates, startTime, organizationId, purpose } = body || {};
     if (!title || !startTime || !organizationId) {
       return sendJson(res, 400, { error: 'Faltan campos requeridos (horario, descripción, organización)' });
+    }
+    if (!PURPOSE_OPTIONS.includes(purpose)) {
+      return sendJson(res, 400, { error: 'Falta el propósito de la actividad (Espiritual, Físico, Académico, Social o Servicio)' });
     }
     if (!Array.isArray(dates) || dates.length === 0) {
       return sendJson(res, 400, { error: 'Debes indicar al menos una fecha' });
@@ -230,6 +244,7 @@ export function registerEventRoutes(router) {
         involvedOrganizationIds,
         isWardActivity,
         isMeeting,
+        purpose: PURPOSE_OPTIONS.includes(body.purpose) ? body.purpose : ev.purpose ?? null,
         updatedAt: new Date().toISOString(),
       });
       return ev;
