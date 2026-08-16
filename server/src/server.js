@@ -18,6 +18,7 @@ import { registerStakeRoutes } from './routes/stake.js';
 import { registerMeetingRoutes } from './routes/meetings.js';
 import { registerCleaningRoutes } from './routes/cleaning.js';
 import { registerStatsRoutes } from './routes/stats.js';
+import { registerDashboardRoutes } from './routes/dashboard.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 
@@ -38,6 +39,7 @@ registerStakeRoutes(router);
 registerMeetingRoutes(router);
 registerCleaningRoutes(router);
 registerStatsRoutes(router);
+registerDashboardRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

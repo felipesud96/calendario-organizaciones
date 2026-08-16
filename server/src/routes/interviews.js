@@ -78,9 +78,42 @@ export function registerInterviewRoutes(router) {
     sendJson(res, 200, items);
   }));
 
+  // "¿Está ocupada esta sala a esta hora?" — para el aviso de choque al
+  // agendar una ACTIVIDAD (o entrevista) de cualquier organización. A
+  // propósito NO reutiliza el filtro de privacidad de arriba
+  // (orgSeesAllInterviews): cualquier líder debe poder saber que una sala
+  // está ocupada por una entrevista de otra organización para no chocar con
+  // ella, sin necesidad de ver el listado completo de esa organización. Por
+  // eso esta respuesta solo trae lugar/sala/horario/organización — nunca el
+  // nombre del miembro, del entrevistador, ni la descripción (eso sigue
+  // siendo privado, ver GET /api/interviews de arriba).
+  router.get('/api/interviews/room-occupancy', requireAuth(async (req, res) => {
+    const data = load();
+    const query = req.query;
+    let items = data.interviews.filter((i) => !!i.location);
+    if (query.date) items = items.filter((i) => i.date === query.date);
+    if (query.from) items = items.filter((i) => i.date >= query.from);
+    if (query.to) items = items.filter((i) => i.date <= query.to);
+    const result = items.map((i) => {
+      const org = data.organizations.find((o) => o.id === Number(i.organizationId));
+      return {
+        id: i.id,
+        organizationId: i.organizationId,
+        organizationName: org?.name || '',
+        organizationColor: org?.color || '#999999',
+        date: i.date,
+        startTime: i.startTime,
+        endTime: i.endTime,
+        location: i.location,
+        sala: i.sala || '',
+      };
+    });
+    sendJson(res, 200, result);
+  }));
+
   router.post('/api/interviews', requireAuth(async (req, res, params, body) => {
     const {
-      memberName, memberPhone, memberEmail, description, location, date, startTime, endTime, organizationId,
+      memberName, memberPhone, memberEmail, description, location, sala, date, startTime, endTime, organizationId,
       interviewerName, interviewerEmail, interviewerPhone, memberUserId,
     } = body || {};
     if (!memberName || !date || !startTime || !organizationId) {
@@ -103,6 +136,10 @@ export function registerInterviewRoutes(router) {
         memberEmail: memberEmail || '',
         description: description || '',
         location: location || '',
+        // Igual que en las actividades: la sala puntual solo aplica cuando
+        // el lugar es "Casa Capilla" o "Capilla" (son dos edificios
+        // distintos, cada uno con su propio listado de salas).
+        sala: ['Casa Capilla', 'Capilla'].includes(location) ? (sala || '') : '',
         interviewerName: interviewerName || '',
         interviewerEmail: interviewerEmail || '',
         interviewerPhone: interviewerPhone || '',
@@ -143,13 +180,15 @@ export function registerInterviewRoutes(router) {
       // (si ya se había enviado) debe poder volver a dispararse.
       const contactChanged = newInterviewerEmail !== (iv.interviewerEmail || '') || newMemberEmail !== (iv.memberEmail || '');
       const memberUserId = normalizeMemberUserId(body.memberUserId, d.users);
+      const finalLocation = body.location ?? iv.location ?? '';
       Object.assign(iv, {
         memberName: body.memberName ?? iv.memberName,
         memberUserId: memberUserId !== undefined ? memberUserId : (iv.memberUserId ?? null),
         memberPhone: body.memberPhone ?? iv.memberPhone,
         memberEmail: newMemberEmail,
         description: body.description ?? iv.description,
-        location: body.location ?? iv.location ?? '',
+        location: finalLocation,
+        sala: ['Casa Capilla', 'Capilla'].includes(finalLocation) ? (body.sala !== undefined ? (body.sala || '') : (iv.sala || '')) : '',
         interviewerName: body.interviewerName ?? iv.interviewerName ?? '',
         interviewerEmail: newInterviewerEmail,
         interviewerPhone: body.interviewerPhone ?? iv.interviewerPhone ?? '',

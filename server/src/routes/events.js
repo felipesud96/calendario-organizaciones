@@ -79,7 +79,7 @@ export function canSeeMeeting(user, item) {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function buildEventFields(body, orgs) {
-  const { title, description, location, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose } = body || {};
+  const { title, description, location, sala, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose } = body || {};
   const wardWide = !!isWardActivity;
   // Si es "de todo el Barrio" no hace falta guardar la lista de
   // organizaciones involucradas: se asume que participan todas.
@@ -88,6 +88,13 @@ function buildEventFields(body, orgs) {
     title,
     description: description || '',
     location: location || '',
+    // "Sala" (la sala/espacio puntual dentro del lugar) solo tiene sentido
+    // cuando el lugar es "Casa Capilla" o "Capilla" — son dos edificios
+    // distintos, cada uno con su propio listado de salas (ver
+    // ROOMS_BY_LOCATION en app.js). Para cualquier otro lugar se ignora,
+    // así no queda una sala "huérfana" mostrando un dato sin sentido (ej.
+    // "Estacionamiento · Sala 1").
+    sala: ['Casa Capilla', 'Capilla'].includes(location) ? (sala || '') : '',
     startTime,
     endTime: endTime || null,
     organizationId: Number(organizationId),
@@ -233,10 +240,15 @@ export function registerEventRoutes(router) {
         : (body.involvedOrganizationIds !== undefined
           ? normalizeInvolvedOrgIds(body.involvedOrganizationIds, finalOrgId, data.organizations)
           : (ev.involvedOrganizationIds || []).filter((oid) => oid !== finalOrgId));
+      const finalLocation = body.location ?? ev.location ?? '';
       Object.assign(ev, {
         title: body.title ?? ev.title,
         description: body.description ?? ev.description,
-        location: body.location ?? ev.location ?? '',
+        location: finalLocation,
+        // Igual que al crear: la sala solo aplica cuando el lugar es "Casa
+        // Capilla" o "Capilla" — si cambian el lugar a otro, la sala
+        // anterior se limpia.
+        sala: ['Casa Capilla', 'Capilla'].includes(finalLocation) ? (body.sala !== undefined ? (body.sala || '') : (ev.sala || '')) : '',
         date: body.date ?? ev.date,
         startTime: body.startTime ?? ev.startTime,
         endTime: body.endTime ?? ev.endTime,

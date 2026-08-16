@@ -93,31 +93,74 @@ function fmtDateHuman(iso) {
 
 // ---------------- Lugar estandarizado ----------------
 const STANDARD_LOCATIONS = ['Casa Capilla', 'Capilla'];
+// Salas/espacios puntuales dentro de cada edificio — para poder reservar un
+// espacio específico (y detectar choques por sala, no solo por "el
+// edificio" en general — ver placesConflict). "Capilla" y "Casa Capilla"
+// son dos edificios distintos, así que cada uno tiene su propio listado de
+// salas.
+const ROOMS_BY_LOCATION = {
+  'Capilla': ['Salón Cultural', 'Sacramental'],
+  'Casa Capilla': ['1er Piso', 'Sala 1', 'Sala 2'],
+};
 
-function locationFieldHtml(idPrefix, existingLocation) {
+function salaOptionsHtml(location, selectedSala) {
+  const rooms = ROOMS_BY_LOCATION[location] || [];
+  const isOtraSala = !!selectedSala && !rooms.includes(selectedSala);
+  return `
+    <option value="" ${!selectedSala ? 'selected' : ''}>Sin especificar (todo el edificio)</option>
+    ${rooms.map((r) => `<option value="${esc(r)}" ${selectedSala === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+    <option value="OtraSala" ${isOtraSala ? 'selected' : ''}>Otra sala (especificar)</option>`;
+}
+
+function locationFieldHtml(idPrefix, existingLocation, existingSala) {
   const loc = existingLocation || '';
+  const sala = existingSala || '';
   const isStandard = STANDARD_LOCATIONS.includes(loc);
-  const isOtro = !!loc && !isStandard;
+  const isOtroLugar = !!loc && !isStandard;
+  const hasSalaOptions = STANDARD_LOCATIONS.includes(loc);
   return `
     <div class="field">
       <label>Lugar</label>
       <select name="locationType" id="${idPrefix}-location-type" required>
         <option value="" disabled ${!loc ? 'selected' : ''}>Selecciona un lugar…</option>
         ${STANDARD_LOCATIONS.map((l) => `<option value="${esc(l)}" ${loc === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}
-        <option value="Otro" ${isOtro ? 'selected' : ''}>Otro (especificar)</option>
+        <option value="Otro" ${isOtroLugar ? 'selected' : ''}>Otro (especificar)</option>
       </select>
     </div>
-    <div class="field" id="${idPrefix}-location-other-field" style="${isOtro ? '' : 'display:none;'}">
+    <div class="field" id="${idPrefix}-location-other-field" style="${isOtroLugar ? '' : 'display:none;'}">
       <label>¿Cuál lugar?</label>
-      <input type="text" name="locationOther" placeholder="Ej: Estacionamiento" value="${esc(isOtro ? loc : '')}" />
+      <input type="text" name="locationOther" placeholder="Ej: Estacionamiento" value="${esc(isOtroLugar ? loc : '')}" />
+    </div>
+    <div class="field" id="${idPrefix}-sala-field" style="${hasSalaOptions ? '' : 'display:none;'}">
+      <label>Sala / espacio (opcional)</label>
+      <select name="salaType" id="${idPrefix}-sala-type">
+        ${salaOptionsHtml(loc, sala)}
+      </select>
+      <div id="${idPrefix}-sala-other-field" style="margin-top:8px; ${(!!sala && !(ROOMS_BY_LOCATION[loc] || []).includes(sala)) ? '' : 'display:none;'}">
+        <input type="text" name="salaOther" placeholder="Ej: Oficina del Obispo" value="${esc((!!sala && !(ROOMS_BY_LOCATION[loc] || []).includes(sala)) ? sala : '')}" />
+      </div>
     </div>`;
 }
 
 function wireLocationField(idPrefix, onChange) {
   const sel = document.getElementById(`${idPrefix}-location-type`);
   const otherField = document.getElementById(`${idPrefix}-location-other-field`);
+  const salaField = document.getElementById(`${idPrefix}-sala-field`);
+  const salaSel = document.getElementById(`${idPrefix}-sala-type`);
+  const salaOtherField = document.getElementById(`${idPrefix}-sala-other-field`);
   sel.addEventListener('change', () => {
     otherField.style.display = sel.value === 'Otro' ? '' : 'none';
+    const hasSala = STANDARD_LOCATIONS.includes(sel.value);
+    salaField.style.display = hasSala ? '' : 'none';
+    // El listado de salas depende del lugar elegido (Capilla y Casa Capilla
+    // tienen salas distintas) — se regenera cada vez que cambia el lugar, y
+    // la sala elegida se limpia porque ya no aplica en la lista nueva.
+    salaSel.innerHTML = salaOptionsHtml(sel.value, '');
+    salaOtherField.style.display = 'none';
+    if (onChange) onChange();
+  });
+  salaSel.addEventListener('change', () => {
+    salaOtherField.style.display = salaSel.value === 'OtraSala' ? '' : 'none';
     if (onChange) onChange();
   });
 }
@@ -126,6 +169,35 @@ function computeLocationFromForm(fd) {
   const type = fd.get('locationType');
   if (type === 'Otro') return String(fd.get('locationOther') || '').trim();
   return type || '';
+}
+
+// La sala solo aplica cuando el lugar elegido es "Capilla" o "Casa Capilla".
+function computeSalaFromForm(fd, location) {
+  if (!STANDARD_LOCATIONS.includes(location)) return '';
+  const type = fd.get('salaType');
+  if (type === 'OtraSala') return String(fd.get('salaOther') || '').trim();
+  return type || '';
+}
+
+// Muestra el lugar junto con la sala puntual (si la hay) — para usar en
+// cualquier vista de solo lectura (calendario, "Mis Actividades",
+// Entrevistas, avisos de choque, etc.) sin repetir la lógica en cada una.
+function locationDisplay(item) {
+  if (!item || !item.location) return '';
+  return item.sala ? `${item.location} · ${item.sala}` : item.location;
+}
+
+// Dos lugares "chocan" si son el mismo lugar Y (no especificaron sala en
+// alguno de los dos, o especificaron la misma sala). Si ambos indicaron una
+// sala puntual y son distintas, son espacios separados del mismo edificio —
+// no es un choque real (ej. "Casa Capilla · Sala 1" vs "Casa Capilla · Sala
+// 2"). Si a alguno le falta la sala, se asume "todo el edificio" y sí se
+// avisa, para no dejar pasar un choque real por falta de dato.
+function placesConflict(aLoc, aSala, bLoc, bSala) {
+  if (!aLoc || !bLoc) return false;
+  if (normalizeLocation(aLoc) !== normalizeLocation(bLoc)) return false;
+  if (aSala && bSala && normalizeLocation(aSala) !== normalizeLocation(bSala)) return false;
+  return true;
 }
 
 // ---------------- Actividades en conjunto con otras organizaciones ----------------
@@ -325,31 +397,55 @@ function orgSetForConflictCheck(item) {
   return ids;
 }
 
-// Revisa si lo que se está por agendar (actividad o entrevista) choca en
-// horario o en lugar con una ACTIVIDAD de OTRA organización el mismo día.
-// Si ambas comparten alguna organización (como dueña o como participante),
-// no se considera choque — ya están coordinadas a propósito.
-// No compara contra entrevistas (son privadas de cada organización).
-async function findConflictingActivities(candidate, excludeEventId) {
+// Revisa si lo que se está por agendar (actividad o entrevista) choca con
+// una ACTIVIDAD de OTRA organización el mismo día (mismo horario, o
+// exactamente el mismo lugar aunque el horario sea distinto — aviso general
+// del barrio), y por separado si choca con una SALA ya ocupada por una
+// ENTREVISTA de otra organización (ver GET /api/interviews/room-occupancy —
+// a propósito solo trae lugar/sala/horario/organización, nunca a quién
+// entrevistan ni quién entrevista, para no exponer información privada de
+// otra organización; el aviso solo dice "ocupada por una entrevista de
+// [organización]"). El choque contra entrevistas es más estricto que contra
+// actividades: requiere que se solapen el horario Y la sala — a propósito,
+// para no generar un aviso por cada entrevista del día que no tiene nada
+// que ver con la sala que se está por usar (evitar fatiga de avisos). Si
+// ambas comparten alguna organización (como dueña o como participante), no
+// se considera choque — ya están coordinadas a propósito. excludeEventId/
+// excludeInterviewId sirven para que, al editar una actividad o entrevista
+// ya existente, no choque consigo misma.
+async function findConflictingActivities(candidate, excludeEventId, excludeInterviewId) {
   if (!candidate.date || !candidate.startTime || !candidate.organizationId) return [];
-  let dayEvents;
-  try { dayEvents = await api(`/events?from=${candidate.date}&to=${candidate.date}`); } catch (e) { return []; }
+  let dayEvents = [];
+  let dayInterviewRooms = [];
+  try { dayEvents = await api(`/events?from=${candidate.date}&to=${candidate.date}`); } catch (e) { /* si falla, sigue con lo que sí cargó */ }
+  try { dayInterviewRooms = await api(`/interviews/room-occupancy?date=${candidate.date}`); } catch (e) { /* si falla, sigue con lo que sí cargó */ }
   const candidateOrgs = orgSetForConflictCheck(candidate);
-  return dayEvents.filter((ev) => {
+  const eventConflicts = dayEvents.filter((ev) => {
     if (excludeEventId && ev.id === Number(excludeEventId)) return false;
     const evOrgs = orgSetForConflictCheck(ev);
     if (candidateOrgs.some((id) => evOrgs.includes(id))) return false;
     const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, ev.startTime, ev.endTime);
-    const placeConflict = candidate.location && ev.location && normalizeLocation(candidate.location) === normalizeLocation(ev.location);
+    const placeConflict = placesConflict(candidate.location, candidate.sala, ev.location, ev.sala);
     return timeConflict || placeConflict;
   });
+  const interviewConflicts = dayInterviewRooms
+    .filter((iv) => {
+      if (excludeInterviewId && iv.id === Number(excludeInterviewId)) return false;
+      const ivOrgs = orgSetForConflictCheck(iv);
+      if (candidateOrgs.some((id) => ivOrgs.includes(id))) return false;
+      const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, iv.startTime, iv.endTime);
+      const placeConflict = placesConflict(candidate.location, candidate.sala, iv.location, iv.sala);
+      return timeConflict && placeConflict;
+    })
+    .map((iv) => ({ ...iv, kind: 'interview' }));
+  return [...eventConflicts, ...interviewConflicts];
 }
 
 function conflictWarningHtml(conflicts) {
   return `<div class="hint-box" style="border-color:#f59e0b; background:#fffbeb;">
     ⚠️ <strong>Posible choque con otra organización</strong> — vuelve a presionar el botón para agendar de todas formas:
     <ul style="margin:6px 0 0; padding-left:18px;">
-      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong> — ${esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(c.location) : ''}</li>`).join('')}
+      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong> — ${c.kind === 'interview' ? '🔒 ocupada por una entrevista (privada)' : esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(locationDisplay(c)) : ''}</li>`).join('')}
     </ul>
   </div>`;
 }
@@ -628,6 +724,12 @@ function canSeeBudgetTab() {
 function isObispadoUser() {
   return !!state.user && (state.user.role === 'admin' || !!(state.user.organization && state.user.organization.name === 'Obispado'));
 }
+// "Panel de Obispado": mismo criterio que Aseo del Edificio — solo
+// Administrador o líder de Obispado, porque junta datos de TODAS las
+// organizaciones (compromisos, aseo, entrevistas, presupuesto).
+function canSeeBishopricPanelTab() {
+  return isObispadoUser();
+}
 // "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
 // Administrador — los Miembros no las ven en absoluto.
 function canSeeMeetingsTab() {
@@ -676,6 +778,7 @@ function render() {
     </div>
     <div class="tabs">
       <button class="tab-btn ${state.view === 'calendar' ? 'active' : ''}" data-view="calendar">Calendario</button>
+      ${canSeeBishopricPanelTab() ? `<button class="tab-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" data-view="bishopricPanel">Panel de Obispado</button>` : ''}
       ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
       ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
       ${canSeeBudgetTab() ? `<button class="tab-btn ${state.view === 'budget' ? 'active' : ''}" data-view="budget">Presupuesto</button>` : ''}
@@ -701,8 +804,10 @@ function renderCurrentView() {
   if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
   if (state.view === 'cleaning' && !canSeeCleaningTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
+  if (state.view === 'bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'calendar') renderCalendarView();
+  else if (state.view === 'bishopricPanel') renderBishopricPanelView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
   else if (state.view === 'interviews') renderInterviewsView();
   else if (state.view === 'budget') renderBudgetView();
@@ -789,7 +894,7 @@ async function renderCalendarView() {
       <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
         <div class="cal-daynum">${cellDate.getDate()}</div>
         ${visible.map((it) => `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(it.location) : ''}">
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}">
             ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it))}${esc(truncateTitle(it.title))}
           </button>`).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
@@ -945,7 +1050,7 @@ function openDayModal(iso) {
                 <span class="org-dot" style="background:${it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
@@ -1066,7 +1171,7 @@ function openReadOnlyModal(item, kind) {
           <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
           <div class="ro-detail-row">🕐 ${kind === 'stake' && item.allDay ? 'Todo el día' : esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
-          ${item.location ? `<div class="ro-detail-row">📍 ${esc(item.location)}</div>` : ''}
+          ${item.location ? `<div class="ro-detail-row">📍 ${esc(locationDisplay(item))}</div>` : ''}
           ${kind === 'interview' && item.interviewerName ? `<div class="ro-detail-row">🧑‍💼 ${esc(item.interviewerName)}</div>` : ''}
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
@@ -1120,7 +1225,7 @@ function myActLeaderSubHtml(it, myOrgId) {
   } else if (Number(it.organizationId) !== myOrgId) {
     parts.push(esc(it.organizationName));
   }
-  if (it.location) parts.push(`<span class="lc-location">📍 ${esc(it.location)}</span>`);
+  if (it.location) parts.push(`<span class="lc-location">📍 ${esc(locationDisplay(it))}</span>`);
   if (it.kind === 'event' && it.description) parts.push(esc(it.description));
   return parts.join(' · ') + (it.kind === 'event' ? involvedOrgsBadgesHtml(it) : '');
 }
@@ -1278,7 +1383,7 @@ async function renderMyActivitiesMemberView() {
               <span class="org-dot" style="background:${it.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · con ${esc(it.interviewerName)}` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · con ${esc(it.interviewerName)}` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
@@ -1340,7 +1445,7 @@ function openEventModal(existing = null) {
                 ${PURPOSE_OPTIONS.map((p) => `<option value="${p}" ${existing?.purpose === p ? 'selected' : ''}>${p}</option>`).join('')}
               </select>
             </div>
-            ${locationFieldHtml('ev', existing?.location)}
+            ${locationFieldHtml('ev', existing?.location, existing?.sala)}
             <div id="ev-conflict-warning"></div>
             <div class="field">
               <label>Notas adicionales (opcional)</label>
@@ -1416,10 +1521,18 @@ function openEventModal(existing = null) {
       document.getElementById('ev-error').innerHTML = `<div class="error-msg">Escribe cuál es el lugar</div>`;
       return;
     }
+    const sala = computeSalaFromForm(fd, location);
+    if (STANDARD_LOCATIONS.includes(location) && fd.get('salaType') === 'OtraSala' && !sala) {
+      document.getElementById('ev-error').innerHTML = `<div class="error-msg">Escribe cuál es la sala</div>`;
+      return;
+    }
     const body = Object.fromEntries(fd.entries());
     body.location = location;
+    body.sala = sala;
     delete body.locationType;
     delete body.locationOther;
+    delete body.salaType;
+    delete body.salaOther;
     body.isWardActivity = document.getElementById('ev-ward-activity').checked;
     body.involvedOrganizationIds = body.isWardActivity ? [] : computeInvolvedOrgIds(fd);
     body.isMeeting = document.getElementById('ev-type-select').value === 'meeting';
@@ -1529,7 +1642,7 @@ async function renderInterviewsView() {
               <span class="org-dot" style="background:${iv.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${esc(iv.memberName)}${iv.memberUserId ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
-                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(iv.location)}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
               ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button></div>` : ''}
@@ -1677,7 +1790,7 @@ async function openInterviewModal(existing = null) {
               <label>Descripción / motivo</label>
               <textarea name="description" placeholder="Ej: Entrevista de recomendación para el templo">${esc(existing?.description || '')}</textarea>
             </div>
-            ${locationFieldHtml('iv', existing?.location)}
+            ${locationFieldHtml('iv', existing?.location, existing?.sala)}
             <div id="iv-conflict-warning"></div>
             <div class="field">
               <label>Líder que realizará la entrevista</label>
@@ -1753,15 +1866,23 @@ async function openInterviewModal(existing = null) {
       document.getElementById('iv-error').innerHTML = `<div class="error-msg">Escribe cuál es el lugar</div>`;
       return;
     }
+    const sala = computeSalaFromForm(fd, location);
+    if (STANDARD_LOCATIONS.includes(location) && fd.get('salaType') === 'OtraSala' && !sala) {
+      document.getElementById('iv-error').innerHTML = `<div class="error-msg">Escribe cuál es la sala</div>`;
+      return;
+    }
     const body = Object.fromEntries(fd.entries());
     body.memberUserId = body.memberUserId ? Number(body.memberUserId) : null;
     body.location = location;
+    body.sala = sala;
     delete body.locationType;
     delete body.locationOther;
+    delete body.salaType;
+    delete body.salaOther;
     if (isEdit) body.organizationId = existing.organizationId;
 
     if (!ivConflictsChecked) {
-      const conflicts = await findConflictingActivities(body, null);
+      const conflicts = await findConflictingActivities(body, null, existing?.id);
       if (conflicts.length) {
         document.getElementById('iv-conflict-warning').innerHTML = conflictWarningHtml(conflicts);
         ivConflictsChecked = true;
@@ -3140,6 +3261,92 @@ async function renderStatsDashboard() {
   document.getElementById('stats-year-select').addEventListener('change', (e) => { state.statsYear = Number(e.target.value); renderStatsDashboard(); });
   const orgSelect = document.getElementById('stats-org-select');
   if (orgSelect) orgSelect.addEventListener('change', (e) => { state.statsOrgId = e.target.value || null; renderStatsDashboard(); });
+}
+
+// ==================================================================
+// ---------------- Panel de Obispado ----------------
+// ==================================================================
+// Resumen de una sola pantalla con lo más urgente de TODAS las
+// organizaciones — compromisos atrasados, turnos de aseo sin confirmar,
+// entrevistas próximas y el presupuesto del trimestre — para no tener que
+// entrar módulo por módulo a armarse una idea general. Solo lo ve el
+// Administrador o el líder de Obispado (canSeeBishopricPanelTab).
+
+async function renderBishopricPanelView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `<div class="section-header"><div><h2>Panel de Obispado</h2><p>Cargando…</p></div></div>`;
+  let data;
+  try { data = await api('/dashboard/overview'); }
+  catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+
+  container.innerHTML = `
+    <div class="section-header">
+      <div><h2>Panel de Obispado</h2><p>Resumen de todas las organizaciones — para no tener que revisar módulo por módulo</p></div>
+    </div>
+    <div class="stats-cards" style="margin-bottom:22px;">
+      <div class="stat-card"><div class="stat-card-label">Compromisos atrasados</div><div class="stat-card-value">${data.overdueCommitments.length}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Turnos de aseo sin confirmar</div><div class="stat-card-value">${data.cleaningPending.length}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Entrevistas — próximos 7 días</div><div class="stat-card-value">${data.upcomingInterviews.length}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Actividades — próximos 7 días</div><div class="stat-card-value">${data.activitiesThisWeek}</div></div>
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;" class="bp-grid">
+      <div>
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">⏰ Compromisos atrasados</h3>
+        <div class="card-list">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : '<div class="empty-state">Ninguno — al día 🎉</div>'}</div>
+      </div>
+      <div>
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">🧹 Turnos de aseo sin confirmar</h3>
+        <div class="card-list">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : '<div class="empty-state">Ninguno pendiente</div>'}</div>
+      </div>
+      <div>
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">👤 Entrevistas de los próximos 7 días</h3>
+        <div class="card-list">${data.upcomingInterviews.length ? data.upcomingInterviews.map(bpInterviewRowHtml).join('') : '<div class="empty-state">Ninguna agendada</div>'}</div>
+      </div>
+      <div>
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">💰 Presupuesto — ${esc(data.budget.quarterLabel)}</h3>
+        <div class="budget-card">
+          <div class="budget-figures">
+            <div><span class="bf-label">Asignado</span>${fmtMoney(data.budget.totalAssigned)}</div>
+            <div><span class="bf-label">Gastado</span>${fmtMoney(data.budget.totalSpent)}</div>
+            <div><span class="bf-label">Saldo</span>${fmtMoney(data.budget.totalBalance)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bpCommitmentRowHtml(c) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${esc(c.description)}</div>
+        <div class="lc-sub">${esc(c.organizationName)} · "${esc(c.meetingTitle)}" · responsable: ${esc(c.assignedToName)} · vencía ${esc(fmtDateHuman(c.dueDate))}</div>
+      </div>
+      <span class="status-pill status-red">Atrasado</span>
+    </div>`;
+}
+
+function bpCleaningRowHtml(s) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${esc(s.familyName)}</div>
+        <div class="lc-sub">Turno del ${esc(fmtDateHuman(s.date))}</div>
+      </div>
+      <span class="status-pill status-amber">Sin confirmar</span>
+    </div>`;
+}
+
+function bpInterviewRowHtml(iv) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${esc(iv.memberName)}</div>
+        <div class="lc-sub">${esc(iv.organizationName)}${iv.interviewerName ? ' · con ' + esc(iv.interviewerName) : ''}</div>
+      </div>
+      <div class="lc-when">${esc(fmtDateHuman(iv.date))}<br>${esc(fmtTime(iv.startTime))}</div>
+    </div>`;
 }
 
 boot();

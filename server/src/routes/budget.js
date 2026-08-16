@@ -22,7 +22,7 @@ function categoryRefsEqual(a, b) {
   return Number(a.budgetCategoryId) === Number(b.budgetCategoryId);
 }
 
-function allCategoryRefs(data) {
+export function allCategoryRefs(data) {
   return [
     ...data.organizations.map((o) => ({ categoryType: 'organization', organizationId: o.id, budgetCategoryId: null })),
     ...data.budgetCategories.map((c) => ({ categoryType: 'custom', organizationId: null, budgetCategoryId: c.id })),
@@ -63,7 +63,7 @@ function withExpenseInfo(expense, data) {
   return { ...expense, eventTitle: event ? event.title : null, registeredByName: registeredByUser ? registeredByUser.name : '' };
 }
 
-function summaryFor(data, quarter, ref) {
+export function summaryFor(data, quarter, ref) {
   const alloc = data.budgetAllocations.find((a) => a.quarter === quarter && categoryRefsEqual(a, ref));
   const expenses = data.budgetExpenses
     .filter((e) => e.quarter === quarter && categoryRefsEqual(e, ref))

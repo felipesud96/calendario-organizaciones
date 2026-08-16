@@ -505,4 +505,5 @@ table.data-table tr:last-child td { border-bottom: none; }
   .cal-month-label { min-width: 0; font-size: 15px; }
   main.view { padding: 12px; }
   .topbar-title small { display: none; }
+  .bp-grid { grid-template-columns: 1fr !important; }
 }
