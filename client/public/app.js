@@ -1037,6 +1037,23 @@ async function renderMyActivitiesView() {
   return renderMyActivitiesMemberView();
 }
 
+// Arma la línea de detalle (organización / ubicación / descripción) de cada
+// tarjeta en la vista de Líder, uniendo solo las partes que corresponden con
+// un único separador " · " entre ellas (evita separadores duplicados cuando
+// se muestra el nombre de una organización seguida de la ubicación).
+function myActLeaderSubHtml(it, myOrgId) {
+  const parts = [];
+  if (it.kind === 'interview') {
+    parts.push(`Te entrevista ${esc(it.organizationName)}`);
+    if (it.interviewerName) parts.push(esc(it.interviewerName));
+  } else if (Number(it.organizationId) !== myOrgId) {
+    parts.push(esc(it.organizationName));
+  }
+  if (it.location) parts.push(`<span class="lc-location">📍 ${esc(it.location)}</span>`);
+  if (it.kind === 'event' && it.description) parts.push(esc(it.description));
+  return parts.join(' · ') + (it.kind === 'event' ? involvedOrgsBadgesHtml(it) : '');
+}
+
 async function renderMyActivitiesLeaderView() {
   const container = document.getElementById('view-root');
   container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
@@ -1047,7 +1064,13 @@ async function renderMyActivitiesLeaderView() {
   // aparecerte acá aunque no la haya agendado tu propia organización.
   try { interviews = await api('/interviews'); } catch (e) { interviews = []; }
   const myOrgId = Number(state.user.organizationId);
-  events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId));
+  // Además de tu propia organización (siempre, no es opcional — la
+  // administras tú), podés seguir otras organizaciones igual que un
+  // Miembro — por ejemplo si tienes hijos en Primaria.
+  const followedIds = (state.user.followedOrganizationIds || []).map(Number);
+  events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity
+    || followedIds.includes(Number(ev.organizationId))
+    || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId || followedIds.includes(Number(o.id))));
   const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
@@ -1057,17 +1080,33 @@ async function renderMyActivitiesLeaderView() {
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }
   const dates = Object.keys(grouped).sort();
+  const prefsOpen = state.myActivitiesPrefsOpen ?? false;
+  const otherOrgs = state.organizations.filter((o) => Number(o.id) !== myOrgId);
 
   container.innerHTML = `
     <div class="section-header">
       <div>
         <h2>Mis Actividades</h2>
-        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
+        <p>Todas las actividades de ${esc(state.user.organization ? state.user.organization.name : 'tu organización')}${followedIds.length ? ' y de las organizaciones que además elegiste seguir' : ''}, más las entrevistas en las que a ti te entrevistan — en un listado, sin tener que navegar mes a mes</p>
       </div>
-      <div style="display:flex; gap:8px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="btn btn-secondary" id="my-act-export">📅 Exportar a mi calendario</button>
+        <button class="btn btn-secondary" id="my-act-prefs-toggle">${prefsOpen ? 'Ocultar selección' : '⚙️ Elegir organizaciones'}</button>
         <button class="btn btn-primary" id="my-act-new">+ Nueva actividad</button>
       </div>
+    </div>
+    <div id="my-act-prefs" style="${prefsOpen ? '' : 'display:none;'} margin-bottom:14px;">
+      <div class="hint-box" style="margin-bottom:10px;">
+        Tu propia organización (${esc(state.user.organization ? state.user.organization.name : '')}) siempre aparece acá. Marca además qué otras organizaciones te interesa seguir — por ejemplo, si tienes hijos en otra organización.
+      </div>
+      <div id="my-act-org-checks" style="display:flex; flex-wrap:wrap; gap:8px 16px; padding:4px 2px; margin-bottom:12px;">
+        ${otherOrgs.map((o) => `
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
+            <input type="checkbox" name="followOrg" value="${o.id}" ${followedIds.includes(o.id) ? 'checked' : ''} />
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+          </label>`).join('')}
+      </div>
+      <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
     </div>
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
@@ -1078,7 +1117,7 @@ async function renderMyActivitiesLeaderView() {
               <span class="org-dot" style="background:${it.organizationColor}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                <div class="lc-sub">${it.kind === 'interview' ? `Te entrevista ${esc(it.organizationName)}${it.interviewerName ? ' · ' + esc(it.interviewerName) : ''}` : ''}${it.location ? `${it.kind === 'interview' ? ' · ' : ''}<span class="lc-location">📍 ${esc(it.location)}</span>` : ''}${it.kind === 'event' && it.description ? (it.location ? ' · ' : '') + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                <div class="lc-sub">${myActLeaderSubHtml(it, myOrgId)}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
@@ -1088,6 +1127,20 @@ async function renderMyActivitiesLeaderView() {
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
+  document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
+    state.myActivitiesPrefsOpen = !prefsOpen;
+    renderMyActivitiesLeaderView();
+  });
+  document.getElementById('my-act-prefs-save').addEventListener('click', async () => {
+    const checked = Array.from(document.querySelectorAll('#my-act-org-checks input[type="checkbox"]:checked')).map((cb) => Number(cb.value));
+    try {
+      const updatedUser = await api('/auth/me/followed-organizations', { method: 'PUT', body: { followedOrganizationIds: checked } });
+      state.user = updatedUser;
+      state.myActivitiesPrefsOpen = false;
+      toast('Preferencias guardadas');
+      await renderMyActivitiesLeaderView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
   container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
     const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
     openItemModal(it, it.kind);

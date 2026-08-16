@@ -27,27 +27,24 @@ async function regenerateCalendarToken(userId) {
 }
 
 // Misma lógica que "Mis Actividades" en el cliente (renderMyActivitiesLeaderView
-// / renderMyActivitiesMemberView): para Líder, las actividades de su propia
-// organización más las de todo el Barrio y las que la incluyen como
-// "involucrada"; para Miembro (y Administrador, que usa la misma vista),
-// las de las organizaciones que sigue más las de todo el Barrio. En ambos
-// casos, además, las entrevistas en las que a la propia persona la
-// entrevistan. Se respeta el filtro de privacidad de Reuniones.
+// / renderMyActivitiesMemberView): las actividades de todo el Barrio siempre
+// aparecen; un Líder además ve SIEMPRE las de su propia organización (no es
+// opcional, es la que administra); y cualquiera (Líder o Miembro) puede
+// además "seguir" otras organizaciones — por ejemplo, un líder de Cuórum de
+// Élderes con hijos en Primaria puede sumar Primaria a su listado, igual que
+// puede hacerlo un Miembro. En ambos casos, además, las entrevistas en las
+// que a la propia persona la entrevistan. Se respeta el filtro de
+// privacidad de Reuniones.
 function myActivitiesItems(user, data) {
   let events = data.events.filter((e) => canSeeMeeting(user, e));
-  if (user.role === 'leader') {
-    const myOrgId = Number(user.organizationId);
-    events = events.filter(
-      (ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity
-        || (ev.involvedOrganizationIds || []).map(Number).includes(myOrgId),
-    );
-  } else {
-    const followedIds = (user.followedOrganizationIds || []).map(Number);
-    events = events.filter(
-      (ev) => ev.isWardActivity || followedIds.includes(Number(ev.organizationId))
-        || (ev.involvedOrganizationIds || []).map(Number).some((id) => followedIds.includes(id)),
-    );
-  }
+  const myOrgId = user.role === 'leader' ? Number(user.organizationId) : null;
+  const followedIds = (user.followedOrganizationIds || []).map(Number);
+  events = events.filter(
+    (ev) => ev.isWardActivity
+      || (myOrgId !== null && Number(ev.organizationId) === myOrgId)
+      || followedIds.includes(Number(ev.organizationId))
+      || (ev.involvedOrganizationIds || []).map(Number).some((id) => id === myOrgId || followedIds.includes(id)),
+  );
   const myInterviews = data.interviews.filter((iv) => Number(iv.memberUserId) === Number(user.id));
 
   const orgName = (id) => data.organizations.find((o) => o.id === Number(id))?.name || '';
