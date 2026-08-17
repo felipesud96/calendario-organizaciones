@@ -153,6 +153,24 @@ export function registerStatsRoutes(router) {
       bottomActivity = withPct.reduce((worst, x) => (x.pct < worst.pct ? x : worst), withPct[0]);
     }
 
+    // Evolución mensual del % de asistencia (para el mini-gráfico de
+    // tendencia del Panel de Control): un punto por mes del año
+    // seleccionado, promediado con el mismo criterio que overallSuccessPct
+    // (suma de asistencia real / suma de asistencia esperada, no un
+    // promedio simple de porcentajes — así un mes con una sola actividad
+    // chica no pesa igual que uno con varias grandes). `pct: null` cuando
+    // el mes no tiene ninguna actividad evaluada todavía, para que el
+    // frontend pueda mostrar un hueco en vez de un 0% engañoso.
+    const monthlyAttendance = Array.from({ length: 12 }, (_, i) => {
+      const monthNum = i + 1;
+      const monthPrefix = `${year}-${String(monthNum).padStart(2, '0')}`;
+      const monthItems = withPct.filter((x) => x.date.startsWith(monthPrefix));
+      if (!monthItems.length) return { month: monthNum, pct: null, count: 0 };
+      const expSum = monthItems.reduce((s, x) => s + x.expectedAttendance, 0);
+      const actSum = monthItems.reduce((s, x) => s + x.actualAttendance, 0);
+      return { month: monthNum, pct: expSum > 0 ? Math.round((actSum / expSum) * 1000) / 10 : null, count: monthItems.length };
+    });
+
     sendJson(res, 200, {
       year,
       years: [...yearsWithData].sort((a, b) => b - a),
@@ -169,6 +187,7 @@ export function registerStatsRoutes(router) {
       // no hay nada raro en eso, no hace falta forzar que sean distintas.
       topActivity,
       bottomActivity,
+      monthlyAttendance,
     });
   }));
 

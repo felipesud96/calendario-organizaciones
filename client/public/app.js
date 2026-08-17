@@ -91,6 +91,59 @@ function wireEmptyStateCta(id, fn) {
   if (btn) btn.addEventListener('click', fn);
 }
 
+// "Mostrar más opciones": colapsa los campos menos usados de un formulario
+// (tipo Reunión, actividad de todo el Barrio, otras organizaciones
+// involucradas, repetición) detrás de un toggle, para que el formulario no
+// abrume de entrada con campos que la mayoría de las veces no hacen falta.
+// `startOpen` lo deja expandido desde el principio cuando el registro que se
+// está editando ya tiene algo cargado ahí (ver hasAdvancedData en cada
+// caller) — así nunca se esconde una configuración que la persona ya eligió.
+function advancedOptionsToggleHtml(idPrefix, startOpen) {
+  return `<button type="button" class="btn btn-ghost btn-sm advanced-toggle-btn" id="${idPrefix}-advanced-toggle">${startOpen ? '▴ Ocultar opciones avanzadas' : '▾ Mostrar más opciones (tipo, otras organizaciones, repetición…)'}</button>`;
+}
+function wireAdvancedOptionsToggle(idPrefix) {
+  const toggle = document.getElementById(`${idPrefix}-advanced-toggle`);
+  const panel = document.getElementById(`${idPrefix}-advanced-fields`);
+  if (!toggle || !panel) return;
+  toggle.addEventListener('click', () => {
+    const nowOpen = panel.style.display === 'none';
+    panel.style.display = nowOpen ? '' : 'none';
+    toggle.textContent = nowOpen ? '▴ Ocultar opciones avanzadas' : '▾ Mostrar más opciones (tipo, otras organizaciones, repetición…)';
+  });
+}
+
+// Skeleton loaders: en vez de dejar un simple texto "Cargando…" mientras se
+// espera la respuesta del servidor, se muestra una vista previa animada con
+// la FORMA aproximada del contenido real (tarjetas, título, subtítulo) —
+// se percibe más rápido y evita el "salto" brusco cuando llega la data.
+function skeletonCardsHtml(count = 3) {
+  return `<div class="card-list" aria-hidden="true">${Array.from({ length: count }, () => `
+    <div class="list-card skeleton-card">
+      <div class="lc-main">
+        <div class="skeleton-line" style="width:${55 + Math.round(Math.random() * 20)}%; height:14px;"></div>
+        <div class="skeleton-line" style="width:${30 + Math.round(Math.random() * 20)}%; height:11px; margin-top:8px;"></div>
+      </div>
+    </div>`).join('')}</div>`;
+}
+function skeletonStatsHtml(count = 4) {
+  return `<div class="stats-cards" style="margin-bottom:22px;" aria-hidden="true">${Array.from({ length: count }, () => `
+    <div class="stat-card">
+      <div class="skeleton-line" style="width:70%; height:10px;"></div>
+      <div class="skeleton-line" style="width:40%; height:22px; margin-top:10px;"></div>
+    </div>`).join('')}</div>`;
+}
+// Skeleton de una vista completa: título fijo (se sabe de entrada, no hace
+// falta animarlo) + subtítulo y contenido animados. `stats` agrega una fila
+// de tarjetas-resumen arriba de las tarjetas de lista (para vistas tipo
+// Panel de Obispado que muestran números destacados primero).
+function skeletonViewHtml(title, { cards = 3, stats = 0 } = {}) {
+  return `
+    <div class="section-header"><div><h2>${esc(title)}</h2><p class="skeleton-line" style="width:130px; height:11px; display:inline-block;"></p></div></div>
+    ${stats ? skeletonStatsHtml(stats) : ''}
+    ${skeletonCardsHtml(cards)}
+  `;
+}
+
 // Corta un título largo a `max` caracteres + "…" para que quepa en las
 // "pastillas" angostas del calendario (el título completo sigue disponible
 // en el tooltip y en el detalle al hacer clic).
@@ -522,6 +575,7 @@ function setToken(token) {
 }
 
 async function boot() {
+  wireOfflineBanner();
   if (!state.token) { renderLogin(); return; }
   try {
     state.user = await api('/auth/me');
@@ -533,6 +587,19 @@ async function boot() {
     setToken(null);
     renderLogin();
   }
+}
+
+// Banner discreto que avisa cuando el navegador pierde la conexión (por
+// ejemplo, en una sala sin buena señal) — así la persona no se pregunta por
+// qué un guardado no funcionó. navigator.onLine ya refleja el estado actual
+// al cargar la página, así que el banner arranca visible si corresponde.
+function wireOfflineBanner() {
+  const banner = document.getElementById('offline-banner');
+  if (!banner) return;
+  const update = () => { banner.style.display = navigator.onLine ? 'none' : 'block'; };
+  window.addEventListener('online', () => { update(); toast('Conexión recuperada'); });
+  window.addEventListener('offline', update);
+  update();
 }
 
 // ---------------- Recorrido guiado (primera vez) ----------------
@@ -726,7 +793,7 @@ function toggleNotifPanel(forceOpen) {
 async function renderNotifPanel() {
   const el = document.getElementById('notif-results');
   if (!el) return;
-  el.innerHTML = '<div class="search-hint">Cargando…</div>';
+  el.innerHTML = skeletonCardsHtml(2);
   let data;
   try { data = await api('/notifications/summary'); } catch (e) { el.innerHTML = '<div class="search-hint">No se pudo cargar</div>'; return; }
   state.notifCache = data;
@@ -1076,6 +1143,7 @@ function render() {
     </div>
     <main class="view" id="view-root"></main>
     <div id="modal-root"></div>
+    <div id="confirm-root"></div>
   `;
   document.getElementById('logout-btn').addEventListener('click', logout);
   root.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -1188,10 +1256,18 @@ async function renderCalendarView() {
     cellsHtml += `
       <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
         <div class="cal-daynum">${cellDate.getDate()}</div>
-        ${visible.map((it) => `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}">
+        ${visible.map((it) => {
+          // Solo se puede arrastrar una actividad real (no entrevistas
+          // privadas ni lo sincronizado de Estaca, que es de solo lectura) y
+          // solo si la persona tiene permiso para editarla — mismo criterio
+          // que decide si al hacer clic se abre el formulario de editar o la
+          // ficha de solo lectura (ver openItemModal).
+          const draggableEvent = it.kind === 'event' && canEditEventsFor(it.organizationId);
+          return `
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''} ${draggableEvent ? 'cal-event-draggable' : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" ${draggableEvent ? 'draggable="true"' : ''} title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}${draggableEvent ? ' (arrástrala a otro día para moverla)' : ''}">
             ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it))}${esc(truncateTitle(it.title))}
-          </button>`).join('')}
+          </button>`;
+        }).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
       </div>`;
   }
@@ -1289,6 +1365,7 @@ async function renderCalendarView() {
       openReadOnlyModal(state.stakeEvents.find((s) => s.id === Number(btn.dataset.id)), 'stake');
     }
   }));
+  wireCalendarDragAndDrop(container);
   container.querySelectorAll('[data-more]').forEach((btn) => btn.addEventListener('click', () => openDayModal(btn.dataset.more)));
   document.getElementById('cal-view-month').addEventListener('click', () => { state.calViewMode = 'month'; renderCalendarView(); });
   document.getElementById('cal-view-agenda').addEventListener('click', () => { state.calViewMode = 'agenda'; renderCalendarView(); });
@@ -1304,6 +1381,70 @@ async function renderCalendarView() {
 
   wireStakeStatusBar();
   if (state.miniCalOpen) renderMiniCalPanel();
+}
+
+// ---------------- Arrastrar y soltar una actividad a otro día ----------------
+// Solo en la vista de mes (la de Agenda no tiene celdas de día) y solo para
+// actividades reales editables (ver draggableEvent más arriba) — entrevistas,
+// reuniones que no son propias, y lo sincronizado de Estaca no se pueden
+// arrastrar. Mover así es equivalente a abrir el formulario de editar y
+// cambiar solo la fecha: pasa por la misma alerta de choque (con otra
+// organización, o con Estaca) antes de guardar.
+function wireCalendarDragAndDrop(container) {
+  container.querySelectorAll('.cal-event-draggable').forEach((btn) => {
+    btn.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', btn.dataset.id);
+      e.dataTransfer.effectAllowed = 'move';
+      btn.classList.add('dragging');
+    });
+    btn.addEventListener('dragend', () => btn.classList.remove('dragging'));
+  });
+  container.querySelectorAll('.cal-cell').forEach((cell) => {
+    cell.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer.types.includes('text/plain')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      cell.classList.add('drag-over');
+    });
+    cell.addEventListener('dragleave', (e) => {
+      if (!cell.contains(e.relatedTarget)) cell.classList.remove('drag-over');
+    });
+    cell.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      cell.classList.remove('drag-over');
+      const id = Number(e.dataTransfer.getData('text/plain'));
+      if (!id) return;
+      const item = state.events.find((ev) => ev.id === id);
+      if (!item) return;
+      await moveEventToDate(item, cell.dataset.date);
+    });
+  });
+}
+
+async function moveEventToDate(item, newDate) {
+  if (!newDate || item.date === newDate) return;
+  const conflicts = await findConflictingActivities({ ...item, date: newDate }, item.id);
+  if (conflicts.length) {
+    const list = conflicts.map((c) => `• ${c.organizationName} — ${c.kind === 'interview' ? 'ocupada por una entrevista (privada)' : esc(c.title || '')} · ${fmtTime(c.startTime)}${c.endTime ? ' - ' + fmtTime(c.endTime) : ''}`).join('\n');
+    const ok = await confirmModal(`Al moverla al ${fmtDateHuman(newDate)} choca con otra organización:\n\n${list}\n\n¿Moverla de todas formas?`, { title: 'Posible choque de horario/lugar', confirmText: 'Mover de todas formas' });
+    if (!ok) return;
+  }
+  const doMove = async (overrideStakeConflict) => {
+    try {
+      await api(`/events/${item.id}`, { method: 'PUT', body: overrideStakeConflict ? { date: newDate, overrideStakeConflict: true } : { date: newDate } });
+      toast(`Actividad movida al ${fmtDateHuman(newDate)}`);
+      await refreshAfterEventChange();
+    } catch (e) {
+      if (!overrideStakeConflict && e.data?.stakeConflicts?.length && e.data?.canOverride) {
+        const fechaTxt = e.data.conflictDate ? ` (fecha ${e.data.conflictDate})` : '';
+        const ok2 = await confirmModal(`🏛️ Choca con una actividad de Estaca${fechaTxt}. ¿Autorizar y moverla de todas formas como líder de Obispado?`, { title: 'Choque con Estaca', confirmText: 'Autorizar y mover' });
+        if (ok2) await doMove(true);
+      } else {
+        toast(e.message, 'error');
+      }
+    }
+  };
+  await doMove(false);
 }
 
 // ---------------- Mini calendario emergente para "Ir a fecha" ----------------
@@ -1458,6 +1599,57 @@ function openDayModal(iso) {
 
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
+// Reemplaza al confirm() nativo del navegador (que se ve distinto en cada
+// sistema operativo y no se puede estilizar) por un modal propio, con el
+// mismo lenguaje visual del resto de la app. Vive en su propio contenedor
+// #confirm-root (no en #modal-root) para poder abrirse ENCIMA de un modal
+// que ya esté abierto (por ejemplo, el botón "Eliminar" dentro del modal de
+// editar una actividad) sin destruir ese modal de fondo — al cancelar, el
+// modal original sigue intacto tal como estaba.
+function confirmModal(message, opts = {}) {
+  const { title = 'Confirmar', confirmText = 'Confirmar', cancelText = 'Cancelar', danger = false } = opts;
+  return new Promise((resolve) => {
+    const root = document.getElementById('confirm-root');
+    root.innerHTML = `
+      <div class="modal-backdrop confirm-modal-backdrop" id="confirm-backdrop">
+        <div class="modal confirm-modal">
+          <div class="modal-header"><h3>${esc(title)}</h3></div>
+          <div class="modal-body"><p class="confirm-modal-message">${esc(message)}</p></div>
+          <div class="modal-footer" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost" id="confirm-cancel">${esc(cancelText)}</button>
+            <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-ok">${esc(confirmText)}</button>
+          </div>
+        </div>
+      </div>`;
+    const cleanup = (result) => { root.innerHTML = ''; resolve(result); };
+    document.getElementById('confirm-cancel').addEventListener('click', () => cleanup(false));
+    document.getElementById('confirm-ok').addEventListener('click', () => cleanup(true));
+    document.getElementById('confirm-backdrop').addEventListener('click', (e) => { if (e.target.id === 'confirm-backdrop') cleanup(false); });
+    document.getElementById('confirm-ok').focus();
+  });
+}
+
+// Advierte antes de cerrar un modal si su formulario tiene cambios sin
+// guardar, para que un clic accidental en la X, el fondo oscuro o
+// "Cancelar" no borre lo que la persona ya escribió. Se llama con el
+// <form> del modal justo después de armarlo; devuelve una función que hay
+// que usar en los 3 cierres de siempre (botón X, fondo, botón Cancelar) EN
+// VEZ de closeModal directo. Si el formulario está limpio, cierra al tiro
+// — no agrega fricción a quien no cambió nada.
+function wireUnsavedChangesGuard(formEl) {
+  if (!formEl) return closeModal;
+  let dirty = false;
+  formEl.addEventListener('input', () => { dirty = true; });
+  formEl.addEventListener('change', () => { dirty = true; });
+  return async () => {
+    if (dirty) {
+      const ok = await confirmModal('Tienes cambios sin guardar en este formulario. ¿Cerrar de todas formas?', { title: 'Cambios sin guardar', confirmText: 'Cerrar sin guardar', danger: true });
+      if (!ok) return;
+    }
+    closeModal();
+  };
+}
+
 // ---------------- Exportar "Mis Actividades" a un calendario personal ----------------
 // Genera (o reutiliza) un enlace .ics personal y privado con el mismo
 // contenido que "Mis Actividades", para que cada persona lo agregue como
@@ -1517,7 +1709,7 @@ async function openCalendarExportModal() {
       }
     });
     document.getElementById('cal-regen-btn').addEventListener('click', async () => {
-      if (!confirm('¿Generar un enlace nuevo? El enlace anterior deja de funcionar — vas a tener que actualizarlo en tu calendario personal.')) return;
+      if (!(await confirmModal('¿Generar un enlace nuevo? El enlace anterior deja de funcionar — vas a tener que actualizarlo en tu calendario personal.', { confirmText: 'Generar enlace nuevo' }))) return;
       try {
         const { token: newToken } = await api('/auth/me/calendar-token/regenerate', { method: 'POST' });
         renderLink(newToken);
@@ -1669,7 +1861,7 @@ function myActLeaderSubHtml(it, myOrgId) {
 
 async function renderMyActivitiesLeaderView() {
   const container = document.getElementById('view-root');
-  container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
+  container.innerHTML = skeletonViewHtml('Mis Actividades', { cards: 4 });
   let events, interviews;
   try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
   // Si otra organización te entrevista a TI (por ejemplo, el líder de
@@ -1766,7 +1958,7 @@ async function renderMyActivitiesLeaderView() {
 
 async function renderMyActivitiesMemberView() {
   const container = document.getElementById('view-root');
-  container.innerHTML = `<div class="section-header"><div><h2>Mis Actividades</h2><p>Cargando…</p></div></div>`;
+  container.innerHTML = skeletonViewHtml('Mis Actividades', { cards: 4 });
   let events, myInterviews;
   try { events = await api('/events'); } catch (e) { toast(e.message, 'error'); events = []; }
   // Si algún líder te agendó una entrevista eligiéndote de la lista de
@@ -1854,6 +2046,13 @@ function openEventModal(existing = null) {
   const options = editableOrgOptions('event');
   if (!existing && options.length === 0) { toast('No tienes una organización asignada para crear actividades', 'error'); return; }
   const isEdit = !!existing;
+  // Si ya trae algo cargado en un campo "avanzado" (es una Reunión, es de
+  // todo el Barrio, o ya tiene organizaciones involucradas), la sección
+  // arranca abierta — para no esconder de entrada una configuración que la
+  // persona ya eligió y quizás necesite volver a revisar o cambiar.
+  const hasAdvancedData = !!existing?.isMeeting || !!existing?.isWardActivity
+    || (existing?.involvedOrganizationIds && existing.involvedOrganizationIds.length > 0)
+    || (existing?.involvedOrganizations && existing.involvedOrganizations.length > 0);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ev-modal-backdrop">
@@ -1869,12 +2068,16 @@ function openEventModal(existing = null) {
               </select>
               ${options.length === 1 ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
-            ${eventTypeFieldHtml('ev', !!existing?.isMeeting)}
-            ${wardActivityFieldHtml('ev', !!existing?.isWardActivity)}
-            ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
             <div class="field">
               <label>Descripción de la actividad</label>
               <input type="text" name="title" required placeholder="Ej: Reunión de presidencia de Cuórum" value="${esc(existing?.title || '')}" />
+            </div>
+            ${advancedOptionsToggleHtml('ev', hasAdvancedData)}
+            <div id="ev-advanced-fields" style="${hasAdvancedData ? '' : 'display:none;'}">
+              ${eventTypeFieldHtml('ev', !!existing?.isMeeting)}
+              ${wardActivityFieldHtml('ev', !!existing?.isWardActivity)}
+              ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
+              ${!isEdit ? recurrenceFieldHtml('ev') : ''}
             </div>
             <div class="field">
               <label>Propósito</label>
@@ -1903,7 +2106,6 @@ function openEventModal(existing = null) {
                 <input type="time" name="endTime" value="${existing?.endTime || ''}" />
               </div>
             </div>
-            ${!isEdit ? recurrenceFieldHtml('ev') : ''}
           </form>
         </div>
         <div class="modal-footer">
@@ -1916,11 +2118,12 @@ function openEventModal(existing = null) {
       </div>
     </div>`;
 
-  document.getElementById('ev-modal-close').addEventListener('click', closeModal);
-  document.getElementById('ev-cancel').addEventListener('click', closeModal);
-  document.getElementById('ev-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ev-modal-backdrop') closeModal(); });
+  const evGuardedClose = wireUnsavedChangesGuard(document.getElementById('ev-form'));
+  document.getElementById('ev-modal-close').addEventListener('click', evGuardedClose);
+  document.getElementById('ev-cancel').addEventListener('click', evGuardedClose);
+  document.getElementById('ev-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ev-modal-backdrop') evGuardedClose(); });
   if (isEdit) document.getElementById('ev-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar esta actividad?')) return;
+    if (!(await confirmModal('¿Eliminar esta actividad?', { title: 'Eliminar actividad', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/events/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Actividad eliminada'); await refreshAfterEventChange(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -1950,6 +2153,7 @@ function openEventModal(existing = null) {
   document.querySelectorAll('#ev-involved-orgs input[type="checkbox"]').forEach((cb) => cb.addEventListener('change', resetConflictCheck));
   wireWardActivityField('ev', '#ev-involved-orgs-field', resetConflictCheck);
   if (!isEdit) wireRecurrenceField('ev');
+  wireAdvancedOptionsToggle('ev');
 
   saveBtn.addEventListener('click', async () => {
     if (!form.reportValidity()) return;
@@ -2017,7 +2221,7 @@ function openEventModal(existing = null) {
       // el error y dejarlo sin salida.
       if (e.data?.stakeConflicts?.length && e.data?.canOverride) {
         const fechaTxt = e.data.conflictDate ? ` (fecha ${e.data.conflictDate})` : '';
-        if (confirm(`🏛️ Choca con una actividad de Estaca${fechaTxt}. ¿Autorizar y agendar de todas formas como líder de Obispado?`)) {
+        if (await confirmModal(`🏛️ Choca con una actividad de Estaca${fechaTxt}. ¿Autorizar y agendar de todas formas como líder de Obispado?`, { title: 'Choque con Estaca', confirmText: 'Autorizar y agendar' })) {
           try {
             const body2 = { ...body, overrideStakeConflict: true };
             if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body: body2 });
@@ -2068,7 +2272,7 @@ async function renderInterviewsView() {
   const container = document.getElementById('view-root');
   const seesAll = canViewAllInterviews();
   const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews && (seesAll || o.id === state.user.organizationId));
-  container.innerHTML = `<div class="section-header"><div><h2>Entrevistas</h2><p>Cargando…</p></div></div>`;
+  container.innerHTML = skeletonViewHtml('Entrevistas', { cards: 3 });
   let list;
   try { list = await loadInterviewsPending(); } catch (e) { toast(e.message, 'error'); list = []; }
   // Se pide siempre (esté abierto o no el desplegable) para poder mostrar
@@ -2169,7 +2373,7 @@ function wireInterviewHistoryCards(history) {
   });
   document.querySelectorAll('.iv-history-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar definitivamente este registro del historial? Esta acción no se puede deshacer.')) return;
+      if (!(await confirmModal('¿Eliminar definitivamente este registro del historial? Esta acción no se puede deshacer.', { title: 'Eliminar del historial', confirmText: 'Eliminar', danger: true }))) return;
       try {
         await api(`/interviews/${btn.dataset.id}`, { method: 'DELETE' });
         toast('Registro eliminado del historial');
@@ -2437,16 +2641,17 @@ async function openInterviewModal(existing = null) {
       </div>
     </div>`;
 
-  document.getElementById('iv-modal-close').addEventListener('click', closeModal);
-  document.getElementById('iv-cancel').addEventListener('click', closeModal);
-  document.getElementById('iv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'iv-modal-backdrop') closeModal(); });
+  const ivGuardedClose = wireUnsavedChangesGuard(document.getElementById('iv-form'));
+  document.getElementById('iv-modal-close').addEventListener('click', ivGuardedClose);
+  document.getElementById('iv-cancel').addEventListener('click', ivGuardedClose);
+  document.getElementById('iv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'iv-modal-backdrop') ivGuardedClose(); });
   // Esto borra la entrevista sin dejar registro histórico — pensado para
   // corregir un error al agendar (ej. quedó duplicada). Si la entrevista se
   // agendó bien pero no se pudo hacer (o ya se hizo), conviene cerrar este
   // formulario y usar los botones ✅/❌ de la lista en su lugar, para que el
   // motivo quede guardado en el historial.
   if (isEdit) document.getElementById('iv-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar esta entrevista? Esto la borra por completo, sin dejar registro histórico. Si ya se hizo (o no se pudo hacer), mejor ciérralo y usa ✅/❌ en la lista para que quede en el historial.')) return;
+    if (!(await confirmModal('¿Eliminar esta entrevista? Esto la borra por completo, sin dejar registro histórico. Si ya se hizo (o no se pudo hacer), mejor ciérralo y usa ✅/❌ en la lista para que quede en el historial.', { title: 'Eliminar entrevista', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/interviews/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Entrevista eliminada'); await refreshAfterInterviewChange(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -2564,7 +2769,7 @@ function canOperateOnBudgetCategory(cat) {
 
 async function renderBudgetView() {
   const container = document.getElementById('view-root');
-  container.innerHTML = `<div class="section-header"><div><h2>Presupuesto</h2><p>Cargando…</p></div></div>`;
+  container.innerHTML = skeletonViewHtml('Presupuesto', { cards: 3 });
   let quartersData;
   try { quartersData = await api('/budget/quarters'); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar el presupuesto</div>'; return; }
@@ -2703,7 +2908,7 @@ function wireBudgetCategoryCards(categories) {
       const row = btn.closest('.budget-expense-row');
       const expenseId = Number(row.dataset.expenseId);
       btn.addEventListener('click', async () => {
-        if (!confirm('¿Eliminar este gasto?')) return;
+        if (!(await confirmModal('¿Eliminar este gasto?', { title: 'Eliminar gasto', confirmText: 'Eliminar', danger: true }))) return;
         try { await api(`/budget/expenses/${expenseId}`, { method: 'DELETE' }); toast('Gasto eliminado'); renderBudgetView(); }
         catch (e) { toast(e.message, 'error'); }
       });
@@ -2762,11 +2967,12 @@ async function openBudgetExpenseModal(cat, existing = null) {
         </div>
       </div>
     </div>`;
-  document.getElementById('be-modal-close').addEventListener('click', closeModal);
-  document.getElementById('be-cancel').addEventListener('click', closeModal);
-  document.getElementById('be-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'be-modal-backdrop') closeModal(); });
+  const beGuardedClose = wireUnsavedChangesGuard(document.getElementById('be-form'));
+  document.getElementById('be-modal-close').addEventListener('click', beGuardedClose);
+  document.getElementById('be-cancel').addEventListener('click', beGuardedClose);
+  document.getElementById('be-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'be-modal-backdrop') beGuardedClose(); });
   if (isEdit) document.getElementById('be-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar este gasto?')) return;
+    if (!(await confirmModal('¿Eliminar este gasto?', { title: 'Eliminar gasto', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/budget/expenses/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Gasto eliminado'); renderBudgetView(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -2862,7 +3068,7 @@ async function renderAdminView() {
 // ---------------- Administración: enlace del calendario de Estaca ----------------
 async function renderAdminStake() {
   const content = document.getElementById('admin-content');
-  content.innerHTML = `<p>Cargando…</p>`;
+  content.innerHTML = skeletonCardsHtml(2);
   let sc;
   try { sc = await api('/stake-calendar'); } catch (e) { toast(e.message, 'error'); sc = { url: '', displayName: 'Estaca' }; }
 
@@ -2967,7 +3173,7 @@ async function renderAdminRequests() {
     openApproveModal(items.find((r) => r.id === Number(b.dataset.approve)));
   }));
   content.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm('¿Rechazar y eliminar esta solicitud?')) return;
+    if (!(await confirmModal('¿Rechazar y eliminar esta solicitud?', { title: 'Rechazar solicitud', confirmText: 'Rechazar', danger: true }))) return;
     try { await api(`/registration-requests/${b.dataset.reject}`, { method: 'DELETE' }); toast('Solicitud rechazada'); renderAdminView(); }
     catch (e) { toast(e.message, 'error'); }
   }));
@@ -3063,7 +3269,7 @@ async function renderAdminUsers() {
   document.getElementById('user-new').addEventListener('click', () => openUserModal());
   content.querySelectorAll('[data-edit-user]').forEach((b) => b.addEventListener('click', () => openUserModal(users.find((u) => u.id === Number(b.dataset.editUser)))));
   content.querySelectorAll('[data-del-user]').forEach((b) => b.addEventListener('click', async () => {
-    if (!confirm('¿Eliminar este usuario?')) return;
+    if (!(await confirmModal('¿Eliminar este usuario?', { title: 'Eliminar usuario', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' }); toast('Usuario eliminado'); renderAdminUsers(); }
     catch (e) { toast(e.message, 'error'); }
   }));
@@ -3110,9 +3316,10 @@ function openUserModal(existing = null) {
         </div>
       </div>
     </div>`;
-  document.getElementById('u-modal-close').addEventListener('click', closeModal);
-  document.getElementById('u-cancel').addEventListener('click', closeModal);
-  document.getElementById('u-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'u-modal-backdrop') closeModal(); });
+  const uGuardedClose = wireUnsavedChangesGuard(document.getElementById('u-form'));
+  document.getElementById('u-modal-close').addEventListener('click', uGuardedClose);
+  document.getElementById('u-cancel').addEventListener('click', uGuardedClose);
+  document.getElementById('u-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'u-modal-backdrop') uGuardedClose(); });
   document.getElementById('u-save').addEventListener('click', async () => {
     const form = document.getElementById('u-form');
     if (!form.reportValidity()) return;
@@ -3193,16 +3400,17 @@ function openOrgModal(existing = null) {
         </div>
       </div>
     </div>`;
-  document.getElementById('org-modal-close').addEventListener('click', closeModal);
-  document.getElementById('org-cancel').addEventListener('click', closeModal);
-  document.getElementById('org-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'org-modal-backdrop') closeModal(); });
+  const orgGuardedClose = wireUnsavedChangesGuard(document.getElementById('org-form'));
+  document.getElementById('org-modal-close').addEventListener('click', orgGuardedClose);
+  document.getElementById('org-cancel').addEventListener('click', orgGuardedClose);
+  document.getElementById('org-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'org-modal-backdrop') orgGuardedClose(); });
   document.getElementById('org-swatches').querySelectorAll('.color-swatch').forEach((sw) => sw.addEventListener('click', () => {
     document.querySelectorAll('.color-swatch').forEach((s) => s.classList.remove('selected'));
     sw.classList.add('selected');
     document.getElementById('org-color-input').value = sw.dataset.color;
   }));
   if (isEdit) document.getElementById('org-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar esta organización? Esto no elimina sus actividades existentes.')) return;
+    if (!(await confirmModal('¿Eliminar esta organización? Esto no elimina sus actividades existentes.', { title: 'Eliminar organización', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/organizations/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Organización eliminada'); state.organizations = await api('/organizations'); renderAdminOrgs(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -3249,12 +3457,18 @@ async function renderMeetingsView() {
 
 async function renderMyAssignments() {
   const content = document.getElementById('meetings-content');
-  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  content.innerHTML = skeletonCardsHtml(3);
   let data;
   try { data = await api('/my-assignments'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
   content.innerHTML = data.commitments.length
-    ? `<div class="card-list">${data.commitments.map(assignmentCardHtml).join('')}</div>`
+    ? `
+      <div class="bulk-actions-bar" id="assign-bulk-bar" style="display:none;">
+        <span id="assign-bulk-count"></span>
+        <button type="button" class="btn btn-primary btn-sm" id="assign-bulk-complete">✅ Completar seleccionados</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="assign-bulk-clear">Cancelar</button>
+      </div>
+      <div class="card-list">${data.commitments.map(assignmentCardHtml).join('')}</div>`
     : '<div class="empty-state">No tienes compromisos pendientes 🎉</div>';
   wireAssignmentCards();
 }
@@ -3264,9 +3478,12 @@ function assignmentCardHtml(c) {
   return `
     <div class="list-card assignment-card" data-id="${c.id}" style="align-items:flex-start; flex-direction:column; gap:8px;">
       <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
-        <div class="lc-main">
-          <div class="lc-title">${esc(c.description)}</div>
-          <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+        <div style="display:flex; gap:10px; align-items:flex-start; min-width:0; flex:1;">
+          <input type="checkbox" class="assignment-select-cb" title="Seleccionar" style="margin-top:4px; flex-shrink:0; width:16px; height:16px;" />
+          <div class="lc-main">
+            <div class="lc-title">${esc(c.description)}</div>
+            <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+          </div>
         </div>
         <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
       </div>
@@ -3280,7 +3497,41 @@ function assignmentCardHtml(c) {
     </div>`;
 }
 
+// Barra de acciones masivas: aparece cuando hay al menos un compromiso
+// marcado con su checkbox, y completa todos los seleccionados de una vez
+// (reutiliza el mismo endpoint que el botón individual, uno por uno, para
+// no tener que duplicar la lógica de validación del servidor).
+function wireAssignmentBulkBar() {
+  const bulkBar = document.getElementById('assign-bulk-bar');
+  if (!bulkBar) return;
+  const bulkCount = document.getElementById('assign-bulk-count');
+  const updateBulkBar = () => {
+    const checked = document.querySelectorAll('.assignment-select-cb:checked');
+    bulkBar.style.display = checked.length ? 'flex' : 'none';
+    if (bulkCount) bulkCount.textContent = `${checked.length} seleccionado${checked.length === 1 ? '' : 's'}`;
+  };
+  document.querySelectorAll('.assignment-select-cb').forEach((cb) => cb.addEventListener('change', updateBulkBar));
+  document.getElementById('assign-bulk-clear').addEventListener('click', () => {
+    document.querySelectorAll('.assignment-select-cb:checked').forEach((cb) => { cb.checked = false; });
+    updateBulkBar();
+  });
+  document.getElementById('assign-bulk-complete').addEventListener('click', async () => {
+    const ids = Array.from(document.querySelectorAll('.assignment-select-cb:checked'))
+      .map((cb) => Number(cb.closest('.assignment-card').dataset.id));
+    if (!ids.length) return;
+    if (!(await confirmModal(`¿Marcar ${ids.length} compromiso${ids.length === 1 ? '' : 's'} como completado${ids.length === 1 ? '' : 's'}?`, { title: 'Completar seleccionados', confirmText: 'Completar' }))) return;
+    let okCount = 0;
+    for (const id of ids) {
+      try { await api(`/commitments/${id}/complete`, { method: 'PUT', body: { comment: '' } }); okCount++; }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    if (okCount) toast(`${okCount} compromiso${okCount === 1 ? '' : 's'} completado${okCount === 1 ? '' : 's'}`);
+    await renderMyAssignments();
+  });
+}
+
 function wireAssignmentCards() {
+  wireAssignmentBulkBar();
   document.querySelectorAll('.assignment-card').forEach((card) => {
     const id = Number(card.dataset.id);
     const form = card.querySelector('.assignment-complete-form');
@@ -3302,7 +3553,7 @@ function wireAssignmentCards() {
 
 async function renderMeetingsManage() {
   const content = document.getElementById('meetings-content');
-  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  content.innerHTML = skeletonCardsHtml(3);
   let meetings;
   try { meetings = await api('/meetings'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -3430,9 +3681,10 @@ async function openMeetingModal() {
   document.getElementById('mt-add-commitment').addEventListener('click', addRow);
   addRow();
 
-  document.getElementById('mt-modal-close').addEventListener('click', closeModal);
-  document.getElementById('mt-cancel').addEventListener('click', closeModal);
-  document.getElementById('mt-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'mt-modal-backdrop') closeModal(); });
+  const mtGuardedClose = wireUnsavedChangesGuard(document.getElementById('mt-form'));
+  document.getElementById('mt-modal-close').addEventListener('click', mtGuardedClose);
+  document.getElementById('mt-cancel').addEventListener('click', mtGuardedClose);
+  document.getElementById('mt-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'mt-modal-backdrop') mtGuardedClose(); });
 
   document.getElementById('mt-save').addEventListener('click', async () => {
     const form = document.getElementById('mt-form');
@@ -3493,7 +3745,7 @@ async function openMeetingDetailModal(m) {
   if (canEdit) {
     document.getElementById('md-add-commitment').addEventListener('click', () => openAddCommitmentModal(m));
     document.getElementById('md-archive').addEventListener('click', async () => {
-      if (!confirm('¿Verificar y archivar esta acta? Los compromisos que sigan pendientes quedarán documentados como "no cumplida" y ya no aparecerán en "Mis Asignaciones" de nadie.')) return;
+      if (!(await confirmModal('¿Verificar y archivar esta acta? Los compromisos que sigan pendientes quedarán documentados como "no cumplida" y ya no aparecerán en "Mis Asignaciones" de nadie.', { title: 'Verificar y archivar', confirmText: 'Verificar y archivar' }))) return;
       try {
         await api(`/meetings/${m.id}/archive`, { method: 'PUT' });
         closeModal();
@@ -3536,9 +3788,10 @@ async function openAddCommitmentModal(m) {
         </div>
       </div>
     </div>`;
-  document.getElementById('ac-modal-close').addEventListener('click', closeModal);
-  document.getElementById('ac-cancel').addEventListener('click', closeModal);
-  document.getElementById('ac-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ac-modal-backdrop') closeModal(); });
+  const acGuardedClose = wireUnsavedChangesGuard(document.getElementById('ac-form'));
+  document.getElementById('ac-modal-close').addEventListener('click', acGuardedClose);
+  document.getElementById('ac-cancel').addEventListener('click', acGuardedClose);
+  document.getElementById('ac-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ac-modal-backdrop') acGuardedClose(); });
   document.getElementById('ac-save').addEventListener('click', async () => {
     const form = document.getElementById('ac-form');
     if (!form.reportValidity()) return;
@@ -3583,7 +3836,7 @@ async function renderAssignmentsView() {
 
 async function renderCleaningView() {
   const container = document.getElementById('assignments-content');
-  container.innerHTML = `<p>Cargando…</p>`;
+  container.innerHTML = skeletonCardsHtml(3);
   let shifts;
   try { shifts = await api('/cleaning/shifts'); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -3626,7 +3879,10 @@ function cleaningDateCardHtml(date, entries) {
   return `
     <div class="list-card cleaning-date-card">
       <div class="lc-main" style="width:100%;">
-        <div class="lc-title">🧹 ${esc(fmtDateHuman(date))}</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+          <div class="lc-title">🧹 ${esc(fmtDateHuman(date))}</div>
+          ${entries.length > 1 ? `<button type="button" class="btn btn-ghost btn-sm cs-mark-all-done" data-date="${esc(date)}">✅ Marcar todas Sí fue</button>` : ''}
+        </div>
         <div class="cleaning-family-rows">
           ${entries.map(cleaningFamilyRowHtml).join('')}
         </div>
@@ -3664,7 +3920,7 @@ function wireCleaningShiftCards() {
       });
     });
     row.querySelector('.cs-remove').addEventListener('click', async () => {
-      if (!confirm('¿Quitar esta familia del turno?')) return;
+      if (!(await confirmModal('¿Quitar esta familia del turno?', { title: 'Quitar familia', confirmText: 'Quitar', danger: true }))) return;
       try {
         await api(`/cleaning/shifts/${id}`, { method: 'DELETE' });
         toast('Familia quitada del turno');
@@ -3674,6 +3930,21 @@ function wireCleaningShiftCards() {
   });
   document.querySelectorAll('.cs-add-family').forEach((btn) => {
     btn.addEventListener('click', () => openCleaningShiftModal(btn.dataset.date));
+  });
+  document.querySelectorAll('.cs-mark-all-done').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.cleaning-date-card');
+      const ids = Array.from(card.querySelectorAll('.cleaning-family-row')).map((r) => Number(r.dataset.id));
+      if (!ids.length) return;
+      if (!(await confirmModal(`¿Marcar las ${ids.length} familias de este turno como "Sí fue"?`, { title: 'Marcar turno completo', confirmText: 'Marcar todas' }))) return;
+      let okCount = 0;
+      for (const id of ids) {
+        try { await api(`/cleaning/shifts/${id}/mark`, { method: 'PUT', body: { status: 'done' } }); okCount++; }
+        catch (e) { toast(e.message, 'error'); }
+      }
+      toast(`Turno actualizado (${okCount}/${ids.length})`);
+      await renderCleaningView();
+    });
   });
 }
 
@@ -3715,9 +3986,10 @@ async function openCleaningShiftModal(presetDate) {
         </div>
       </div>
     </div>`;
-  document.getElementById('cs-modal-close').addEventListener('click', closeModal);
-  document.getElementById('cs-cancel').addEventListener('click', closeModal);
-  document.getElementById('cs-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'cs-modal-backdrop') closeModal(); });
+  const csGuardedClose = wireUnsavedChangesGuard(document.getElementById('cs-form'));
+  document.getElementById('cs-modal-close').addEventListener('click', csGuardedClose);
+  document.getElementById('cs-cancel').addEventListener('click', csGuardedClose);
+  document.getElementById('cs-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'cs-modal-backdrop') csGuardedClose(); });
 
   const familyRowHtml = () => `
     <div class="family-row">
@@ -3809,7 +4081,7 @@ async function openCleaningShiftModal(presetDate) {
 // no se vaya llenando de domingos que ya pasaron hace tiempo.
 async function renderTalksView() {
   const container = document.getElementById('assignments-content');
-  container.innerHTML = `<p>Cargando…</p>`;
+  container.innerHTML = skeletonCardsHtml(3);
   let talks;
   try { talks = await api('/talks'); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -3928,7 +4200,7 @@ function wireTalkCards(talks) {
     });
     const removeBtn = row.querySelector('.tk-remove');
     if (removeBtn) removeBtn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar este registro de discurso?')) return;
+      if (!(await confirmModal('¿Eliminar este registro de discurso?', { title: 'Eliminar discurso', confirmText: 'Eliminar', danger: true }))) return;
       try {
         await api(`/talks/${id}`, { method: 'DELETE' });
         toast('Discurso eliminado');
@@ -3982,9 +4254,10 @@ async function openTalkModal(presetDate) {
         </div>
       </div>
     </div>`;
-  document.getElementById('tk-modal-close').addEventListener('click', closeModal);
-  document.getElementById('tk-cancel').addEventListener('click', closeModal);
-  document.getElementById('tk-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tk-modal-backdrop') closeModal(); });
+  const tkGuardedClose = wireUnsavedChangesGuard(document.getElementById('tk-form'));
+  document.getElementById('tk-modal-close').addEventListener('click', tkGuardedClose);
+  document.getElementById('tk-cancel').addEventListener('click', tkGuardedClose);
+  document.getElementById('tk-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tk-modal-backdrop') tkGuardedClose(); });
 
   const talkSpeakerRowHtml = (rowId) => `
     <div class="family-row" data-row-id="${rowId}">
@@ -4096,11 +4369,12 @@ function openTalkEditModal(talk) {
         </div>
       </div>
     </div>`;
-  document.getElementById('tke-modal-close').addEventListener('click', closeModal);
-  document.getElementById('tke-cancel').addEventListener('click', closeModal);
-  document.getElementById('tke-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tke-modal-backdrop') closeModal(); });
+  const tkeGuardedClose = wireUnsavedChangesGuard(document.getElementById('tke-form'));
+  document.getElementById('tke-modal-close').addEventListener('click', tkeGuardedClose);
+  document.getElementById('tke-cancel').addEventListener('click', tkeGuardedClose);
+  document.getElementById('tke-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tke-modal-backdrop') tkeGuardedClose(); });
   document.getElementById('tke-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar este registro de discurso?')) return;
+    if (!(await confirmModal('¿Eliminar este registro de discurso?', { title: 'Eliminar discurso', confirmText: 'Eliminar', danger: true }))) return;
     try {
       await api(`/talks/${talk.id}`, { method: 'DELETE' });
       closeModal();
@@ -4151,7 +4425,7 @@ async function renderStatsView() {
 
 async function renderStatsPending() {
   const content = document.getElementById('stats-content');
-  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  content.innerHTML = skeletonCardsHtml(3);
   let items;
   try { items = await api('/stats/pending-evaluations'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -4201,9 +4475,10 @@ async function openEvaluationModal(ev) {
         </div>
       </div>
     </div>`;
-  document.getElementById('pe-modal-close').addEventListener('click', closeModal);
-  document.getElementById('pe-cancel').addEventListener('click', closeModal);
-  document.getElementById('pe-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'pe-modal-backdrop') closeModal(); });
+  const peGuardedClose = wireUnsavedChangesGuard(document.getElementById('pe-form'));
+  document.getElementById('pe-modal-close').addEventListener('click', peGuardedClose);
+  document.getElementById('pe-cancel').addEventListener('click', peGuardedClose);
+  document.getElementById('pe-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'pe-modal-backdrop') peGuardedClose(); });
   document.getElementById('pe-save').addEventListener('click', async () => {
     const form = document.getElementById('pe-form');
     if (!form.reportValidity()) return;
@@ -4219,9 +4494,62 @@ async function openEvaluationModal(ev) {
   });
 }
 
+const MONTH_ABBR = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+// Mini-gráfico de tendencia (sparkline) del % de asistencia mes a mes, para
+// ver de un vistazo si el año va mejorando o empeorando en vez de tener que
+// comparar 12 números sueltos. Es un SVG armado a mano (sin librería de
+// gráficos — la app no tiene build step ni dependencias) que salta los
+// meses sin ninguna actividad evaluada (`pct: null`) en vez de dibujarlos
+// como 0%, que sería engañoso. La línea punteada gris marca el 100% como
+// referencia rápida de "asistencia completa".
+function attendanceSparklineHtml(monthlyAttendance) {
+  const withData = (monthlyAttendance || []).filter((m) => m.pct !== null);
+  if (!withData.length) {
+    return `<div class="hint-box" style="margin-top:0;">Todavía no hay actividades evaluadas este año para mostrar la tendencia mensual.</div>`;
+  }
+  const h = 70, padY = 10;
+  const usableH = h - padY * 2;
+  const maxPct = Math.max(100, ...withData.map((m) => m.pct));
+  // x en porcentaje (0-100) del ancho del contenedor — así los puntitos,
+  // que son divs HTML posicionados con `left: %`, coinciden exactamente con
+  // el trazo del SVG sin importar el ancho real de la pantalla. Van
+  // superpuestos como HTML (no <circle> del SVG) a propósito: un SVG con
+  // viewBox estirado de forma no uniforme (ancho muy distinto al alto)
+  // deja los círculos ovalados — un div con border-radius:50% no tiene ese
+  // problema porque nunca se estira, solo se reposiciona.
+  const xPct = (i) => (i / 11) * 100;
+  const yFor = (pct) => padY + usableH - (usableH * pct) / maxPct;
+
+  let pathParts = [];
+  let drawing = false;
+  monthlyAttendance.forEach((m, i) => {
+    if (m.pct === null) { drawing = false; return; }
+    pathParts.push(`${drawing ? 'L' : 'M'}${xPct(i).toFixed(2)},${yFor(m.pct).toFixed(1)}`);
+    drawing = true;
+  });
+
+  const dotsHtml = monthlyAttendance.map((m, i) => {
+    if (m.pct === null) return '';
+    return `<div class="sparkline-dot" style="left:${xPct(i).toFixed(2)}%; top:${yFor(m.pct).toFixed(1)}px;" title="${MONTH_ABBR[i]}: ${m.pct}% (${m.count} actividad${m.count === 1 ? '' : 'es'} evaluada${m.count === 1 ? '' : 's'})"></div>`;
+  }).join('');
+
+  return `
+    <div class="sparkline-wrap">
+      <div class="sparkline-plot" style="height:${h}px;">
+        <svg viewBox="0 0 100 ${h}" class="sparkline-svg" preserveAspectRatio="none">
+          <line x1="0" y1="${yFor(100).toFixed(1)}" x2="100" y2="${yFor(100).toFixed(1)}" class="sparkline-baseline" vector-effect="non-scaling-stroke" />
+          <path d="${pathParts.join(' ')}" class="sparkline-path" fill="none" vector-effect="non-scaling-stroke" />
+        </svg>
+        ${dotsHtml}
+      </div>
+      <div class="sparkline-labels">${MONTH_ABBR.map((m) => `<span>${m}</span>`).join('')}</div>
+    </div>`;
+}
+
 async function renderStatsDashboard() {
   const content = document.getElementById('stats-content');
-  content.innerHTML = '<div class="empty-state">Cargando…</div>';
+  content.innerHTML = skeletonCardsHtml(3);
   const params = [];
   if (state.statsYear) params.push(`year=${state.statsYear}`);
   if (state.user.role === 'admin' && state.statsOrgId) params.push(`organizationId=${state.statsOrgId}`);
@@ -4252,6 +4580,8 @@ async function renderStatsDashboard() {
         <div class="stat-card-value">${data.overallSuccessPct !== null ? data.overallSuccessPct + '%' : '—'}</div>
       </div>
     </div>
+    <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>Tendencia mensual de asistencia</strong></div>
+    ${attendanceSparklineHtml(data.monthlyAttendance)}
     <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>Balance del año por Propósito</strong></div>
     <div class="purpose-balance">
       ${purposeEntries.map(([p, v]) => `
@@ -4355,7 +4685,7 @@ async function renderAchievementsBody() {
 
 async function renderAchievementsAllTime() {
   const el = document.getElementById('ach-content');
-  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  el.innerHTML = skeletonCardsHtml(3);
   let data;
   try { data = await api('/stats/rankings'); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -4380,7 +4710,7 @@ async function renderAchievementsAllTime() {
 
 async function renderAchievementsCurrent() {
   const el = document.getElementById('ach-content');
-  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  el.innerHTML = skeletonCardsHtml(3);
   let data;
   try { data = await api(`/achievements/current?period=${state.achPeriod}`); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -4405,7 +4735,7 @@ async function renderAchievementsCurrent() {
 
 async function renderAchievementsHistory() {
   const el = document.getElementById('ach-content');
-  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  el.innerHTML = skeletonCardsHtml(3);
   let awards;
   try { awards = await api(`/achievements/history?period=${state.achPeriod}`); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -4609,7 +4939,7 @@ function rankingMeetingRowHtml(r, i) {
 
 async function renderBishopricPanelView() {
   const container = document.getElementById('view-root');
-  container.innerHTML = `<div class="section-header"><div><h2>Panel de Obispado</h2><p>Cargando…</p></div></div>`;
+  container.innerHTML = skeletonViewHtml('Panel de Obispado', { cards: 2, stats: 4 });
   let data;
   try { data = await api('/dashboard/overview'); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
