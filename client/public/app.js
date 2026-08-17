@@ -710,8 +710,16 @@ function canScheduleInterviewsFor(orgId) {
 function canManageAnyInterviews() {
   return state.user.role === 'admin' || state.user.role === 'leader';
 }
+// El módulo de Entrevistas es solo para el Administrador y los líderes de
+// las organizaciones que sí agendan entrevistas (Obispado, Cuórum de
+// Élderes y Sociedad de Socorro — ver allowsInterviews). Un líder de otra
+// organización (ej. Primaria) no ve esta pestaña en absoluto: si a él lo
+// entrevistan, esa entrevista le aparece igual en "Mis Actividades" (ver
+// canSeeMyActivitiesTab), no hace falta el módulo completo para eso.
 function canSeeInterviewsTab() {
-  return !!state.user && state.user.role !== 'member';
+  if (!state.user) return false;
+  if (state.user.role === 'admin') return true;
+  return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.allowsInterviews);
 }
 function canSeeMyActivitiesTab() {
   return !!state.user && (state.user.role === 'leader' || state.user.role === 'member');
