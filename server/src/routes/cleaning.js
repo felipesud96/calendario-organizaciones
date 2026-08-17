@@ -32,6 +32,27 @@ function familyStats(data, familyId) {
   return { timesDone, lastDoneDate };
 }
 
+// Reutilizado por routes/stats.js (Panel de "Todo el tiempo") y por
+// achievements.js (Rachas y Logros por período) para el ranking "Familia
+// con más aseo cumplido" — mismo cálculo que ya usa el módulo de Aseo, sin
+// duplicar la lógica (igual que allCategoryRefs en budget.js para el Panel
+// de Obispado). `range` es opcional: si viene ({start, end} en formato ISO,
+// ambas inclusive), solo cuentan los turnos "Sí fue" cuya fecha caiga
+// dentro de ese período — así el mismo cálculo sirve tanto para el
+// histórico de siempre como para "este mes/trimestre/semestre/año".
+export function allFamiliesWithStats(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  return data.families
+    .map((f) => {
+      const done = data.cleaningShifts.filter((s) => s.familyId === f.id && s.status === 'done' && inRange(s.date));
+      const timesDone = done.length;
+      const lastDoneDate = done.length ? done.map((s) => s.date).sort().slice(-1)[0] : null;
+      return { familyId: f.id, familyName: f.name, timesDone, lastDoneDate };
+    })
+    .filter((f) => f.timesDone > 0)
+    .sort((a, b) => b.timesDone - a.timesDone);
+}
+
 function withShiftInfo(shift, data) {
   const family = data.families.find((f) => f.id === Number(shift.familyId));
   return {

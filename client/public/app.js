@@ -1,8 +1,12 @@
-// Calendario de Organizaciones — frontend sin frameworks ni build step.
+// OrganizaSion — frontend sin frameworks ni build step.
 // Todo el estado vive en el objeto `state`; cada cambio relevante llama a render().
 
 const API = '/api';
-const APP_NAME = 'Calendario Barrio Valle Grande';
+const APP_NAME = 'OrganizaSion';
+// Wordmark de dos colores ("Organiza" + "Sion") reutilizado en el login, el
+// registro y la barra superior — ver .brand-organiza/.brand-sion en
+// styles.css, que usan los mismos --ink y --celeste de siempre.
+const BRAND_WORDMARK_HTML = `<span class="brand-organiza">Organiza</span><span class="brand-sion">Sion</span>`;
 const DOW_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_LABELS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const ROLE_LABELS = { admin: 'Administrador', leader: 'Líder', member: 'Miembro' };
@@ -27,9 +31,13 @@ const state = {
   adminUsers: [],
   loading: false,
   meetingsSubtab: 'mine',
+  assignmentsSubtab: 'cleaning',
+  talksHistoryOpen: false, // Discursos: el histórico de meses pasados arranca colapsado
   statsSubtab: 'pending',
   statsYear: null,
   statsOrgId: null,
+  achPeriod: 'month', // Rachas y Logros: mes / quarter / semester / year / allTime
+  achView: 'current', // 'current' (en curso) o 'history' (períodos ya cerrados)
 };
 
 const root = document.getElementById('app');
@@ -558,9 +566,9 @@ function renderLogin() {
   root.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <div class="login-logo">📅</div>
-        <h1>${esc(APP_NAME)}</h1>
-        <p class="subtitle">Actividades y entrevistas de todas las organizaciones en un solo lugar</p>
+        <img class="login-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+        <h1 class="brand-wordmark">${BRAND_WORDMARK_HTML}</h1>
+        <p class="subtitle">Calendario, entrevistas, presupuesto, reuniones, asignaciones y logros de todas las organizaciones en un solo lugar</p>
         <div id="login-error"></div>
         <form id="login-form">
           <div class="field">
@@ -602,8 +610,8 @@ async function renderRegister() {
   root2.innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <div class="login-logo">📅</div>
-        <h1>${esc(APP_NAME)}</h1>
+        <img class="login-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+        <h1 class="brand-wordmark">${BRAND_WORDMARK_HTML}</h1>
         <p class="subtitle">Solicita tu cuenta — un administrador la revisa y aprueba</p>
         <div id="reg-error"></div>
         <div id="reg-success" style="display:none;"></div>
@@ -746,9 +754,10 @@ function canSeeMeetingsTab() {
 function canSeeStatsTab() {
   return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
 }
-// "Aseo del Edificio": estrictamente oculto salvo Administrador o líder de
-// Obispado (reutiliza isObispadoUser, la misma regla que Estaca/Presupuesto).
-function canSeeCleaningTab() {
+// "Asignaciones" (Aseo del Edificio + Discursos): estrictamente oculto
+// salvo Administrador o líder de Obispado (reutiliza isObispadoUser, la
+// misma regla que Estaca/Presupuesto).
+function canSeeAssignmentsTab() {
   return isObispadoUser();
 }
 // Las entrevistas son privadas: cada líder solo ve las de su propia
@@ -770,8 +779,8 @@ function render() {
   root.innerHTML = `
     <div class="topbar">
       <div class="topbar-left">
-        <div class="topbar-logo">📅</div>
-        <div class="topbar-title">${esc(APP_NAME)}<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
+        <img class="topbar-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+        <div class="topbar-title">${BRAND_WORDMARK_HTML}<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
       </div>
       <div class="topbar-right">
         <div class="user-chip">
@@ -790,8 +799,8 @@ function render() {
       ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
       ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
       ${canSeeBudgetTab() ? `<button class="tab-btn ${state.view === 'budget' ? 'active' : ''}" data-view="budget">Presupuesto</button>` : ''}
-      ${canSeeMeetingsTab() ? `<button class="tab-btn ${state.view === 'meetings' ? 'active' : ''}" data-view="meetings">Reuniones</button>` : ''}
-      ${canSeeCleaningTab() ? `<button class="tab-btn ${state.view === 'cleaning' ? 'active' : ''}" data-view="cleaning">Aseo del Edificio</button>` : ''}
+      ${canSeeMeetingsTab() ? `<button class="tab-btn ${state.view === 'meetings' ? 'active' : ''}" data-view="meetings">Reuniones y Consejos</button>` : ''}
+      ${canSeeAssignmentsTab() ? `<button class="tab-btn ${state.view === 'cleaning' ? 'active' : ''}" data-view="cleaning">Asignaciones</button>` : ''}
       ${canSeeStatsTab() ? `<button class="tab-btn ${state.view === 'stats' ? 'active' : ''}" data-view="stats">Estadísticas</button>` : ''}
       ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
     </div>
@@ -810,7 +819,7 @@ function renderCurrentView() {
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
   if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
   if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
-  if (state.view === 'cleaning' && !canSeeCleaningTab()) state.view = 'calendar';
+  if (state.view === 'cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   if (state.view === 'bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
@@ -820,7 +829,7 @@ function renderCurrentView() {
   else if (state.view === 'interviews') renderInterviewsView();
   else if (state.view === 'budget') renderBudgetView();
   else if (state.view === 'meetings') renderMeetingsView();
-  else if (state.view === 'cleaning') renderCleaningView();
+  else if (state.view === 'cleaning') renderAssignmentsView();
   else if (state.view === 'stats') renderStatsView();
   else if (state.view === 'admin') renderAdminView();
 }
@@ -2595,7 +2604,7 @@ function openOrgModal(existing = null) {
 async function renderMeetingsView() {
   const container = document.getElementById('view-root');
   container.innerHTML = `
-    <div class="section-header"><div><h2>Reuniones y Asignaciones</h2><p>Actas de reuniones, compromisos y tus propias asignaciones pendientes</p></div></div>
+    <div class="section-header"><div><h2>Reuniones y Consejos</h2><p>Actas de reuniones, compromisos y tus propias asignaciones pendientes</p></div></div>
     <div class="subtabs">
       <button class="subtab-btn ${state.meetingsSubtab === 'mine' ? 'active' : ''}" data-tab="mine">Mis Asignaciones</button>
       <button class="subtab-btn ${state.meetingsSubtab === 'manage' ? 'active' : ''}" data-tab="manage">Reuniones</button>
@@ -2913,16 +2922,35 @@ async function openAddCommitmentModal(m) {
 }
 
 // ==================================================================
-// ---------------- Aseo del Edificio ----------------
+// ---------------- Asignaciones (Aseo del Edificio + Discursos) ----------------
 // ==================================================================
 // Estrictamente oculto salvo Administrador o líder de Obispado (ver
-// canSeeCleaningTab). Turnos de aseo de los sábados asignados a una
-// familia, con autocompletado (y creación automática la primera vez que se
-// escribe un nombre nuevo) más estadística histórica en vivo.
+// canSeeAssignmentsTab). Dos sub-módulos que comparten el mismo espíritu —
+// "quién quedó asignado a qué, cuándo, y cuántas veces lo ha hecho antes" —
+// por eso viven juntos bajo una sola pestaña en vez de dos aparte:
+//   - Turnos de aseo de los sábados, asignados a una o varias familias.
+//   - Discursos de la reunión sacramental, asignados a una persona.
+// Ambos con autocompletado (y, en Aseo, creación automática la primera vez
+// que se escribe un nombre nuevo) más estadística histórica en vivo.
+
+async function renderAssignmentsView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header"><div><h2>Asignaciones</h2><p>Turnos de aseo y discursos de la reunión sacramental</p></div></div>
+    <div class="subtabs">
+      <button class="subtab-btn ${state.assignmentsSubtab === 'cleaning' ? 'active' : ''}" data-tab="cleaning">Turnos de Aseo</button>
+      <button class="subtab-btn ${state.assignmentsSubtab === 'talks' ? 'active' : ''}" data-tab="talks">Discursos</button>
+    </div>
+    <div id="assignments-content"></div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.assignmentsSubtab = b.dataset.tab; renderAssignmentsView(); }));
+  if (state.assignmentsSubtab === 'cleaning') await renderCleaningView();
+  else await renderTalksView();
+}
 
 async function renderCleaningView() {
-  const container = document.getElementById('view-root');
-  container.innerHTML = `<div class="section-header"><div><h2>Aseo del Edificio</h2><p>Cargando…</p></div></div>`;
+  const container = document.getElementById('assignments-content');
+  container.innerHTML = `<p>Cargando…</p>`;
   let shifts;
   try { shifts = await api('/cleaning/shifts'); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -2934,7 +2962,7 @@ async function renderCleaningView() {
   const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
   container.innerHTML = `
     <div class="section-header">
-      <div><h2>Aseo del Edificio</h2><p>Turnos de aseo de los sábados — cada turno puede tener una o varias familias asignadas</p></div>
+      <div><p>Cada turno puede tener una o varias familias asignadas</p></div>
       <button class="btn btn-primary" id="cs-new">+ Nuevo turno</button>
     </div>
     <div class="card-list">
@@ -2969,7 +2997,7 @@ function cleaningFamilyRowHtml(s) {
     <div class="cleaning-family-row" data-id="${s.id}">
       <div class="cfr-main">
         <div class="cfr-name">${esc(s.familyName)}</div>
-        <div class="cfr-sub">${s.timesDone} vez${s.timesDone === 1 ? '' : 'es'} en total${s.lastDoneDate ? ' · última vez ' + esc(fmtDateHuman(s.lastDoneDate)) : ''}</div>
+        <div class="cfr-sub">${s.timesDone === 1 ? '1 vez' : s.timesDone + ' veces'} en total${s.lastDoneDate ? ' · última vez ' + esc(fmtDateHuman(s.lastDoneDate)) : ''}</div>
       </div>
       ${cleaningStatusPillHtml(s.status)}
       <div class="cfr-actions">
@@ -3121,6 +3149,338 @@ async function openCleaningShiftModal(presetDate) {
   });
 }
 
+// ---------------- Discursos (dentro de Asignaciones) ----------------
+// Igual espíritu que Aseo: un registro es, ante todo, una FECHA (el
+// domingo) a la que se le puede asignar uno o varios discursantes — así el
+// listado queda una tarjeta por domingo, no una fila por discursante. El
+// discursante se elige con el mismo buscador de miembros que usa
+// Entrevistas (memberPickerFieldHtml/wireMemberPicker): si está registrado
+// queda vinculado a su cuenta (para que el historial no se fragmente por
+// variaciones de cómo se escribió el nombre), y si no, el nombre escrito a
+// mano queda tal cual.
+
+// A partir del mes en curso (inclusive) los domingos quedan "vigentes"
+// (editables, con botón para agregar discursante); todo lo de meses ya
+// terminados pasa a un "📜 Ver histórico" colapsado por defecto —
+// consultable igual, pero de solo lectura, para que la pantalla principal
+// no se vaya llenando de domingos que ya pasaron hace tiempo.
+async function renderTalksView() {
+  const container = document.getElementById('assignments-content');
+  container.innerHTML = `<p>Cargando…</p>`;
+  let talks;
+  try { talks = await api('/talks'); }
+  catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const currentMonthKey = toISODate(new Date()).slice(0, 7);
+  const current = talks.filter((t) => t.date.slice(0, 7) >= currentMonthKey);
+  const past = talks.filter((t) => t.date.slice(0, 7) < currentMonthKey);
+
+  const groupByDate = (items) => {
+    const byDate = new Map();
+    items.forEach((t) => { if (!byDate.has(t.date)) byDate.set(t.date, []); byDate.get(t.date).push(t); });
+    return [...byDate.keys()].sort((a, b) => b.localeCompare(a)).map((d) => [d, byDate.get(d)]);
+  };
+  const currentGroups = groupByDate(current);
+  const pastGroups = groupByDate(past);
+
+  container.innerHTML = `
+    <div class="section-header">
+      <div><p>Quién discursó cada domingo en la reunión sacramental, y cuántas veces lo ha hecho</p></div>
+      <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
+    </div>
+    <div class="card-list">
+      ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : '<div class="empty-state">Todavía no hay discursos registrados este mes</div>'}
+    </div>
+    ${pastGroups.length ? `
+      <button type="button" class="btn btn-secondary btn-sm" id="tk-history-toggle" style="margin-top:16px;">
+        ${state.talksHistoryOpen ? '▲ Ocultar histórico' : `📜 Ver histórico (${pastGroups.length} domingo${pastGroups.length === 1 ? '' : 's'} de meses anteriores)`}
+      </button>
+      <div class="card-list" style="margin-top:10px;">
+        ${state.talksHistoryOpen ? pastGroups.map(([d, entries]) => talkDateCardHtml(d, entries, false)).join('') : ''}
+      </div>` : ''}
+  `;
+  document.getElementById('tk-new').addEventListener('click', () => openTalkModal());
+  const historyToggle = document.getElementById('tk-history-toggle');
+  if (historyToggle) historyToggle.addEventListener('click', () => { state.talksHistoryOpen = !state.talksHistoryOpen; renderTalksView(); });
+  wireTalkCards(talks);
+}
+
+// editable=false (histórico) oculta "+ Agregar discursante" y los botones
+// ✏️/🗑️ de cada fila — queda de solo lectura, pero el nombre del
+// discursante se puede seguir apretando para ver su historial completo.
+function talkDateCardHtml(date, entries, editable) {
+  return `
+    <div class="list-card cleaning-date-card">
+      <div class="lc-main" style="width:100%;">
+        <div class="lc-title">🎙️ ${esc(fmtDateHuman(date))}</div>
+        <div class="cleaning-family-rows">
+          ${entries.map((t) => talkEntryRowHtml(t, editable)).join('')}
+        </div>
+        ${editable ? `<button type="button" class="btn btn-secondary btn-sm tk-add-speaker" data-date="${esc(date)}" style="margin-top:10px;">+ Agregar discursante a este domingo</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function talkEntryRowHtml(t, editable) {
+  return `
+    <div class="cleaning-family-row" data-id="${t.id}">
+      <div class="cfr-main">
+        <div class="cfr-name">
+          <span class="clickable-name tk-speaker-name" data-speaker-name="${esc(t.speakerName)}" data-speaker-user-id="${t.speakerUserId || ''}" title="Ver historial completo de discursos">${esc(t.speakerName)}</span>
+          ${t.topic ? ` <span style="font-weight:400; color:var(--ink-soft);">· ${esc(t.topic)}</span>` : ''}
+        </div>
+        <div class="cfr-sub">${t.timesSpoken === 1 ? '1 vez' : t.timesSpoken + ' veces'} en total${t.lastSpokenDate ? ' · última vez ' + esc(fmtDateHuman(t.lastSpokenDate)) : ''}</div>
+      </div>
+      ${editable ? `
+        <div class="cfr-actions">
+          <button type="button" class="btn btn-ghost btn-sm tk-edit" title="Editar">✏️</button>
+          <button type="button" class="btn btn-ghost btn-sm tk-remove" title="Eliminar">🗑️</button>
+        </div>` : ''}
+    </div>`;
+}
+
+function talkSpeakerKey(t) {
+  return t.speakerUserId ? `u:${t.speakerUserId}` : `n:${normalizeSearchText(t.speakerName)}`;
+}
+
+// Detalle de una persona: todo su historial de discursos (fecha + tema),
+// sin importar si viene de la lista vigente o del histórico — así se puede
+// "analizar" a la persona completa, tal como se pidió: cuántas veces,
+// cuándo, y de qué habló cada vez.
+function openSpeakerDetailModal(speakerName, speakerUserId, allTalks) {
+  const key = speakerUserId ? `u:${speakerUserId}` : `n:${normalizeSearchText(speakerName)}`;
+  const mine = allTalks.filter((t) => talkSpeakerKey(t) === key).sort((a, b) => b.date.localeCompare(a.date));
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="tksd-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>🎤 ${esc(speakerName)}</h3><button class="modal-close" id="tksd-modal-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">Ha discursado ${mine.length === 1 ? '1 vez' : mine.length + ' veces'} en total.</p>
+          <div class="card-list">
+            ${mine.map((t) => `
+              <div class="list-card">
+                <div class="lc-main">
+                  <div class="lc-title">${esc(fmtDateHuman(t.date))}</div>
+                  <div class="lc-sub" ${t.topic ? '' : 'style="font-style:italic;"'}>${t.topic ? esc(t.topic) : 'Sin tema registrado'}</div>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div class="modal-footer"><div></div><div><button class="btn btn-secondary" id="tksd-close">Cerrar</button></div></div>
+      </div>
+    </div>`;
+  document.getElementById('tksd-modal-close').addEventListener('click', closeModal);
+  document.getElementById('tksd-close').addEventListener('click', closeModal);
+  document.getElementById('tksd-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tksd-modal-backdrop') closeModal(); });
+}
+
+function wireTalkCards(talks) {
+  document.querySelectorAll('#assignments-content .cleaning-family-row').forEach((row) => {
+    const id = Number(row.dataset.id);
+    const editBtn = row.querySelector('.tk-edit');
+    if (editBtn) editBtn.addEventListener('click', () => {
+      const talk = talks.find((t) => t.id === id);
+      if (talk) openTalkEditModal(talk);
+    });
+    const removeBtn = row.querySelector('.tk-remove');
+    if (removeBtn) removeBtn.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar este registro de discurso?')) return;
+      try {
+        await api(`/talks/${id}`, { method: 'DELETE' });
+        toast('Discurso eliminado');
+        await renderTalksView();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+  document.querySelectorAll('.tk-add-speaker').forEach((btn) => {
+    btn.addEventListener('click', () => openTalkModal(btn.dataset.date));
+  });
+  document.querySelectorAll('#assignments-content .tk-speaker-name').forEach((el) => {
+    el.addEventListener('click', () => openSpeakerDetailModal(el.dataset.speakerName, el.dataset.speakerUserId || null, talks));
+  });
+}
+
+// presetDate: si viene con valor, el modal funciona en modo "agregar
+// discursante a un domingo que ya existe" (fecha fija); si no, funciona en
+// modo "registro nuevo" (se elige la fecha, y se le pueden agregar de una
+// varios discursantes con "+ Agregar otro discursante").
+async function openTalkModal(presetDate) {
+  let directory = [];
+  let allTalks = [];
+  try { directory = await api('/users/directory'); } catch (e) { directory = []; }
+  try { allTalks = await api('/talks'); } catch (e) { allTalks = []; }
+  const isAdd = !!presetDate;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="tk-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isAdd ? 'Agregar discursante' : 'Nuevo registro de discursos'}</h3><button class="modal-close" id="tk-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="tk-error"></div>
+          <form id="tk-form">
+            <div class="field">
+              <label>Domingo</label>
+              <input type="date" name="date" required value="${esc(presetDate || '')}" ${isAdd ? 'readonly' : ''} />
+            </div>
+            <div class="field">
+              <label>Discursantes</label>
+              <div id="tk-speaker-rows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="tk-add-row">+ Agregar otro discursante</button>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="tk-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="tk-save">${isAdd ? 'Agregar' : 'Guardar registro'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('tk-modal-close').addEventListener('click', closeModal);
+  document.getElementById('tk-cancel').addEventListener('click', closeModal);
+  document.getElementById('tk-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tk-modal-backdrop') closeModal(); });
+
+  const talkSpeakerRowHtml = (rowId) => `
+    <div class="family-row" data-row-id="${rowId}">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <div style="flex:1;">
+          ${memberPickerFieldHtml(rowId, '', '')}
+          <div class="field" style="margin-top:6px;">
+            <input type="text" class="tk-topic" placeholder="Tema del discurso (opcional)" />
+          </div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm tk-row-remove" title="Quitar este discursante">🗑️</button>
+      </div>
+      <div class="tk-row-stats hint-box" style="margin-top:6px; display:none;"></div>
+    </div>`;
+
+  const wireTalkSpeakerRow = (rowEl, rowId) => {
+    const nameInput = document.getElementById(`${rowId}-member-name`);
+    const hiddenId = document.getElementById(`${rowId}-member-user-id`);
+    const statsBox = rowEl.querySelector('.tk-row-stats');
+    const showStatsFor = () => {
+      const name = nameInput.value;
+      const userId = hiddenId.value;
+      const norm = normalizeSearchText(name);
+      if (!norm) { statsBox.style.display = 'none'; return; }
+      const match = userId
+        ? allTalks.find((t) => Number(t.speakerUserId) === Number(userId))
+        : allTalks.find((t) => !t.speakerUserId && normalizeSearchText(t.speakerName) === norm);
+      statsBox.style.display = '';
+      statsBox.textContent = match
+        ? `Ha discursado ${match.timesSpoken} ${match.timesSpoken === 1 ? 'vez' : 'veces'} · última vez: ${fmtDateHuman(match.lastSpokenDate)}`
+        : 'Nunca ha discursado';
+    };
+    wireMemberPicker(rowId, directory, showStatsFor);
+    nameInput.addEventListener('input', showStatsFor);
+    rowEl.querySelector('.tk-row-remove').addEventListener('click', () => {
+      const box = rowEl.parentElement;
+      if (box.children.length > 1) rowEl.remove(); // siempre queda al menos una fila
+    });
+  };
+
+  const rowsBox = document.getElementById('tk-speaker-rows');
+  let rowCounter = 0;
+  const addRow = () => {
+    const rowId = `tk-row-${rowCounter++}`;
+    rowsBox.insertAdjacentHTML('beforeend', talkSpeakerRowHtml(rowId));
+    wireTalkSpeakerRow(rowsBox.lastElementChild, rowId);
+  };
+  document.getElementById('tk-add-row').addEventListener('click', addRow);
+  addRow();
+
+  document.getElementById('tk-save').addEventListener('click', async () => {
+    const form = document.getElementById('tk-form');
+    if (!form.reportValidity()) return;
+    const speakers = Array.from(rowsBox.children).map((rowEl) => {
+      const rowId = rowEl.dataset.rowId;
+      return {
+        speakerName: document.getElementById(`${rowId}-member-name`).value.trim(),
+        speakerUserId: document.getElementById(`${rowId}-member-user-id`).value || null,
+        topic: rowEl.querySelector('.tk-topic').value.trim(),
+      };
+    }).filter((s) => s.speakerName);
+    if (!speakers.length) { document.getElementById('tk-error').innerHTML = '<div class="error-msg">Agrega al menos un discursante</div>'; return; }
+    try {
+      await api('/talks', { method: 'POST', body: { date: form.date.value, speakers } });
+      closeModal();
+      toast(isAdd ? 'Discursante agregado' : 'Registro creado');
+      await renderTalksView();
+    } catch (e) {
+      document.getElementById('tk-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Edición de un registro puntual — a diferencia del alta (que usa el
+// buscador de miembros con autocompletado), acá el nombre es un campo de
+// texto simple: mismo criterio que ya usa Aseo del Edificio al editar un
+// turno (PUT solo acepta el nombre como texto). Si el nombre se deja igual,
+// se conserva el vínculo con el usuario registrado; si se cambia a mano,
+// queda desvinculado — igual que "Quitar / escribir a mano" en Entrevistas.
+function openTalkEditModal(talk) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="tke-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Editar discurso</h3><button class="modal-close" id="tke-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="tke-error"></div>
+          <form id="tke-form">
+            <div class="field">
+              <label>Domingo</label>
+              <input type="date" name="date" required value="${esc(talk.date)}" />
+            </div>
+            <div class="field">
+              <label>Discursante</label>
+              <input type="text" name="speakerName" required value="${esc(talk.speakerName)}" />
+            </div>
+            <div class="field">
+              <label>Tema (opcional)</label>
+              <input type="text" name="topic" value="${esc(talk.topic || '')}" />
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div><button class="btn btn-danger" id="tke-delete">Eliminar</button></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="tke-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="tke-save">Guardar cambios</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('tke-modal-close').addEventListener('click', closeModal);
+  document.getElementById('tke-cancel').addEventListener('click', closeModal);
+  document.getElementById('tke-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tke-modal-backdrop') closeModal(); });
+  document.getElementById('tke-delete').addEventListener('click', async () => {
+    if (!confirm('¿Eliminar este registro de discurso?')) return;
+    try {
+      await api(`/talks/${talk.id}`, { method: 'DELETE' });
+      closeModal();
+      toast('Discurso eliminado');
+      await renderTalksView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('tke-save').addEventListener('click', async () => {
+    const form = document.getElementById('tke-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const newName = fd.get('speakerName').trim();
+    const speakerUserId = newName === talk.speakerName ? talk.speakerUserId : null;
+    try {
+      await api(`/talks/${talk.id}`, { method: 'PUT', body: { date: fd.get('date'), speakerName: newName, speakerUserId, topic: fd.get('topic').trim() } });
+      closeModal();
+      toast('Discurso actualizado');
+      await renderTalksView();
+    } catch (e) {
+      document.getElementById('tke-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
 // ==================================================================
 // ---------------- Estadísticas ----------------
 // ==================================================================
@@ -3135,11 +3495,13 @@ async function renderStatsView() {
     <div class="subtabs">
       <button class="subtab-btn ${state.statsSubtab === 'pending' ? 'active' : ''}" data-tab="pending">Bandeja de Evaluación</button>
       <button class="subtab-btn ${state.statsSubtab === 'dashboard' ? 'active' : ''}" data-tab="dashboard">Panel de Control</button>
+      ${isObispadoUser() ? `<button class="subtab-btn ${state.statsSubtab === 'rankings' ? 'active' : ''}" data-tab="rankings">Rachas y Logros</button>` : ''}
     </div>
     <div id="stats-content"></div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.statsSubtab = b.dataset.tab; renderStatsView(); }));
   if (state.statsSubtab === 'pending') await renderStatsPending();
+  else if (state.statsSubtab === 'rankings' && isObispadoUser()) await renderStatsRankings();
   else await renderStatsDashboard();
 }
 
@@ -3269,6 +3631,245 @@ async function renderStatsDashboard() {
   document.getElementById('stats-year-select').addEventListener('change', (e) => { state.statsYear = Number(e.target.value); renderStatsDashboard(); });
   const orgSelect = document.getElementById('stats-org-select');
   if (orgSelect) orgSelect.addEventListener('change', (e) => { state.statsOrgId = e.target.value || null; renderStatsDashboard(); });
+}
+
+// "Rachas y Logros": 6 rankings de todo el Barrio — compromisos cumplidos,
+// aseo, entrevistas, discursos, actividades y actas de reunión registradas
+// — solo visible para el Administrador o el líder de Obispado (mismo
+// criterio que canSeeAssignmentsTab). Cada categoría tiene un nombre
+// temático inspirado en una figura de las escrituras, elegida por el rasgo
+// que mejor representa esa categoría (ver el mismo listado en
+// server/src/achievements.js — debe mantenerse igual en ambos lados).
+// Además de "Todo el tiempo" (histórico completo, siempre en vivo), hay 4
+// períodos que se cierran solos apenas terminan (mes/trimestre/semestre/
+// año): mientras están en curso se ven "🔴 En curso" con datos en vivo: una
+// vez cerrados, el ganador de cada categoría queda fijo para siempre en
+// "📜 Histórico", con un diploma descargable.
+const ACHIEVEMENT_CATEGORIES_CLIENT = [
+  { key: 'commitments', rankingKey: 'commitmentsRanking', icon: '🎯', label: 'Compromisos cumplidos', achievementName: 'Premio Nefi', blurb: 'Como Nefi ante cada encargo — "Iré y haré" (1 Nefi 3:7) — el mayor porcentaje de compromisos cumplidos.', emptyMsg: 'Todavía no hay compromisos resueltos', rowFn: rankingCommitmentRowHtml },
+  { key: 'cleaning', rankingKey: 'cleaningRanking', icon: '🧹', label: 'Más aseo cumplido', achievementName: 'Premio Nehemías', blurb: 'Como Nehemías, que organizó al pueblo en turnos para reconstruir la muralla de Jerusalén (Nehemías 3) — la familia con más turnos de aseo cumplidos.', emptyMsg: 'Todavía no hay turnos de aseo cumplidos', rowFn: rankingCleaningRowHtml },
+  { key: 'interviews', rankingKey: 'interviewsRanking', icon: '👤', label: 'Más entrevistas realizadas', achievementName: 'Premio Samuel', blurb: 'Como el joven Samuel — "Habla, que tu siervo oye" (1 Samuel 3:10) — quien más entrevistas realizó.', emptyMsg: 'Todavía no hay entrevistas registradas', rowFn: rankingInterviewRowHtml },
+  { key: 'talks', rankingKey: 'talksRanking', icon: '🎤', label: 'Más discursos dados', achievementName: 'Premio Pablo', blurb: 'Como el apóstol Pablo, incansable predicando en cada ciudad — quien más veces discursó.', emptyMsg: 'Todavía no hay discursos registrados', rowFn: rankingTalkRowHtml },
+  { key: 'activities', rankingKey: 'activitiesRanking', icon: '📅', label: 'Más actividades registradas', achievementName: 'Premio Brigham Young', blurb: 'Como Brigham Young, que organizó al pueblo en compañías ordenadas para la travesía al oeste (D. y C. 136) — quien más actividades organizó.', emptyMsg: 'Todavía no hay actividades registradas', rowFn: rankingActivityRowHtml },
+  { key: 'meetings', rankingKey: 'meetingsRanking', icon: '📋', label: 'Más actas de reunión registradas', achievementName: 'Premio Enoc', blurb: 'Como Enoc, cuyas palabras y ciudad quedaron registradas para siempre (Moisés 6-7) — quien más actas dejó registradas.', emptyMsg: 'Todavía no hay actas registradas', rowFn: rankingMeetingRowHtml },
+];
+const ACHIEVEMENT_PERIODS_CLIENT = [
+  { key: 'month', label: 'Este mes' },
+  { key: 'quarter', label: 'Este trimestre' },
+  { key: 'semester', label: 'Este semestre' },
+  { key: 'year', label: 'Este año' },
+  { key: 'allTime', label: 'Todo el tiempo' },
+];
+
+async function renderStatsRankings() {
+  const content = document.getElementById('stats-content');
+  content.innerHTML = `
+    <div class="subtabs" style="margin-bottom:14px;">
+      ${ACHIEVEMENT_PERIODS_CLIENT.map((p) => `<button class="subtab-btn ${state.achPeriod === p.key ? 'active' : ''}" data-period="${p.key}">${p.label}</button>`).join('')}
+    </div>
+    <div id="ach-body"></div>
+  `;
+  content.querySelectorAll('[data-period]').forEach((b) => b.addEventListener('click', () => {
+    state.achPeriod = b.dataset.period;
+    renderStatsRankings();
+  }));
+  await renderAchievementsBody();
+}
+
+async function renderAchievementsBody() {
+  const body = document.getElementById('ach-body');
+  if (state.achPeriod === 'allTime') {
+    body.innerHTML = '<div id="ach-content"></div>';
+    await renderAchievementsAllTime();
+    return;
+  }
+  body.innerHTML = `
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <button class="btn btn-sm ${state.achView === 'current' ? 'btn-primary' : 'btn-secondary'}" id="ach-view-current">🔴 En curso</button>
+      <button class="btn btn-sm ${state.achView === 'history' ? 'btn-primary' : 'btn-secondary'}" id="ach-view-history">📜 Histórico</button>
+    </div>
+    <div id="ach-content"></div>
+  `;
+  document.getElementById('ach-view-current').addEventListener('click', () => { state.achView = 'current'; renderAchievementsBody(); });
+  document.getElementById('ach-view-history').addEventListener('click', () => { state.achView = 'history'; renderAchievementsBody(); });
+  if (state.achView === 'current') await renderAchievementsCurrent();
+  else await renderAchievementsHistory();
+}
+
+async function renderAchievementsAllTime() {
+  const el = document.getElementById('ach-content');
+  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let data;
+  try { data = await api('/stats/rankings'); }
+  catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  el.innerHTML = `
+    <p class="hint-box" style="margin-bottom:18px;">Rankings de todo el Barrio, desde siempre — visibles solo para el Obispado.</p>
+    <div class="ranking-grid">${ACHIEVEMENT_CATEGORIES_CLIENT.map((cat) => rankingSectionHtml(cat, data[cat.rankingKey] || [])).join('')}</div>
+  `;
+}
+
+async function renderAchievementsCurrent() {
+  const el = document.getElementById('ach-content');
+  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let data;
+  try { data = await api(`/achievements/current?period=${state.achPeriod}`); }
+  catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  el.innerHTML = `
+    <p class="hint-box" style="margin-bottom:18px;">${esc(data.periodLabel)} — en curso. Este período se cierra solo apenas termine, y el ganador de cada categoría queda guardado para siempre en "📜 Histórico".</p>
+    <div class="ranking-grid">${ACHIEVEMENT_CATEGORIES_CLIENT.map((cat) => rankingSectionHtml(cat, data[cat.rankingKey] || [])).join('')}</div>
+  `;
+}
+
+async function renderAchievementsHistory() {
+  const el = document.getElementById('ach-content');
+  el.innerHTML = '<div class="empty-state">Cargando…</div>';
+  let awards;
+  try { awards = await api(`/achievements/history?period=${state.achPeriod}`); }
+  catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  if (!awards.length) { el.innerHTML = '<div class="empty-state">Todavía no hay períodos cerrados con premios — vuelve cuando termine el período en curso</div>'; return; }
+  const byPeriod = new Map();
+  awards.forEach((a) => { if (!byPeriod.has(a.periodKey)) byPeriod.set(a.periodKey, []); byPeriod.get(a.periodKey).push(a); });
+  const periodKeys = [...byPeriod.keys()].sort((a, b) => b.localeCompare(a));
+  el.innerHTML = periodKeys.map((pk) => {
+    const items = byPeriod.get(pk);
+    return `
+      <div style="margin-bottom:26px;">
+        <h3 style="font-size:15px; color:var(--celeste-darker); margin-bottom:10px;">🏆 ${esc(items[0].periodLabel)}</h3>
+        <div class="ranking-row">${items.map(awardCardHtml).join('')}</div>
+      </div>`;
+  }).join('');
+  el.querySelectorAll('.ach-diploma-btn').forEach((btn) => {
+    const award = awards.find((a) => a.id === Number(btn.dataset.id));
+    if (award) btn.addEventListener('click', () => openDiplomaModal(award));
+  });
+}
+
+function awardCardHtml(a) {
+  return `
+    <div class="ranking-card" style="background:#fffbeb; border:1px solid #fde68a;">
+      <div class="ranking-label">${a.categoryIcon} ${esc(a.categoryLabel)}</div>
+      <div class="ranking-title">🏅 ${esc(a.achievementName)}</div>
+      <div class="ranking-sub">${esc(a.winnerName)} · ${esc(a.valueLabel)}</div>
+      <button type="button" class="btn btn-secondary btn-sm ach-diploma-btn" data-id="${a.id}" style="margin-top:10px;">🎓 Ver / descargar diploma</button>
+    </div>`;
+}
+
+// Certificado imprimible/descargable: se ve dentro del modal, y el botón
+// "Imprimir / Descargar PDF" usa window.print() — el navegador ya sabe
+// exportar a PDF desde el diálogo de impresión, así que no hace falta
+// ninguna librería extra para generar el archivo. El CSS de @media print
+// (ver styles.css) oculta todo menos el diploma mientras se imprime.
+function openDiplomaModal(a) {
+  const modalRoot = document.getElementById('modal-root');
+  const issuedDate = fmtDateHuman(toISODate(new Date()));
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="dip-modal-backdrop">
+      <div class="modal" style="max-width:720px;">
+        <div class="modal-header no-print"><h3>🎓 Diploma</h3><button class="modal-close" id="dip-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="diploma-print-area" class="diploma">
+            <div class="diploma-border">
+              <div class="diploma-eyebrow">${esc(APP_NAME)}</div>
+              <div class="diploma-title">${esc(a.achievementName)}</div>
+              <div class="diploma-sub">${a.categoryIcon} ${esc(a.categoryLabel)} · ${esc(a.periodLabel)}</div>
+              <div class="diploma-body-text">${esc(a.blurb)}</div>
+              <div class="diploma-winner">${esc(a.winnerName)}</div>
+              <div class="diploma-value">${esc(a.valueLabel)}</div>
+              <div class="diploma-footer">Otorgado por el Obispado · ${esc(issuedDate)}</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer no-print">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="dip-close">Cerrar</button>
+            <button class="btn btn-primary" id="dip-print">🖨️ Imprimir / Descargar PDF</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('dip-modal-close').addEventListener('click', closeModal);
+  document.getElementById('dip-close').addEventListener('click', closeModal);
+  document.getElementById('dip-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'dip-modal-backdrop') closeModal(); });
+  document.getElementById('dip-print').addEventListener('click', () => window.print());
+}
+
+function rankingSectionHtml(cat, items) {
+  return `
+    <div class="ranking-section">
+      <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:2px;">${cat.icon} ${esc(cat.label)}</h3>
+      <div class="hint-box" style="margin:0 0 8px; padding:6px 10px; font-size:11.5px;">🏅 ${esc(cat.achievementName)} — ${esc(cat.blurb)}</div>
+      <div class="card-list">${items.length ? items.slice(0, 10).map((item, i) => cat.rowFn(item, i)).join('') : `<div class="empty-state">${cat.emptyMsg}</div>`}</div>
+    </div>`;
+}
+
+function rankingMedal(i) {
+  return i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+}
+
+function rankingCommitmentRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.userName)}</div>
+        <div class="lc-sub">${r.completed} cumplido${r.completed === 1 ? '' : 's'}${r.notFulfilled ? ' · ' + r.notFulfilled + ' no cumplido' + (r.notFulfilled === 1 ? '' : 's') : ''}</div>
+      </div>
+      <span class="status-pill ${r.pct >= 70 ? 'status-green' : r.pct >= 40 ? 'status-amber' : 'status-red'}">${r.pct}%</span>
+    </div>`;
+}
+
+function rankingCleaningRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.familyName)}</div>
+        <div class="lc-sub">${r.lastDoneDate ? 'Último: ' + esc(fmtDateHuman(r.lastDoneDate)) : ''}</div>
+      </div>
+      <span class="status-pill status-green">${r.timesDone}×</span>
+    </div>`;
+}
+
+function rankingInterviewRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.interviewerName)}</div>
+      </div>
+      <span class="status-pill status-green">${r.count}×</span>
+    </div>`;
+}
+
+function rankingTalkRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.speakerName)}</div>
+        <div class="lc-sub">${r.lastSpokenDate ? 'Último: ' + esc(fmtDateHuman(r.lastSpokenDate)) : ''}</div>
+      </div>
+      <span class="status-pill status-green">${r.timesSpoken}×</span>
+    </div>`;
+}
+
+function rankingActivityRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.userName)}</div>
+        <div class="lc-sub">${r.lastDate ? 'Última: ' + esc(fmtDateHuman(r.lastDate)) : ''}</div>
+      </div>
+      <span class="status-pill status-green">${r.count}×</span>
+    </div>`;
+}
+
+function rankingMeetingRowHtml(r, i) {
+  return `
+    <div class="list-card">
+      <div class="lc-main">
+        <div class="lc-title">${rankingMedal(i)} ${esc(r.userName)}</div>
+        <div class="lc-sub">${r.lastDate ? 'Última: ' + esc(fmtDateHuman(r.lastDate)) : ''}</div>
+      </div>
+      <span class="status-pill status-green">${r.count}×</span>
+    </div>`;
 }
 
 // ==================================================================

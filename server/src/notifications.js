@@ -46,9 +46,9 @@ export async function sendReminderEmail(iv) {
     iv,
     `Recordatorio: entrevista con ${iv.memberName} mañana`,
     (r) => `<p>Hola ${escHtml(r.label)},</p>
-<p>Este es un recordatorio: tienes una entrevista agendada para <strong>mañana</strong> en el Calendario Barrio Valle Grande.</p>
+<p>Este es un recordatorio: tienes una entrevista agendada para <strong>mañana</strong> en OrganizaSion.</p>
 <ul>${detailRows(iv)}</ul>
-<p>— Calendario Barrio Valle Grande</p>`
+<p>— OrganizaSion</p>`
   );
 }
 
@@ -59,7 +59,7 @@ export async function sendCancellationEmail(iv) {
     (r) => `<p>Hola ${escHtml(r.label)},</p>
 <p>Te informamos que la siguiente entrevista fue <strong>cancelada</strong>:</p>
 <ul>${detailRows(iv)}</ul>
-<p>— Calendario Barrio Valle Grande</p>`
+<p>— OrganizaSion</p>`
   );
 }
 
@@ -75,6 +75,6 @@ export async function sendRescheduleEmail(iv, previous) {
   ${iv.location ? `<li><strong>Lugar:</strong> ${escHtml(iv.location)}</li>` : ''}
   ${iv.description ? `<li><strong>Detalle:</strong> ${escHtml(iv.description)}</li>` : ''}
 </ul>
-<p>— Calendario Barrio Valle Grande</p>`
+<p>— OrganizaSion</p>`
   );
 }

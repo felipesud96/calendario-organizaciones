@@ -33,6 +33,19 @@ const EMPTY_DB = {
   // Módulo "Estadísticas": una evaluación (opcional) por actividad ya
   // pasada — asistencia esperada/real y feedback. Ver routes/stats.js.
   eventEvaluations: [],
+  // Módulo "Discursos" (dentro de la pestaña "Asignaciones", junto a Aseo
+  // del Edificio): registro de quién discursó en la reunión sacramental,
+  // qué domingo, y de qué tema (opcional) — para saber cuántas veces ha
+  // discursado cada miembro y cuándo fue la última vez. Ver routes/talks.js.
+  talks: [],
+  // Módulo "Rachas y Logros" (dentro de Estadísticas): premios ya cerrados
+  // por período (mes/trimestre/semestre/año) — un registro por categoría
+  // ganada, con el nombre temático del logro y quién lo ganó. Ver
+  // achievements.js / routes/achievements.js. achievementClosures marca qué
+  // combinaciones período+tipo ya se procesaron (aunque nadie haya ganado
+  // ninguna categoría ese período), para no recalcularlas de nuevo.
+  achievementAwards: [],
+  achievementClosures: [],
   stakeCalendar: {
     url: '',
     displayName: 'Estaca',
@@ -54,7 +67,8 @@ const EMPTY_DB = {
   nextId: {
     organizations: 1, users: 1, events: 1, interviews: 1, registrationRequests: 1,
     budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1, stakeEvents: 1,
-    meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1,
+    meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1, talks: 1,
+    achievementAwards: 1, achievementClosures: 1,
   },
 };
 

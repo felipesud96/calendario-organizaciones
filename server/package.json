@@ -2,7 +2,7 @@
   "name": "calendario-ward-server",
   "version": "1.0.0",
   "type": "module",
-  "description": "Backend del Calendario de Organizaciones. Sin dependencias externas: usa solo el runtime estandar de Node.js (http, crypto, fs).",
+  "description": "Backend de OrganizaSion. Sin dependencias externas: usa solo el runtime estandar de Node.js (http, crypto, fs).",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

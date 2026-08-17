@@ -1,4 +1,4 @@
-# Guía paso a paso: publicar el Calendario de Organizaciones
+# Guía paso a paso: publicar OrganizaSion
 
 Esta guía te lleva de "tengo el proyecto en un zip" a "tengo una URL real que cualquiera puede abrir desde su celular". No necesitas saber programar — son formularios y clics, pero hay que hacerlos en orden.
 
@@ -69,7 +69,7 @@ Sin este paso, cada vez que actualices el código o Render reinicie el servicio,
    (Esto le dice a la app que guarde sus datos dentro del disco persistente en vez del disco temporal del contenedor.)
 4. Ahora sí, haz clic en **Create Web Service**.
 
-Render va a clonar tu repositorio y arrancar el servidor. Esto toma uno o dos minutos la primera vez. Puedes ver el progreso en la pestaña **Logs**; cuando aparezca una línea como `Servidor del Calendario de Organizaciones escuchando en...`, ya está listo.
+Render va a clonar tu repositorio y arrancar el servidor. Esto toma uno o dos minutos la primera vez. Puedes ver el progreso en la pestaña **Logs**; cuando aparezca una línea como `Servidor de OrganizaSion escuchando en...`, ya está listo.
 
 ---
 

@@ -3,11 +3,20 @@ import { load, withDb, nextId } from '../db.js';
 import { requireRole } from '../guard.js';
 import { canEditOrg, PURPOSE_OPTIONS } from './events.js';
 import { isObispadoLeader } from './stake.js';
+import { allFamiliesWithStats } from './cleaning.js';
+import { allSpeakersWithStats } from './talks.js';
+import { allActivityCreatorsWithStats } from './events.js';
+import { allMeetingCreatorsWithStats } from './meetings.js';
 
 // Módulo "Estadísticas": evalúa actividades ya pasadas (asistencia
 // esperada/real + feedback) y arma un panel resumen por organización — el
 // balance del año según "Propósito", el % de éxito de asistencia, y un
-// ranking de la actividad más y menos exitosa.
+// ranking de la actividad más y menos exitosa. Además, un sub-panel
+// "Rachas y Logros" (solo Obispado/Admin) con rankings de todo el barrio.
+
+function normalizeSearchText(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -160,4 +169,87 @@ export function registerStatsRoutes(router) {
     const data = load();
     sendJson(res, 200, { isObispado: isObispadoLeader(req.user, data) });
   }));
+
+  // "Rachas y Logros" — pestaña "Todo el tiempo": mismos 6 rankings que
+  // achievements.js calcula por período (mes/trimestre/semestre/año), pero
+  // sin filtrar por fecha — el histórico completo desde que existe la app.
+  // Requiere datos de TODAS las organizaciones, así que — igual que el
+  // Panel de Obispado — es estrictamente para el Administrador o el líder
+  // de Obispado.
+  router.get('/api/stats/rankings', requireRole(['admin', 'leader'], async (req, res) => {
+    const data = load();
+    if (!isObispadoLeader(req.user, data)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver el Panel de Rachas y Logros' });
+    }
+    sendJson(res, 200, allCategoryRankings(data));
+  }));
+}
+
+// Compromisos: % cumplidos por persona, sobre compromisos ya RESUELTOS
+// (completados o no cumplidos) — los que siguen "pending" todavía no
+// tuvieron su oportunidad, así que no cuentan ni a favor ni en contra de
+// nadie. Se agrupan por su propia dueDate (fecha límite/de verificación)
+// para poder acotarlos a un período. Reutilizado por achievements.js.
+// `range` es opcional ({start, end} ISO, ambas inclusive).
+export function commitmentsRanking(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  const byUser = new Map();
+  for (const m of data.meetings) {
+    for (const c of (m.commitments || [])) {
+      if (c.status !== 'completed' && c.status !== 'not_fulfilled') continue;
+      if (!inRange(c.dueDate)) continue;
+      const uid = Number(c.assignedToUserId);
+      if (!byUser.has(uid)) byUser.set(uid, { completed: 0, notFulfilled: 0 });
+      const entry = byUser.get(uid);
+      if (c.status === 'completed') entry.completed += 1; else entry.notFulfilled += 1;
+    }
+  }
+  return [...byUser.entries()]
+    .map(([uid, e]) => {
+      const user = data.users.find((u) => u.id === uid);
+      const total = e.completed + e.notFulfilled;
+      return {
+        userId: uid,
+        userName: user?.name || '(usuario eliminado)',
+        completed: e.completed,
+        notFulfilled: e.notFulfilled,
+        total,
+        pct: total > 0 ? Math.round((e.completed / total) * 1000) / 10 : null,
+      };
+    })
+    .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.total - a.total);
+}
+
+// Entrevistas: "interviewerName" es texto libre (se autocompleta con el
+// nombre de quien la agenda, ver interviews.js) — se agrupa normalizado,
+// para que mayúsculas o tildes distintas no fragmenten el conteo de la
+// misma persona. Reutilizado por achievements.js. `range` es opcional
+// ({start, end} ISO, ambas inclusive) y filtra por la fecha de la
+// entrevista.
+export function interviewsRanking(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  const byInterviewer = new Map();
+  for (const iv of data.interviews) {
+    if (!inRange(iv.date)) continue;
+    const norm = normalizeSearchText(iv.interviewerName);
+    if (!norm) continue;
+    if (!byInterviewer.has(norm)) byInterviewer.set(norm, { interviewerName: iv.interviewerName, count: 0 });
+    byInterviewer.get(norm).count += 1;
+  }
+  return [...byInterviewer.values()].sort((a, b) => b.count - a.count);
+}
+
+// Junta los 6 rankings de Rachas y Logros en un solo objeto — usado tanto
+// por "Todo el tiempo" (sin range) como por achievements.js para cada
+// período (con range). Centralizar esto acá evita que ambos lados se
+// desincronicen si mañana se agrega o cambia una categoría.
+export function allCategoryRankings(data, range) {
+  return {
+    commitmentsRanking: commitmentsRanking(data, range),
+    cleaningRanking: allFamiliesWithStats(data, range),
+    interviewsRanking: interviewsRanking(data, range),
+    talksRanking: allSpeakersWithStats(data, range),
+    activitiesRanking: allActivityCreatorsWithStats(data, range),
+    meetingsRanking: allMeetingCreatorsWithStats(data, range),
+  };
 }

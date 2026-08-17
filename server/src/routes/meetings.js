@@ -3,7 +3,7 @@ import { load, withDb, nextId } from '../db.js';
 import { requireAuth, requireRole } from '../guard.js';
 import { isObispadoLeader } from './stake.js';
 
-// Módulo "Reuniones y Asignaciones": un acta (reunión) agrupa uno o más
+// Módulo "Reuniones y Consejos": un acta (reunión) agrupa uno o más
 // "compromisos" (tareas con responsable y fecha límite). El compromiso vive
 // anidado dentro de su acta, pero se le da un id GLOBAL (nextId
 // 'commitments') para poder ubicarlo directo por id sin tener que mandar
@@ -11,6 +11,30 @@ import { isObispadoLeader } from './stake.js';
 // simples del lado del cliente.
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+// Reutilizado por achievements.js para el ranking "Más actas de reunión
+// registradas" de Rachas y Logros: quién ha creado más actas, agrupado por
+// quién la creó (createdBy) y contado por la fecha propia del acta. `range`
+// es opcional ({start, end} ISO, ambas inclusive); sin rango, es el total
+// histórico.
+export function allMeetingCreatorsWithStats(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  const byUser = new Map();
+  for (const m of data.meetings) {
+    if (!m.createdBy || !inRange(m.date)) continue;
+    if (!byUser.has(m.createdBy)) byUser.set(m.createdBy, []);
+    byUser.get(m.createdBy).push(m);
+  }
+  return [...byUser.entries()].map(([userId, items]) => {
+    const user = data.users.find((u) => u.id === Number(userId));
+    return {
+      userId: Number(userId),
+      userName: user?.name || '(usuario eliminado)',
+      count: items.length,
+      lastDate: items.map((m) => m.date).sort().slice(-1)[0],
+    };
+  }).sort((a, b) => b.count - a.count);
+}
 
 // A quién puede asignársele un compromiso, según quién esté armando el
 // acta: el líder de Obispado (o el Administrador) puede repartir

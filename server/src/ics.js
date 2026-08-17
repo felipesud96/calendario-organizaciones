@@ -56,7 +56,7 @@ export function buildIcsCalendar(items, calendarName) {
   const lines = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//Calendario Barrio Valle Grande//Mis Actividades//ES',
+    'PRODID:-//OrganizaSion//Mis Actividades//ES',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     `X-WR-CALNAME:${icsEscapeText(calendarName)}`,

@@ -39,6 +39,32 @@ export function canEditOrg(user, organizationId) {
   return false;
 }
 
+// Reutilizado por achievements.js para el ranking "Más actividades
+// registradas" de Rachas y Logros: quién ha creado más actividades (o
+// reuniones privadas del calendario), agrupado por quién la creó
+// (createdBy) y contado por la fecha propia de la actividad — así el
+// período agrupa "lo que pasó en el trimestre", no "cuándo se tipeó en el
+// sistema". `range` es opcional ({start, end} ISO, ambas inclusive); sin
+// rango, es el total histórico.
+export function allActivityCreatorsWithStats(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  const byUser = new Map();
+  for (const e of data.events) {
+    if (!e.createdBy || !inRange(e.date)) continue;
+    if (!byUser.has(e.createdBy)) byUser.set(e.createdBy, []);
+    byUser.get(e.createdBy).push(e);
+  }
+  return [...byUser.entries()].map(([userId, items]) => {
+    const user = data.users.find((u) => u.id === Number(userId));
+    return {
+      userId: Number(userId),
+      userName: user?.name || '(usuario eliminado)',
+      count: items.length,
+      lastDate: items.map((e) => e.date).sort().slice(-1)[0],
+    };
+  }).sort((a, b) => b.count - a.count);
+}
+
 function withOrgInfo(item, orgs) {
   const org = orgs.find((o) => o.id === item.organizationId);
   const involvedIds = Array.isArray(item.involvedOrganizationIds) ? item.involvedOrganizationIds : [];
