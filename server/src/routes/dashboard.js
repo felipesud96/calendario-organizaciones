@@ -20,12 +20,11 @@ function addDaysISO(days) {
   return d.toISOString().slice(0, 10);
 }
 
-export function registerDashboardRoutes(router) {
-  router.get('/api/dashboard/overview', requireRole(['admin', 'leader'], async (req, res) => {
-    const data = load();
-    if (!isObispadoLeader(req.user, data)) {
-      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver el Panel de Obispado' });
-    }
+// Extraído a su propia función (en vez de vivir solo dentro del handler de
+// la ruta) para que notifications.js pueda reutilizar EXACTAMENTE el mismo
+// cálculo al armar la campana de notificaciones del líder de Obispado /
+// Administrador, sin duplicar esta lógica.
+export function computeBishopricOverview(data) {
     const today = todayISO();
     const weekEnd = addDaysISO(7);
 
@@ -49,6 +48,11 @@ export function registerDashboardRoutes(router) {
           description: c.description,
           dueDate: c.dueDate,
           assignedToName: assignee?.name || '(usuario eliminado)',
+          // El cliente lo usa para saber si quien ve el panel es justo el
+          // responsable de este compromiso — en ese caso (y solo en ese
+          // caso) le muestra el botón "✅ Completar" directamente en la
+          // tarjeta, sin tener que entrar a Reuniones y Consejos.
+          assignedToUserId: c.assignedToUserId ?? null,
         });
       }
     }
@@ -66,8 +70,11 @@ export function registerDashboardRoutes(router) {
     // Entrevistas de los próximos 7 días, de todas las organizaciones —
     // quien ve este panel (Obispado/Admin) ya tiene panorama completo de
     // entrevistas de todas formas (ver interviews.js/orgSeesAllInterviews).
+    // Solo las que todavía están "pendientes de verificar" (sin marcar
+    // ✅/❌ todavía) — las ya marcadas no necesitan atención y viven en el
+    // historial de Entrevistas.
     const upcomingInterviews = data.interviews
-      .filter((iv) => iv.date >= today && iv.date <= weekEnd)
+      .filter((iv) => iv.date >= today && iv.date <= weekEnd && (iv.status || 'scheduled') === 'scheduled')
       .map((iv) => {
         const org = data.organizations.find((o) => o.id === Number(iv.organizationId));
         return {
@@ -92,7 +99,7 @@ export function registerDashboardRoutes(router) {
     const totalAssigned = categorySummaries.reduce((s, c) => s + c.assigned, 0);
     const totalSpent = categorySummaries.reduce((s, c) => s + c.spent, 0);
 
-    sendJson(res, 200, {
+    return {
       generatedAt: new Date().toISOString(),
       overdueCommitments,
       overdueByOrg,
@@ -106,6 +113,15 @@ export function registerDashboardRoutes(router) {
         totalSpent,
         totalBalance: totalAssigned - totalSpent,
       },
-    });
+    };
+}
+
+export function registerDashboardRoutes(router) {
+  router.get('/api/dashboard/overview', requireRole(['admin', 'leader'], async (req, res) => {
+    const data = load();
+    if (!isObispadoLeader(req.user, data)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver el Panel de Obispado' });
+    }
+    sendJson(res, 200, computeBishopricOverview(data));
   }));
 }

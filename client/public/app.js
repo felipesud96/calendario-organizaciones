@@ -33,11 +33,17 @@ const state = {
   meetingsSubtab: 'mine',
   assignmentsSubtab: 'cleaning',
   talksHistoryOpen: false, // Discursos: el histórico de meses pasados arranca colapsado
+  interviewsHistoryOpen: false, // Entrevistas: el historial de ya verificadas arranca colapsado
   statsSubtab: 'pending',
   statsYear: null,
   statsOrgId: null,
   achPeriod: 'month', // Rachas y Logros: mes / quarter / semester / year / allTime
   achView: 'current', // 'current' (en curso) o 'history' (períodos ya cerrados)
+  calViewMode: 'month', // Calendario: 'month' (grilla) o 'agenda' (lista cronológica)
+  searchOpen: false,
+  notifOpen: false,
+  miniCalOpen: false,
+  miniCalMonth: null, // mes que muestra el mini calendario emergente (se inicializa al abrirlo)
 };
 
 const root = document.getElementById('app');
@@ -67,6 +73,22 @@ function esc(s) {
   return String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// Estado vacío con una acción directa opcional (ej: "+ Agregar turno") —
+// evita que la persona tenga que ir a buscar el botón correspondiente en
+// otra parte de la pantalla. `cta` es opcional: { id, label }. Después de
+// insertar el HTML hay que llamar wireEmptyStateCta(cta, fn) para conectar
+// el clic (el propio caller decide qué acción corresponde).
+function emptyStateHtml(message, cta) {
+  return `<div class="empty-state">
+    <div>${esc(message)}</div>
+    ${cta ? `<button type="button" class="btn btn-primary btn-sm" id="${cta.id}" style="margin-top:12px;">${esc(cta.label)}</button>` : ''}
+  </div>`;
+}
+function wireEmptyStateCta(id, fn) {
+  const btn = document.getElementById(id);
+  if (btn) btn.addEventListener('click', fn);
 }
 
 // Corta un título largo a `max` caracteres + "…" para que quepa en las
@@ -506,52 +528,252 @@ async function boot() {
     state.organizations = await api('/organizations');
     await loadCalendarData();
     render();
-    maybeShowAssignmentsAlert();
+    maybeStartOnboardingTour();
   } catch (e) {
     setToken(null);
     renderLogin();
   }
 }
 
-// ---------------- Alerta de compromisos pendientes (al iniciar sesión) ----------------
-// Se muestra como mucho una vez por sesión de navegador (sessionStorage se
-// borra al cerrar la pestaña) — así no interrumpe la navegación posterior
-// aunque la persona siga entrando y saliendo de vistas durante el día.
-async function maybeShowAssignmentsAlert() {
-  if (sessionStorage.getItem('assignmentsAlertShown')) return;
-  sessionStorage.setItem('assignmentsAlertShown', '1');
-  if (!state.user || (state.user.role !== 'admin' && state.user.role !== 'leader')) return;
-  try {
-    const data = await api('/my-assignments');
-    if (data.total > 0) showAssignmentsAlertModal(data.total);
-  } catch (e) { /* silencioso: no molestar con un error por esto */ }
+// ---------------- Recorrido guiado (primera vez) ----------------
+// Un carrusel corto (no un spotlight sobre el DOM real, que es frágil entre
+// distintos anchos de pantalla) explicando, paso a paso, solo las pestañas
+// que ESTA persona puede ver — así el recorrido nunca menciona algo a lo
+// que no tiene acceso. Se muestra una sola vez por navegador (localStorage);
+// el ícono "❓" de la barra superior lo vuelve a lanzar cuando quiera.
+function tourStepsForUser() {
+  const steps = [
+    { icon: '📅', title: 'Calendario', text: 'Todas las actividades de todas las organizaciones, en un solo lugar. Usa los filtros de colores para mostrar solo las que te interesan, o cambia a la vista "Agenda" para verlas en una lista.' },
+  ];
+  if (canSeeBishopricPanelTab()) steps.push({ icon: '🏠', title: 'Panel de Obispado', text: 'Un resumen de una sola pantalla con lo más urgente de todo el Barrio: compromisos atrasados, aseo sin confirmar, entrevistas y presupuesto.' });
+  if (canSeeMyActivitiesTab()) steps.push({ icon: '📋', title: 'Mis Actividades', text: 'Tus actividades y entrevistas en una lista simple, sin tener que navegar mes a mes.' });
+  if (canSeeInterviewsTab()) steps.push({ icon: '👤', title: 'Entrevistas', text: 'Agenda y consulta entrevistas — información privada de tu organización.' });
+  if (canSeeBudgetTab()) steps.push({ icon: '💰', title: 'Presupuesto', text: 'Asignaciones y gastos del trimestre, por organización.' });
+  if (canSeeMeetingsTab()) steps.push({ icon: '📝', title: 'Reuniones y Consejos', text: 'Actas, compromisos, y tus propias asignaciones pendientes.' });
+  if (canSeeAssignmentsTab()) steps.push({ icon: '🧹', title: 'Asignaciones', text: 'Turnos de aseo y registro de discursos de la reunión sacramental.' });
+  if (canSeeStatsTab()) steps.push({ icon: '📊', title: 'Estadísticas', text: 'Evalúa actividades pasadas y consulta Rachas y Logros.' });
+  steps.push({ icon: '🔍', title: 'Búsqueda', text: 'La lupa de arriba busca en toda la app a la vez — actividades, entrevistas, actas y discursos.' });
+  steps.push({ icon: '🔔', title: 'Notificaciones', text: 'La campana te avisa lo que tienes pendiente en un solo lugar, sin tener que revisar pestaña por pestaña.' });
+  return steps;
 }
 
-function showAssignmentsAlertModal(count) {
+function markTourSeen() { localStorage.setItem('organizasion_tour_seen', '1'); }
+
+function maybeStartOnboardingTour() {
+  if (localStorage.getItem('organizasion_tour_seen')) return;
+  setTimeout(() => startOnboardingTour(), 400);
+}
+
+function startOnboardingTour() {
+  const steps = tourStepsForUser();
+  let idx = 0;
   const modalRoot = document.getElementById('modal-root');
   if (!modalRoot) return;
-  modalRoot.innerHTML = `
-    <div class="modal-backdrop" id="assign-alert-backdrop">
-      <div class="modal" style="max-width:380px; text-align:center;">
-        <div class="modal-body" style="padding-top:28px;">
-          <div style="font-size:38px; margin-bottom:8px;">🔔</div>
-          <p style="font-size:15px; font-weight:700; color:var(--ink); margin:0 0 6px;">Tienes ${count} compromiso${count === 1 ? '' : 's'} pendiente${count === 1 ? '' : 's'}, favor revisar</p>
-          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 20px;">Pestaña Reuniones → Mis Asignaciones</p>
-          <div style="display:flex; gap:8px;">
-            <button class="btn btn-secondary btn-block" id="assign-alert-later">Más tarde</button>
-            <button class="btn btn-primary btn-block" id="assign-alert-view">Ver ahora</button>
+  const renderStep = () => {
+    const s = steps[idx];
+    modalRoot.innerHTML = `
+      <div class="modal-backdrop" id="tour-backdrop">
+        <div class="modal" style="max-width:420px; text-align:center;">
+          <div class="modal-body" style="padding-top:26px;">
+            <div style="font-size:40px; margin-bottom:10px;">${s.icon}</div>
+            <h3 style="margin:0 0 8px;">${esc(s.title)}</h3>
+            <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 18px;">${esc(s.text)}</p>
+            <div style="font-size:12px; color:var(--ink-soft); margin-bottom:14px;">${idx + 1} / ${steps.length}</div>
+            <div style="display:flex; gap:8px;">
+              ${idx > 0 ? `<button class="btn btn-secondary btn-block" id="tour-prev">Atrás</button>` : ''}
+              <button class="btn btn-primary btn-block" id="tour-next">${idx === steps.length - 1 ? 'Entendido' : 'Siguiente'}</button>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="tour-skip" style="margin-top:10px;">Saltar recorrido</button>
           </div>
         </div>
-      </div>
-    </div>`;
-  document.getElementById('assign-alert-later').addEventListener('click', closeModal);
-  document.getElementById('assign-alert-backdrop').addEventListener('click', (e) => { if (e.target.id === 'assign-alert-backdrop') closeModal(); });
-  document.getElementById('assign-alert-view').addEventListener('click', () => {
-    closeModal();
-    state.view = 'meetings';
-    state.meetingsSubtab = 'mine';
-    render();
+      </div>`;
+    document.getElementById('tour-next').addEventListener('click', () => {
+      if (idx === steps.length - 1) { closeModal(); markTourSeen(); }
+      else { idx++; renderStep(); }
+    });
+    const prevBtn = document.getElementById('tour-prev');
+    if (prevBtn) prevBtn.addEventListener('click', () => { idx--; renderStep(); });
+    document.getElementById('tour-skip').addEventListener('click', () => { closeModal(); markTourSeen(); });
+    document.getElementById('tour-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tour-backdrop') { closeModal(); markTourSeen(); } });
+  };
+  renderStep();
+}
+
+// ---------------- Búsqueda global (barra superior) ----------------
+// Una sola caja de texto que busca a la vez en actividades/reuniones,
+// entrevistas, actas/compromisos y discursos — cada categoría ya viene
+// filtrada por el servidor según lo que esa persona puede ver (ver
+// server/src/routes/search.js), así que el cliente solo tiene que mostrar
+// lo que le llega. El panel se abre EN EL FLUJO NORMAL de la página (no
+// flotando encima) para que nunca tape ni se corte con otro recuadro,
+// sobre todo en el celular.
+let searchDebounceTimer = null;
+
+function toggleSearchPanel(forceOpen) {
+  state.searchOpen = forceOpen !== undefined ? forceOpen : !state.searchOpen;
+  if (state.searchOpen) state.notifOpen = false;
+  const searchPanel = document.getElementById('search-panel');
+  const notifPanel = document.getElementById('notif-panel');
+  if (!searchPanel) return;
+  searchPanel.hidden = !state.searchOpen;
+  if (notifPanel) notifPanel.hidden = true;
+  if (state.searchOpen) {
+    const input = document.getElementById('search-input');
+    if (input) input.focus();
+  }
+}
+
+function renderSearchResults(results, query) {
+  const el = document.getElementById('search-results');
+  if (!el) return;
+  if (!query || query.trim().length < 2) {
+    el.innerHTML = '<div class="search-hint">Escribe al menos 2 letras para buscar</div>';
+    return;
+  }
+  if (!results.length) {
+    el.innerHTML = '<div class="search-hint">Sin resultados para "' + esc(query) + '"</div>';
+    return;
+  }
+  el.innerHTML = results.map((r) => `
+    <button type="button" class="search-result-row" data-category="${r.category}" data-id="${r.id}" data-date="${esc(r.date || '')}">
+      <span class="search-result-icon">${r.icon}</span>
+      <span class="search-result-main">
+        <span class="search-result-title">${esc(r.title)}</span>
+        <span class="search-result-sub">${r.categoryLabel} · ${esc(r.subtitle)}</span>
+      </span>
+    </button>`).join('');
+  el.querySelectorAll('.search-result-row').forEach((row) => {
+    row.addEventListener('click', () => goToSearchResult(row.dataset.category, Number(row.dataset.id), row.dataset.date));
   });
+}
+
+async function runSearch(query) {
+  try {
+    const data = await api('/search?q=' + encodeURIComponent(query));
+    renderSearchResults(data.results, query);
+  } catch (e) {
+    const el = document.getElementById('search-results');
+    if (el) el.innerHTML = '<div class="search-hint">No se pudo buscar</div>';
+  }
+}
+
+async function goToSearchResult(category, id, date) {
+  toggleSearchPanel(false);
+  if (category === 'events') {
+    state.view = 'calendar';
+    state.calMonth = new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, 1);
+    await loadCalendarData();
+    render();
+    openDayModal(date);
+    return;
+  }
+  if (category === 'interviews') {
+    state.view = 'interviews';
+    render();
+    return;
+  }
+  if (category === 'meetings') {
+    state.view = 'meetings';
+    state.meetingsSubtab = 'manage';
+    render();
+    try {
+      const meeting = await api(`/meetings/${id}`);
+      openMeetingDetailModal(meeting);
+    } catch (e) { /* si no se puede abrir el detalle, igual queda en la pestaña correcta */ }
+    return;
+  }
+  if (category === 'talks') {
+    state.view = 'cleaning';
+    state.assignmentsSubtab = 'talks';
+    render();
+    return;
+  }
+  render();
+}
+
+// ---------------- Campana de notificaciones ----------------
+// Resumen liviano (no en vivo — se vuelve a pedir cada vez que se abre)
+// reutilizando exactamente los mismos cálculos que ya usan sus propias
+// pestañas (ver server/src/routes/notifications-summary.js), para que el
+// número de la campana siempre calce con lo que se ve al entrar a esa
+// pestaña.
+async function refreshNotifBadge() {
+  const badge = document.getElementById('notif-badge');
+  if (!badge) return;
+  try {
+    const data = await api('/notifications/summary');
+    state.notifCache = data;
+    if (data.total > 0) {
+      badge.textContent = data.total > 99 ? '99+' : String(data.total);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  } catch (e) { badge.hidden = true; }
+}
+
+function toggleNotifPanel(forceOpen) {
+  state.notifOpen = forceOpen !== undefined ? forceOpen : !state.notifOpen;
+  if (state.notifOpen) state.searchOpen = false;
+  const notifPanel = document.getElementById('notif-panel');
+  const searchPanel = document.getElementById('search-panel');
+  if (!notifPanel) return;
+  notifPanel.hidden = !state.notifOpen;
+  if (searchPanel) searchPanel.hidden = true;
+  if (state.notifOpen) renderNotifPanel();
+}
+
+async function renderNotifPanel() {
+  const el = document.getElementById('notif-results');
+  if (!el) return;
+  el.innerHTML = '<div class="search-hint">Cargando…</div>';
+  let data;
+  try { data = await api('/notifications/summary'); } catch (e) { el.innerHTML = '<div class="search-hint">No se pudo cargar</div>'; return; }
+  state.notifCache = data;
+  if (!data.items.length) {
+    el.innerHTML = '<div class="search-hint">🎉 Nada pendiente por ahora</div>';
+    return;
+  }
+  el.innerHTML = data.items.map((it) => `
+    <button type="button" class="search-result-row" data-view="${it.view}" data-subtab="${it.subtab || ''}">
+      <span class="search-result-icon">${it.icon}</span>
+      <span class="search-result-main">
+        <span class="search-result-title">${it.count} — ${esc(it.label)}</span>
+      </span>
+    </button>`).join('');
+  el.querySelectorAll('.search-result-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      toggleNotifPanel(false);
+      state.view = row.dataset.view;
+      if (row.dataset.subtab) {
+        if (state.view === 'meetings') state.meetingsSubtab = row.dataset.subtab;
+        else if (state.view === 'stats') state.statsSubtab = row.dataset.subtab;
+        else if (state.view === 'cleaning') state.assignmentsSubtab = row.dataset.subtab;
+      }
+      render();
+    });
+  });
+}
+
+function wireTopbarUtilities() {
+  const searchToggle = document.getElementById('search-toggle');
+  const notifToggle = document.getElementById('notif-toggle');
+  const tourToggle = document.getElementById('tour-toggle');
+  if (searchToggle) searchToggle.addEventListener('click', () => toggleSearchPanel());
+  if (notifToggle) notifToggle.addEventListener('click', () => toggleNotifPanel());
+  if (tourToggle) tourToggle.addEventListener('click', () => startOnboardingTour());
+  const searchClose = document.getElementById('search-close');
+  if (searchClose) searchClose.addEventListener('click', () => toggleSearchPanel(false));
+  const searchInput = document.getElementById('search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value;
+      clearTimeout(searchDebounceTimer);
+      if (q.trim().length < 2) { renderSearchResults([], q); return; }
+      searchDebounceTimer = setTimeout(() => runSearch(q), 300);
+    });
+  }
+  refreshNotifBadge();
 }
 
 async function logout() {
@@ -742,9 +964,51 @@ function isObispadoUser() {
 }
 // "Panel de Obispado": mismo criterio que Aseo del Edificio — solo
 // Administrador o líder de Obispado, porque junta datos de TODAS las
-// organizaciones (compromisos, aseo, entrevistas, presupuesto).
+// organizaciones (compromisos, aseo, entrevistas, presupuesto). Ya no es una
+// pestaña más — es la pantalla que ese perfil necesita tener a mano en todo
+// momento, así que vive como ícono fijo junto a la lupa y la campana (ver
+// `#bishopric-toggle` en render()), en vez de competir por espacio con el
+// resto de los módulos en la fila de pestañas.
 function canSeeBishopricPanelTab() {
   return isObispadoUser();
+}
+
+// Definición de cada pestaña posible del menú principal. El orden final
+// para cada perfil lo decide tabOrderFor() más abajo — no hay un único
+// orden fijo para todos: se ordena por qué tan seguido ese perfil necesita
+// revisar o actuar sobre cada módulo, con Calendario siempre primero como
+// ancla común a todos los perfiles (para que no "salte de lugar").
+const TAB_DEFS = {
+  calendar: { label: 'Calendario', visible: () => true },
+  myActivities: { label: 'Mis Actividades', visible: canSeeMyActivitiesTab },
+  interviews: { label: 'Entrevistas', visible: canSeeInterviewsTab },
+  meetings: { label: 'Reuniones y Consejos', visible: canSeeMeetingsTab },
+  cleaning: { label: 'Asignaciones', visible: canSeeAssignmentsTab },
+  budget: { label: 'Presupuesto', visible: canSeeBudgetTab },
+  stats: { label: 'Estadísticas', visible: canSeeStatsTab },
+  admin: { label: 'Administración', visible: () => !!state.user && state.user.role === 'admin' },
+};
+
+// Orden de pestañas según perfil — Calendario siempre primero; el resto se
+// ordena por cadencia de uso: lo semanal antes que lo mensual, lo mensual
+// antes que lo trimestral. Cada lista se filtra igual por TAB_DEFS[k].visible()
+// antes de mostrarse, así que no hace falta que las 3 listas sean excluyentes.
+function tabOrderFor() {
+  if (isObispadoUser()) {
+    // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
+    // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
+    // semanal) van primero, Estadísticas al final por ser lo más ocasional.
+    return ['calendar', 'meetings', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'admin'];
+  }
+  if (canSeeInterviewsTab()) {
+    // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
+    // Sociedad de Socorro): Mis Actividades y Entrevistas primero, por ser
+    // las más accionables día a día.
+    return ['calendar', 'myActivities', 'interviews', 'meetings', 'budget', 'stats'];
+  }
+  // Líder de una organización sin entrevistas, o Miembro (a este último le
+  // queda filtrado solo Calendario + Mis Actividades de todas formas).
+  return ['calendar', 'myActivities', 'meetings', 'budget', 'stats'];
 }
 // "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
 // Administrador — los Miembros no las ven en absoluto.
@@ -783,6 +1047,10 @@ function render() {
         <div class="topbar-title">${BRAND_WORDMARK_HTML}<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
       </div>
       <div class="topbar-right">
+        ${canSeeBishopricPanelTab() ? `<button type="button" class="icon-btn topbar-icon-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" id="bishopric-toggle" title="Panel de Obispado">⛪</button>` : ''}
+        <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">🔍</button>
+        <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">🔔<span class="notif-badge" id="notif-badge" hidden></span></button>
+        <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">❓</button>
         <div class="user-chip">
           <div class="user-avatar">${esc(initials(u.name))}</div>
           <div>
@@ -793,16 +1061,18 @@ function render() {
         <button class="btn btn-ghost btn-sm" id="logout-btn">Salir</button>
       </div>
     </div>
-    <div class="tabs">
-      <button class="tab-btn ${state.view === 'calendar' ? 'active' : ''}" data-view="calendar">Calendario</button>
-      ${canSeeBishopricPanelTab() ? `<button class="tab-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" data-view="bishopricPanel">Panel de Obispado</button>` : ''}
-      ${canSeeMyActivitiesTab() ? `<button class="tab-btn ${state.view === 'myActivities' ? 'active' : ''}" data-view="myActivities">Mis Actividades</button>` : ''}
-      ${canSeeInterviewsTab() ? `<button class="tab-btn ${state.view === 'interviews' ? 'active' : ''}" data-view="interviews">Entrevistas</button>` : ''}
-      ${canSeeBudgetTab() ? `<button class="tab-btn ${state.view === 'budget' ? 'active' : ''}" data-view="budget">Presupuesto</button>` : ''}
-      ${canSeeMeetingsTab() ? `<button class="tab-btn ${state.view === 'meetings' ? 'active' : ''}" data-view="meetings">Reuniones y Consejos</button>` : ''}
-      ${canSeeAssignmentsTab() ? `<button class="tab-btn ${state.view === 'cleaning' ? 'active' : ''}" data-view="cleaning">Asignaciones</button>` : ''}
-      ${canSeeStatsTab() ? `<button class="tab-btn ${state.view === 'stats' ? 'active' : ''}" data-view="stats">Estadísticas</button>` : ''}
-      ${u.role === 'admin' ? `<button class="tab-btn ${state.view === 'admin' ? 'active' : ''}" data-view="admin">Administración</button>` : ''}
+    <div id="search-panel" class="topbar-dropdown-panel" hidden>
+      <div class="search-panel-row">
+        <input type="text" id="search-input" placeholder="Buscar actividades, entrevistas, actas, discursos…" autocomplete="off" />
+        <button type="button" class="icon-btn" id="search-close">×</button>
+      </div>
+      <div id="search-results"></div>
+    </div>
+    <div id="notif-panel" class="topbar-dropdown-panel" hidden>
+      <div id="notif-results"></div>
+    </div>
+    <div class="tabs" id="main-tabs">
+      ${tabOrderFor().filter((k) => TAB_DEFS[k].visible()).map((k) => `<button class="tab-btn ${state.view === k ? 'active' : ''}" data-view="${k}">${esc(TAB_DEFS[k].label)}</button>`).join('')}
     </div>
     <main class="view" id="view-root"></main>
     <div id="modal-root"></div>
@@ -811,6 +1081,9 @@ function render() {
   root.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => { state.view = btn.dataset.view; renderCurrentView(); });
   });
+  const bishopricBtn = document.getElementById('bishopric-toggle');
+  if (bishopricBtn) bishopricBtn.addEventListener('click', () => { state.view = 'bishopricPanel'; renderCurrentView(); });
+  wireTopbarUtilities();
   renderCurrentView();
 }
 
@@ -823,6 +1096,8 @@ function renderCurrentView() {
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   if (state.view === 'bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
+  const bishopricBtn = document.getElementById('bishopric-toggle');
+  if (bishopricBtn) bishopricBtn.classList.toggle('active', state.view === 'bishopricPanel');
   if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'bishopricPanel') renderBishopricPanelView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
@@ -886,6 +1161,7 @@ async function renderCalendarView() {
     </button>`).join('');
 
   let cellsHtml = '';
+  const agendaDays = []; // solo para la vista "Agenda": días del mes actual con algo agendado
   for (let i = 0; i < 42; i++) {
     const cellDate = new Date(gridStart); cellDate.setDate(gridStart.getDate() + i);
     const iso = toISODate(cellDate);
@@ -903,6 +1179,8 @@ async function renderCalendarView() {
       ...dayStake.map((s) => ({ ...s, kind: 'stake' })),
     ].sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
 
+    if (!otherMonth && items.length) agendaDays.push({ iso, dateObj: cellDate, isToday, items });
+
     const MAX_SHOW = 3;
     const visible = items.slice(0, MAX_SHOW);
     const extra = items.length - visible.length;
@@ -917,6 +1195,22 @@ async function renderCalendarView() {
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
       </div>`;
   }
+
+  const agendaHtml = agendaDays.length ? agendaDays.map((day) => `
+    <div class="agenda-day">
+      <div class="agenda-day-header ${day.isToday ? 'is-today' : ''}">${esc(fmtDateHuman(day.iso))}</div>
+      <div class="card-list">
+        ${day.items.map((it) => `
+          <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+            <span class="org-dot" style="background:${it.organizationColor}"></span>
+            <div class="lc-main">
+              <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
+              <div class="lc-sub">${esc(it.organizationName || '')}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+            </div>
+            <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('') : '<div class="empty-state">Sin actividades este mes' + (state.activeOrgIds ? ' con los filtros de organización activos' : '') + '</div>';
 
   container.innerHTML = `
     <div class="cal-header">
@@ -934,17 +1228,27 @@ async function renderCalendarView() {
       <div class="cal-goto">
         <label for="cal-goto-input" class="cal-goto-label">Ir a fecha:</label>
         <input type="date" id="cal-goto-input" />
+        <button type="button" class="icon-btn" id="cal-minical-toggle" title="Elegir fecha en un mini calendario">📅</button>
+      </div>
+      <div class="view-toggle">
+        <button type="button" class="view-toggle-btn ${state.calViewMode === 'month' ? 'active' : ''}" id="cal-view-month" title="Vista de mes">🗓️ Mes</button>
+        <button type="button" class="view-toggle-btn ${state.calViewMode === 'agenda' ? 'active' : ''}" id="cal-view-agenda" title="Vista de lista">📋 Agenda</button>
       </div>
       ${canManageAnyEvents() ? `<button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
     </div>
+    <div id="mini-cal-panel" class="mini-cal-panel" hidden></div>
     ${await stakeStatusBarHtml()}
     <div class="org-filters">${chips}</div>
+    ${state.calViewMode === 'agenda' ? `
+    <div class="agenda-list">${agendaHtml}</div>
+    ` : `
     <div class="cal-grid-wrap">
       <div class="cal-grid">
         ${DOW_LABELS.map((d) => `<div class="cal-dow">${d}</div>`).join('')}
         ${cellsHtml}
       </div>
     </div>
+    `}
   `;
 
   document.getElementById('cal-prev').addEventListener('click', () => shiftMonth(-1));
@@ -966,6 +1270,11 @@ async function renderCalendarView() {
     await shiftMonth(0, true);
     openDayModal(val);
   });
+  document.getElementById('cal-minical-toggle').addEventListener('click', () => {
+    state.miniCalOpen = !state.miniCalOpen;
+    if (state.miniCalOpen) state.miniCalMonth = new Date(state.calMonth);
+    renderMiniCalPanel();
+  });
   const newBtn = document.getElementById('cal-new-event');
   if (newBtn) newBtn.addEventListener('click', () => openEventModal());
   container.querySelectorAll('.org-chip').forEach((c) => c.addEventListener('click', () => toggleOrgFilter(c.dataset.org)));
@@ -981,8 +1290,71 @@ async function renderCalendarView() {
     }
   }));
   container.querySelectorAll('[data-more]').forEach((btn) => btn.addEventListener('click', () => openDayModal(btn.dataset.more)));
+  document.getElementById('cal-view-month').addEventListener('click', () => { state.calViewMode = 'month'; renderCalendarView(); });
+  document.getElementById('cal-view-agenda').addEventListener('click', () => { state.calViewMode = 'agenda'; renderCalendarView(); });
+  container.querySelectorAll('.agenda-list .list-card').forEach((row) => row.addEventListener('click', () => {
+    if (row.dataset.kind === 'event') {
+      openItemModal(state.events.find((e) => e.id === Number(row.dataset.id)), 'event');
+    } else if (row.dataset.kind === 'interview') {
+      openItemModal(state.interviews.find((i) => i.id === Number(row.dataset.id)), 'interview');
+    } else {
+      openReadOnlyModal(state.stakeEvents.find((s) => s.id === Number(row.dataset.id)), 'stake');
+    }
+  }));
 
   wireStakeStatusBar();
+  if (state.miniCalOpen) renderMiniCalPanel();
+}
+
+// ---------------- Mini calendario emergente para "Ir a fecha" ----------------
+// Alternativa visual al input de fecha nativo (cuya apariencia varía mucho
+// entre navegadores/SO): una grilla compacta de días, con su propia
+// navegación de mes, para elegir una fecha con el mismo lenguaje visual del
+// resto de la app. Se abre EN EL FLUJO NORMAL de la página (empuja el
+// contenido hacia abajo, igual que los paneles de búsqueda/notificaciones)
+// para que nunca tape ni se corte con otro recuadro en celular.
+function renderMiniCalPanel() {
+  const panel = document.getElementById('mini-cal-panel');
+  if (!panel) return;
+  panel.hidden = !state.miniCalOpen;
+  if (!state.miniCalOpen) return;
+  const monthDate = state.miniCalMonth || new Date(state.calMonth);
+  const gridStart = gridStartDate(monthDate);
+  const today = new Date();
+  let cells = '';
+  for (let i = 0; i < 42; i++) {
+    const cellDate = new Date(gridStart); cellDate.setDate(gridStart.getDate() + i);
+    const iso = toISODate(cellDate);
+    const otherMonth = cellDate.getMonth() !== monthDate.getMonth();
+    const isToday = isSameDay(cellDate, today);
+    const hasItems = state.events.some((e) => e.date === iso) || state.interviews.some((iv) => iv.date === iso);
+    cells += `<button type="button" class="mini-cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">${cellDate.getDate()}${hasItems ? '<span class="mini-cal-dot"></span>' : ''}</button>`;
+  }
+  panel.innerHTML = `
+    <div class="mini-cal-nav">
+      <button type="button" class="icon-btn" id="mini-cal-prev">‹</button>
+      <div class="mini-cal-label">${MONTH_LABELS[monthDate.getMonth()].charAt(0).toUpperCase() + MONTH_LABELS[monthDate.getMonth()].slice(1)} ${monthDate.getFullYear()}</div>
+      <button type="button" class="icon-btn" id="mini-cal-next">›</button>
+    </div>
+    <div class="mini-cal-dow-row">${DOW_LABELS.map((d) => `<div>${d.slice(0, 1)}</div>`).join('')}</div>
+    <div class="mini-cal-grid">${cells}</div>
+  `;
+  document.getElementById('mini-cal-prev').addEventListener('click', () => {
+    state.miniCalMonth = addMonths(monthDate, -1);
+    renderMiniCalPanel();
+  });
+  document.getElementById('mini-cal-next').addEventListener('click', () => {
+    state.miniCalMonth = addMonths(monthDate, 1);
+    renderMiniCalPanel();
+  });
+  panel.querySelectorAll('.mini-cal-cell').forEach((btn) => btn.addEventListener('click', async () => {
+    const iso = btn.dataset.date;
+    const [y, m] = iso.split('-').map(Number);
+    state.calMonth = new Date(y, m - 1, 1);
+    state.miniCalOpen = false;
+    await shiftMonth(0, true);
+    openDayModal(iso);
+  }));
 }
 
 // ---------------- Barra de estado del calendario de Estaca ----------------
@@ -1176,6 +1548,52 @@ function openItemModal(item, kind) {
   }
 }
 
+// Solo aplica a actividades reales (no a reuniones privadas ni a
+// entrevistas ni a lo sincronizado de Estaca) — coincide con la misma
+// restricción que ya aplica el servidor en POST /api/events/:id/rsvp.
+function rsvpApplies(item, kind) { return kind === 'event' && !item.isMeeting; }
+
+function rsvpSectionHtml(item) {
+  const my = item.myRsvp || null;
+  return `
+    <div class="rsvp-box">
+      <div class="rsvp-summary">✅ ${item.rsvpYes || 0} confirmaron${item.rsvpNo ? ` · ❌ ${item.rsvpNo} no van` : ''}</div>
+      <div class="rsvp-buttons">
+        <button type="button" class="btn btn-sm ${my === 'yes' ? 'btn-primary' : 'btn-secondary'}" id="rsvp-yes">✅ Voy</button>
+        <button type="button" class="btn btn-sm ${my === 'no' ? 'btn-primary' : 'btn-secondary'}" id="rsvp-no">❌ No voy</button>
+      </div>
+    </div>`;
+}
+
+async function sendRsvp(eventId, response) {
+  try {
+    const updated = await api(`/events/${eventId}/rsvp`, { method: 'POST', body: { response } });
+    const idx = state.events.findIndex((e) => e.id === eventId);
+    if (idx !== -1) state.events[idx] = { ...state.events[idx], ...updated };
+    return updated;
+  } catch (e) {
+    toast(e.message, 'error');
+    return null;
+  }
+}
+
+function wireRsvpButtons(item) {
+  const yesBtn = document.getElementById('rsvp-yes');
+  const noBtn = document.getElementById('rsvp-no');
+  if (!yesBtn || !noBtn) return;
+  const handle = (response) => async () => {
+    const nextResponse = item.myRsvp === response ? null : response; // clic de nuevo = quitar la respuesta
+    const updated = await sendRsvp(item.id, nextResponse);
+    if (!updated) return;
+    Object.assign(item, updated);
+    const box = document.querySelector('.rsvp-box');
+    if (box) box.outerHTML = rsvpSectionHtml(item);
+    wireRsvpButtons(item);
+  };
+  yesBtn.addEventListener('click', handle('yes'));
+  noBtn.addEventListener('click', handle('no'));
+}
+
 function openReadOnlyModal(item, kind) {
   if (!item) return;
   const title = kind === 'interview' ? item.memberName : item.title;
@@ -1194,6 +1612,7 @@ function openReadOnlyModal(item, kind) {
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
           ${kind === 'stake' ? `<div class="hint-box" style="margin-top:10px;">🔗 Sincronizada automáticamente desde el calendario de Estaca — no se puede editar aquí. ${item.blocking === false ? 'Es informativa: no bloquea que se agende algo encima.' : 'Tiene prioridad: no se puede agendar algo encima sin autorización del líder de Obispado.'}</div>` : ''}
+          ${rsvpApplies(item, kind) ? rsvpSectionHtml(item) : ''}
         </div>
         <div class="modal-footer" style="justify-content:flex-end;">
           <button class="btn btn-secondary" id="ro-modal-close2">Cerrar</button>
@@ -1203,6 +1622,7 @@ function openReadOnlyModal(item, kind) {
   document.getElementById('ro-modal-close').addEventListener('click', closeModal);
   document.getElementById('ro-modal-close2').addEventListener('click', closeModal);
   document.getElementById('ro-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ro-modal-backdrop') closeModal(); });
+  if (rsvpApplies(item, kind)) wireRsvpButtons(item);
 }
 
 function editableOrgOptions(mode) {
@@ -1317,11 +1737,12 @@ async function renderMyActivitiesLeaderView() {
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
-        </div>`).join('') : '<div class="empty-state">Todavía no tienes actividades agendadas</div>'}
+        </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id: 'my-act-empty-new', label: '+ Agregar la primera' })}
     </div>
   `;
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
+  wireEmptyStateCta('my-act-empty-new', () => openEventModal());
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
   document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
     state.myActivitiesPrefsOpen = !prefsOpen;
@@ -1618,11 +2039,29 @@ function openEventModal(existing = null) {
 }
 
 // ---------------- Entrevistas ----------------
-async function loadInterviewsUpcoming() {
-  const from = toISODate(new Date());
-  const to = toISODate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 120));
+// Pestaña principal: solo las que todavía están pendientes de verificar
+// (status=scheduled) — sin límite de fecha, para que una entrevista
+// atrasada que nadie marcó siga apareciendo hasta que alguien la revise
+// (antes desaparecía sola a los 120 días sin dejar rastro).
+async function loadInterviewsPending() {
   const params = state.interviewOrgFilter !== 'all' ? `&organizationId=${state.interviewOrgFilter}` : '';
-  return api(`/interviews?from=${from}&to=${to}${params}`);
+  return api(`/interviews?status=scheduled${params}`);
+}
+// Historial: las ya marcadas ✅ Se hizo / ❌ No se hizo, más recientes primero.
+async function loadInterviewsHistory() {
+  const params = state.interviewOrgFilter !== 'all' ? `&organizationId=${state.interviewOrgFilter}` : '';
+  return api(`/interviews?status=history${params}`);
+}
+
+function interviewStatusPillHtml(status) {
+  if (status === 'done') return `<span class="status-pill status-green">✅ Se hizo</span>`;
+  if (status === 'not_done') return `<span class="status-pill status-red">❌ No se hizo</span>`;
+  return `<span class="status-pill status-amber">Por verificar</span>`;
+}
+
+function interviewStatsLine(iv) {
+  const times = iv.timesInterviewed === 1 ? '1 vez' : `${iv.timesInterviewed || 0} veces`;
+  return `Se le ha entrevistado ${times} en total${iv.lastInterviewDate ? ' · última vez ' + esc(fmtDateHuman(iv.lastInterviewDate)) : ''}`;
 }
 
 async function renderInterviewsView() {
@@ -1631,7 +2070,11 @@ async function renderInterviewsView() {
   const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews && (seesAll || o.id === state.user.organizationId));
   container.innerHTML = `<div class="section-header"><div><h2>Entrevistas</h2><p>Cargando…</p></div></div>`;
   let list;
-  try { list = await loadInterviewsUpcoming(); } catch (e) { toast(e.message, 'error'); list = []; }
+  try { list = await loadInterviewsPending(); } catch (e) { toast(e.message, 'error'); list = []; }
+  // Se pide siempre (esté abierto o no el desplegable) para poder mostrar
+  // "cuántas hay" en el botón de "Ver historial" sin tener que abrirlo primero.
+  let history = [];
+  try { history = await loadInterviewsHistory(); } catch (e) { history = []; }
 
   const grouped = {};
   for (const iv of list) { (grouped[iv.date] ||= []).push(iv); }
@@ -1650,6 +2093,7 @@ async function renderInterviewsView() {
       <button class="subtab-btn ${state.interviewOrgFilter === 'all' ? 'active' : ''}" data-org="all">Todas</button>
       ${interviewOrgs.map((o) => `<button class="subtab-btn ${String(state.interviewOrgFilter) === String(o.id) ? 'active' : ''}" data-org="${o.id}">${esc(o.name)}</button>`).join('')}
     </div>` : ''}
+    ${dates.length ? `<div class="hint-box" style="margin-top:0;">Cuando la entrevista ya se realizó (o no se pudo hacer), márcala con ✅ o ❌ — puedes agregar un comentario opcional. Pasa automáticamente al historial y ya no queda pendiente acá.</div>` : ''}
     <div class="card-list">
       ${dates.length ? dates.map((d) => `
         <div style="margin-bottom:6px;">
@@ -1660,21 +2104,156 @@ async function renderInterviewsView() {
               <div class="lc-main">
                 <div class="lc-title">${esc(iv.memberName)}${iv.memberUserId ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
                 <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+                <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
-              ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button></div>` : ''}
+              ${canScheduleInterviewsFor(iv.organizationId) ? `
+              <div class="lc-actions">
+                <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="done" title="Se hizo">✅</button>
+                <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="not_done" title="No se hizo">❌</button>
+                <button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button>
+              </div>` : ''}
             </div>`).join('')}
-        </div>`).join('') : '<div class="empty-state">No hay entrevistas agendadas en los próximos 120 días</div>'}
+        </div>`).join('') : emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManageAnyInterviews() ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)}
     </div>
+    ${history.length ? `
+      <button type="button" class="btn btn-secondary btn-sm" id="iv-history-toggle" style="margin-top:16px;">
+        ${state.interviewsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${history.length} entrevista${history.length === 1 ? '' : 's'} verificada${history.length === 1 ? '' : 's'})`}
+      </button>
+      <div class="card-list" style="margin-top:10px;">
+        ${state.interviewsHistoryOpen ? history.map((iv) => interviewHistoryCardHtml(iv)).join('') : ''}
+      </div>` : ''}
   `;
 
   const newBtn = document.getElementById('iv-new');
   if (newBtn) newBtn.addEventListener('click', () => openInterviewModal());
+  wireEmptyStateCta('iv-empty-new', () => openInterviewModal());
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.interviewOrgFilter = b.dataset.org === 'all' ? 'all' : Number(b.dataset.org); renderInterviewsView(); }));
   container.querySelectorAll('[data-edit-iv]').forEach((b) => b.addEventListener('click', () => {
     const iv = list.find((i) => i.id === Number(b.dataset.editIv));
     openInterviewModal(iv);
   }));
+  container.querySelectorAll('.iv-mark').forEach((b) => b.addEventListener('click', () => {
+    const iv = list.find((i) => i.id === Number(b.dataset.id));
+    if (iv) openInterviewMarkModal(iv, b.dataset.status);
+  }));
+  const historyToggle = document.getElementById('iv-history-toggle');
+  if (historyToggle) historyToggle.addEventListener('click', () => { state.interviewsHistoryOpen = !state.interviewsHistoryOpen; renderInterviewsView(); });
+  wireInterviewHistoryCards(history);
+}
+
+// editable=false, de solo lectura: muestra el estado (pill), el comentario
+// si se dejó uno, y el nombre se puede apretar para ver el historial
+// completo de esa persona (igual que en Discursos).
+function interviewHistoryCardHtml(iv) {
+  return `
+    <div class="list-card" data-id="${iv.id}">
+      <span class="org-dot" style="background:${iv.organizationColor}"></span>
+      <div class="lc-main">
+        <div class="lc-title">
+          <span class="clickable-name iv-history-name" data-member-name="${esc(iv.memberName)}" data-member-user-id="${iv.memberUserId || ''}" title="Ver historial completo de entrevistas">${esc(iv.memberName)}</span>
+          ${interviewStatusPillHtml(iv.status)}
+        </div>
+        <div class="lc-sub">${esc(iv.organizationName)}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}</div>
+        ${iv.comment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(iv.comment)}</div>` : ''}
+        <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
+      </div>
+      <div class="lc-when">${esc(fmtDateHuman(iv.date))}</div>
+      ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm iv-history-delete" data-id="${iv.id}" title="Eliminar del historial">🗑️</button></div>` : ''}
+    </div>`;
+}
+
+function wireInterviewHistoryCards(history) {
+  document.querySelectorAll('.iv-history-name').forEach((el) => {
+    el.addEventListener('click', () => openInterviewMemberDetailModal(el.dataset.memberName, el.dataset.memberUserId, history));
+  });
+  document.querySelectorAll('.iv-history-delete').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar definitivamente este registro del historial? Esta acción no se puede deshacer.')) return;
+      try {
+        await api(`/interviews/${btn.dataset.id}`, { method: 'DELETE' });
+        toast('Registro eliminado del historial');
+        await renderInterviewsView();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+}
+
+function interviewMemberKeyClient(memberName, memberUserId) {
+  return memberUserId ? `u:${memberUserId}` : `n:${normalizeSearchText(memberName)}`;
+}
+
+// Detalle de una persona: todo su historial de entrevistas ya verificadas
+// (fecha, estado y comentario) — mismo espíritu que openSpeakerDetailModal
+// en Discursos, para poder "revisar a la persona completa" de un vistazo.
+function openInterviewMemberDetailModal(memberName, memberUserId, allHistory) {
+  const key = interviewMemberKeyClient(memberName, memberUserId);
+  const mine = allHistory.filter((iv) => interviewMemberKeyClient(iv.memberName, iv.memberUserId) === key).sort((a, b) => b.date.localeCompare(a.date));
+  const doneCount = mine.filter((iv) => iv.status === 'done').length;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ivmd-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>👤 ${esc(memberName)}</h3><button class="modal-close" id="ivmd-modal-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">Se le ha entrevistado ${doneCount === 1 ? '1 vez' : doneCount + ' veces'} en total.</p>
+          <div class="card-list">
+            ${mine.map((iv) => `
+              <div class="list-card">
+                <div class="lc-main">
+                  <div class="lc-title">${esc(fmtDateHuman(iv.date))} ${interviewStatusPillHtml(iv.status)}</div>
+                  <div class="lc-sub" ${iv.comment ? '' : 'style="font-style:italic;"'}>${iv.comment ? esc(iv.comment) : 'Sin comentario'}</div>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div class="modal-footer"><div></div><div><button class="btn btn-secondary" id="ivmd-close">Cerrar</button></div></div>
+      </div>
+    </div>`;
+  document.getElementById('ivmd-modal-close').addEventListener('click', closeModal);
+  document.getElementById('ivmd-close').addEventListener('click', closeModal);
+  document.getElementById('ivmd-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivmd-modal-backdrop') closeModal(); });
+}
+
+// Check de verificación ✅/❌ con comentario opcional — ej. "Se hizo todo muy
+// bien, el hermano está buscando trabajo, pero está con ánimo" o "Se canceló
+// porque el hermano está enfermo". Al guardar, la entrevista sale de la
+// pestaña principal y pasa al historial (ver loadInterviewsPending/History).
+function openInterviewMarkModal(iv, status) {
+  const isDone = status === 'done';
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ivm-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isDone ? '✅ ¿Se realizó la entrevista?' : '❌ ¿No se realizó la entrevista?'}</h3><button class="modal-close" id="ivm-modal-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">${esc(iv.memberName)} · ${esc(fmtDateHuman(iv.date))}</p>
+          <div class="field">
+            <label>Comentario (opcional)</label>
+            <textarea id="ivm-comment" placeholder="${isDone ? 'Ej: Se hizo todo muy bien, el hermano está buscando trabajo, pero está con ánimo.' : 'Ej: Se canceló porque el hermano está enfermo.'}">${esc(iv.comment || '')}</textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ivm-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ivm-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('ivm-modal-close').addEventListener('click', closeModal);
+  document.getElementById('ivm-cancel').addEventListener('click', closeModal);
+  document.getElementById('ivm-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivm-modal-backdrop') closeModal(); });
+  document.getElementById('ivm-save').addEventListener('click', async () => {
+    const comment = document.getElementById('ivm-comment').value.trim();
+    try {
+      await api(`/interviews/${iv.id}/mark`, { method: 'PUT', body: { status, comment } });
+      closeModal();
+      toast(isDone ? 'Entrevista marcada como realizada' : 'Entrevista marcada como no realizada');
+      await refreshAfterInterviewChange();
+    } catch (e) { toast(e.message, 'error'); }
+  });
 }
 
 // ---------------- Selector de miembro con autocompletado ----------------
@@ -1775,7 +2354,14 @@ async function openInterviewModal(existing = null) {
   if (!existing && options.length === 0) { toast('No tienes permiso para agendar entrevistas', 'error'); return; }
   const isEdit = !!existing;
   let directory = [];
+  let allInterviews = [];
   try { directory = await api('/users/directory'); } catch (e) { directory = []; }
+  // Solo para mostrar "se le ha entrevistado X veces" al elegir/escribir el
+  // miembro — igual patrón que allTalks en Discursos. No filtra por status:
+  // aunque este registro puntual esté "scheduled", ya trae computado el
+  // conteo histórico de ESA persona (memberInterviewStats en el servidor
+  // cuenta sus entrevistas "done", sin importar el status de este registro).
+  try { allInterviews = await api('/interviews'); } catch (e) { allInterviews = []; }
   const modalRoot = document.getElementById('modal-root');
   const selectedUserId = existing?.memberUserId || '';
   modalRoot.innerHTML = `
@@ -1793,6 +2379,7 @@ async function openInterviewModal(existing = null) {
               ${options.length === 1 && !isEdit ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
             ${memberPickerFieldHtml('iv', selectedUserId, existing?.memberName)}
+            <div id="iv-member-stats" class="hint-box" style="margin-top:0; display:none;"></div>
             <div class="two-col">
               <div class="field">
                 <label>Teléfono (opcional)</label>
@@ -1853,8 +2440,13 @@ async function openInterviewModal(existing = null) {
   document.getElementById('iv-modal-close').addEventListener('click', closeModal);
   document.getElementById('iv-cancel').addEventListener('click', closeModal);
   document.getElementById('iv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'iv-modal-backdrop') closeModal(); });
+  // Esto borra la entrevista sin dejar registro histórico — pensado para
+  // corregir un error al agendar (ej. quedó duplicada). Si la entrevista se
+  // agendó bien pero no se pudo hacer (o ya se hizo), conviene cerrar este
+  // formulario y usar los botones ✅/❌ de la lista en su lugar, para que el
+  // motivo quede guardado en el historial.
   if (isEdit) document.getElementById('iv-delete').addEventListener('click', async () => {
-    if (!confirm('¿Eliminar esta entrevista?')) return;
+    if (!confirm('¿Eliminar esta entrevista? Esto la borra por completo, sin dejar registro histórico. Si ya se hizo (o no se pudo hacer), mejor ciérralo y usa ✅/❌ en la lista para que quede en el historial.')) return;
     try { await api(`/interviews/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Entrevista eliminada'); await refreshAfterInterviewChange(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -1873,7 +2465,24 @@ async function openInterviewModal(existing = null) {
   wireLocationField('iv', resetIvConflictCheck);
   document.getElementById('iv-location-other-field').querySelector('input').addEventListener('input', resetIvConflictCheck);
 
-  wireMemberPicker('iv', directory, resetIvConflictCheck);
+  const ivStatsBox = document.getElementById('iv-member-stats');
+  const showIvMemberStats = () => {
+    const nameInput = document.getElementById('iv-member-name');
+    const hiddenId = document.getElementById('iv-member-user-id');
+    const norm = normalizeSearchText(nameInput.value);
+    if (!norm) { ivStatsBox.style.display = 'none'; return; }
+    const userId = hiddenId.value;
+    const match = userId
+      ? allInterviews.find((i) => Number(i.memberUserId) === Number(userId))
+      : allInterviews.find((i) => !i.memberUserId && normalizeSearchText(i.memberName) === norm);
+    ivStatsBox.style.display = '';
+    ivStatsBox.textContent = match
+      ? `Se le ha entrevistado ${match.timesInterviewed} ${match.timesInterviewed === 1 ? 'vez' : 'veces'}${match.lastInterviewDate ? ' · última vez: ' + fmtDateHuman(match.lastInterviewDate) : ''}`
+      : 'Nunca ha sido entrevistado';
+  };
+  wireMemberPicker('iv', directory, () => { resetIvConflictCheck(); showIvMemberStats(); });
+  document.getElementById('iv-member-name').addEventListener('input', showIvMemberStats);
+  if (isEdit) showIvMemberStats();
 
   ivSaveBtn.addEventListener('click', async () => {
     if (!ivForm.reportValidity()) return;
@@ -1980,12 +2589,15 @@ async function renderBudgetView() {
         <select id="budget-quarter-select">
           ${quartersData.quarters.map((q) => `<option value="${q}" ${q === quarter ? 'selected' : ''}>${esc(quarterLabelClient(q))}${q === quartersData.currentQuarter ? ' (actual)' : ''}</option>`).join('')}
         </select>
+        ${categories.length ? `
+        <button class="btn btn-secondary btn-sm" id="budget-export-csv" title="Exportar a CSV">⬇️ CSV</button>
+        <button class="btn btn-secondary btn-sm" id="budget-export-pdf" title="Imprimir / Descargar PDF">🖨️ PDF</button>` : ''}
         ${isObispado ? `<button class="btn btn-secondary" id="budget-new-category">+ Nueva categoría</button>` : ''}
       </div>
     </div>
     ${!isCurrentQuarter ? `<div class="hint-box">Estás viendo un trimestre anterior, a modo de historial de consulta — no se puede editar. Para agregar asignaciones o gastos, vuelve al trimestre actual con el selector de arriba.</div>` : ''}
     <div class="card-list" id="budget-cats">
-      ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : '<div class="empty-state">Todavía no hay categorías de presupuesto</div>'}
+      ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id: 'budget-empty-new', label: '+ Crear la primera' } : null)}
     </div>
   `;
 
@@ -1996,6 +2608,19 @@ async function renderBudgetView() {
   if (isObispado) {
     document.getElementById('budget-new-category').addEventListener('click', () => openBudgetCategoryModal());
   }
+  const csvBtn = document.getElementById('budget-export-csv');
+  const pdfBtn = document.getElementById('budget-export-pdf');
+  if (csvBtn) csvBtn.addEventListener('click', () => {
+    downloadCsv(`presupuesto-${quarter}.csv`,
+      ['Categoría', 'Asignado', 'Gastado', 'Saldo'],
+      categories.map((c) => [c.categoryName, c.assigned, c.spent, c.balance]));
+  });
+  if (pdfBtn) pdfBtn.addEventListener('click', () => {
+    printReport(`Presupuesto — ${quarterLabelClient(quarter)}`, `Generado ${fmtDateHuman(toISODate(new Date()))}`,
+      ['Categoría', 'Asignado', 'Gastado', 'Saldo'],
+      categories.map((c) => [c.categoryName, fmtMoney(c.assigned), fmtMoney(c.spent), fmtMoney(c.balance)]));
+  });
+  wireEmptyStateCta('budget-empty-new', () => openBudgetCategoryModal());
   wireBudgetCategoryCards(categories, isCurrentQuarter, isObispado);
 }
 
@@ -2318,6 +2943,7 @@ async function renderAdminRequests() {
   let items;
   try { items = await api('/registration-requests'); } catch (e) { toast(e.message, 'error'); items = []; }
   content.innerHTML = `
+    <div class="table-scroll">
     <table class="data-table">
       <thead><tr><th>Nombre</th><th>Usuario</th><th>Perfil solicitado</th><th>Organización</th><th>Fecha</th><th></th></tr></thead>
       <tbody>
@@ -2335,6 +2961,7 @@ async function renderAdminRequests() {
           </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">No hay solicitudes pendientes</div></td></tr>`}
       </tbody>
     </table>
+    </div>
   `;
   content.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', () => {
     openApproveModal(items.find((r) => r.id === Number(b.dataset.approve)));
@@ -2414,6 +3041,7 @@ async function renderAdminUsers() {
     <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
       <button class="btn btn-primary btn-sm" id="user-new">+ Nuevo usuario</button>
     </div>
+    <div class="table-scroll">
     <table class="data-table">
       <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
       <tbody>
@@ -2430,6 +3058,7 @@ async function renderAdminUsers() {
           </tr>`).join('')}
       </tbody>
     </table>
+    </div>
   `;
   document.getElementById('user-new').addEventListener('click', () => openUserModal());
   content.querySelectorAll('[data-edit-user]').forEach((b) => b.addEventListener('click', () => openUserModal(users.find((u) => u.id === Number(b.dataset.editUser)))));
@@ -2509,6 +3138,7 @@ async function renderAdminOrgs() {
     <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
       <button class="btn btn-primary btn-sm" id="org-new">+ Nueva organización</button>
     </div>
+    <div class="table-scroll">
     <table class="data-table">
       <thead><tr><th>Color</th><th>Organización</th><th>Agenda entrevistas</th><th></th></tr></thead>
       <tbody>
@@ -2521,6 +3151,7 @@ async function renderAdminOrgs() {
           </tr>`).join('')}
       </tbody>
     </table>
+    </div>
   `;
   document.getElementById('org-new').addEventListener('click', () => openOrgModal());
   content.querySelectorAll('[data-edit-org]').forEach((b) => b.addEventListener('click', () => openOrgModal(orgById(b.dataset.editOrg))));
@@ -2682,7 +3313,7 @@ async function renderMeetingsManage() {
       <button class="btn btn-primary" id="meeting-new">+ Nueva acta</button>
     </div>
     <div class="card-list">
-      ${active.length ? active.map((m) => meetingCardHtml(m)).join('') : '<div class="empty-state">No hay actas activas</div>'}
+      ${active.length ? active.map((m) => meetingCardHtml(m)).join('') : emptyStateHtml('No hay actas activas', { id: 'meeting-empty-new', label: '+ Crear la primera' })}
     </div>
     ${archived.length ? `
       <div style="margin-top:22px;">
@@ -2691,6 +3322,7 @@ async function renderMeetingsManage() {
       </div>` : ''}
   `;
   document.getElementById('meeting-new').addEventListener('click', () => openMeetingModal());
+  wireEmptyStateCta('meeting-empty-new', () => openMeetingModal());
   wireMeetingCards(meetings);
 }
 
@@ -2844,7 +3476,7 @@ async function openMeetingDetailModal(m) {
                   </div>
                   ${commitmentStatusPillHtml(c)}
                 </div>
-              </div>`).join('') : '<div class="empty-state">Sin compromisos todavía</div>'}
+              </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null)}
           </div>
           ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
         </div>
@@ -2857,6 +3489,7 @@ async function openMeetingDetailModal(m) {
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
+  wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
   if (canEdit) {
     document.getElementById('md-add-commitment').addEventListener('click', () => openAddCommitmentModal(m));
     document.getElementById('md-archive').addEventListener('click', async () => {
@@ -2963,13 +3596,23 @@ async function renderCleaningView() {
   container.innerHTML = `
     <div class="section-header">
       <div><p>Cada turno puede tener una o varias familias asignadas</p></div>
-      <button class="btn btn-primary" id="cs-new">+ Nuevo turno</button>
+      <div style="display:flex; gap:8px;">
+        ${shifts.length ? `<button class="btn btn-secondary btn-sm" id="cs-export-csv" title="Exportar a CSV">⬇️ CSV</button>` : ''}
+        <button class="btn btn-primary" id="cs-new">+ Nuevo turno</button>
+      </div>
     </div>
     <div class="card-list">
-      ${dates.length ? dates.map((d) => cleaningDateCardHtml(d, byDate.get(d))).join('') : '<div class="empty-state">Todavía no hay turnos asignados</div>'}
+      ${dates.length ? dates.map((d) => cleaningDateCardHtml(d, byDate.get(d))).join('') : emptyStateHtml('Todavía no hay turnos asignados', { id: 'cs-empty-new', label: '+ Agregar el primero' })}
     </div>
   `;
   document.getElementById('cs-new').addEventListener('click', () => openCleaningShiftModal());
+  wireEmptyStateCta('cs-empty-new', () => openCleaningShiftModal());
+  const csvBtn = document.getElementById('cs-export-csv');
+  if (csvBtn) csvBtn.addEventListener('click', () => {
+    const statusLabel = { done: 'Sí fue', not_done: 'No fue' };
+    downloadCsv('turnos-de-aseo.csv', ['Fecha', 'Familia', 'Estado'],
+      shifts.map((s) => [fmtDateHuman(s.date), s.familyName, statusLabel[s.status] || 'Por confirmar']));
+  });
   wireCleaningShiftCards();
 }
 
@@ -3188,7 +3831,7 @@ async function renderTalksView() {
       <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
     </div>
     <div class="card-list">
-      ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : '<div class="empty-state">Todavía no hay discursos registrados este mes</div>'}
+      ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id: 'tk-empty-new', label: '+ Agregar el primero' })}
     </div>
     ${pastGroups.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="tk-history-toggle" style="margin-top:16px;">
@@ -3199,6 +3842,7 @@ async function renderTalksView() {
       </div>` : ''}
   `;
   document.getElementById('tk-new').addEventListener('click', () => openTalkModal());
+  wireEmptyStateCta('tk-empty-new', () => openTalkModal());
   const historyToggle = document.getElementById('tk-history-toggle');
   if (historyToggle) historyToggle.addEventListener('click', () => { state.talksHistoryOpen = !state.talksHistoryOpen; renderTalksView(); });
   wireTalkCards(talks);
@@ -3646,13 +4290,26 @@ async function renderStatsDashboard() {
 // vez cerrados, el ganador de cada categoría queda fijo para siempre en
 // "📜 Histórico", con un diploma descargable.
 const ACHIEVEMENT_CATEGORIES_CLIENT = [
-  { key: 'commitments', rankingKey: 'commitmentsRanking', icon: '🎯', label: 'Compromisos cumplidos', achievementName: 'Premio Nefi', blurb: 'Como Nefi ante cada encargo — "Iré y haré" (1 Nefi 3:7) — el mayor porcentaje de compromisos cumplidos.', emptyMsg: 'Todavía no hay compromisos resueltos', rowFn: rankingCommitmentRowHtml },
-  { key: 'cleaning', rankingKey: 'cleaningRanking', icon: '🧹', label: 'Más aseo cumplido', achievementName: 'Premio Nehemías', blurb: 'Como Nehemías, que organizó al pueblo en turnos para reconstruir la muralla de Jerusalén (Nehemías 3) — la familia con más turnos de aseo cumplidos.', emptyMsg: 'Todavía no hay turnos de aseo cumplidos', rowFn: rankingCleaningRowHtml },
-  { key: 'interviews', rankingKey: 'interviewsRanking', icon: '👤', label: 'Más entrevistas realizadas', achievementName: 'Premio Samuel', blurb: 'Como el joven Samuel — "Habla, que tu siervo oye" (1 Samuel 3:10) — quien más entrevistas realizó.', emptyMsg: 'Todavía no hay entrevistas registradas', rowFn: rankingInterviewRowHtml },
-  { key: 'talks', rankingKey: 'talksRanking', icon: '🎤', label: 'Más discursos dados', achievementName: 'Premio Pablo', blurb: 'Como el apóstol Pablo, incansable predicando en cada ciudad — quien más veces discursó.', emptyMsg: 'Todavía no hay discursos registrados', rowFn: rankingTalkRowHtml },
-  { key: 'activities', rankingKey: 'activitiesRanking', icon: '📅', label: 'Más actividades registradas', achievementName: 'Premio Brigham Young', blurb: 'Como Brigham Young, que organizó al pueblo en compañías ordenadas para la travesía al oeste (D. y C. 136) — quien más actividades organizó.', emptyMsg: 'Todavía no hay actividades registradas', rowFn: rankingActivityRowHtml },
-  { key: 'meetings', rankingKey: 'meetingsRanking', icon: '📋', label: 'Más actas de reunión registradas', achievementName: 'Premio Enoc', blurb: 'Como Enoc, cuyas palabras y ciudad quedaron registradas para siempre (Moisés 6-7) — quien más actas dejó registradas.', emptyMsg: 'Todavía no hay actas registradas', rowFn: rankingMeetingRowHtml },
+  { key: 'commitments', rankingKey: 'commitmentsRanking', icon: '🎯', label: 'Compromisos cumplidos', achievementName: 'Premio Nefi', blurb: 'Como Nefi ante cada encargo — "Iré y haré" (1 Nefi 3:7) — el mayor porcentaje de compromisos cumplidos.', emptyMsg: 'Todavía no hay compromisos resueltos', rowFn: rankingCommitmentRowHtml, csvRow: (r) => [r.userName, `${r.pct}%`, `${r.completed} cumplidos`] },
+  { key: 'cleaning', rankingKey: 'cleaningRanking', icon: '🧹', label: 'Más aseo cumplido', achievementName: 'Premio Nehemías', blurb: 'Como Nehemías, que organizó al pueblo en turnos para reconstruir la muralla de Jerusalén (Nehemías 3) — la familia con más turnos de aseo cumplidos.', emptyMsg: 'Todavía no hay turnos de aseo cumplidos', rowFn: rankingCleaningRowHtml, csvRow: (r) => [r.familyName, r.timesDone, r.lastDoneDate ? fmtDateHuman(r.lastDoneDate) : ''] },
+  { key: 'interviews', rankingKey: 'interviewsRanking', icon: '👤', label: 'Más entrevistas realizadas', achievementName: 'Premio Samuel', blurb: 'Como el joven Samuel — "Habla, que tu siervo oye" (1 Samuel 3:10) — quien más entrevistas realizó.', emptyMsg: 'Todavía no hay entrevistas registradas', rowFn: rankingInterviewRowHtml, csvRow: (r) => [r.interviewerName, r.count, ''] },
+  { key: 'talks', rankingKey: 'talksRanking', icon: '🎤', label: 'Más discursos dados', achievementName: 'Premio Pablo', blurb: 'Como el apóstol Pablo, incansable predicando en cada ciudad — quien más veces discursó.', emptyMsg: 'Todavía no hay discursos registrados', rowFn: rankingTalkRowHtml, csvRow: (r) => [r.speakerName, r.timesSpoken, r.lastSpokenDate ? fmtDateHuman(r.lastSpokenDate) : ''] },
+  { key: 'activities', rankingKey: 'activitiesRanking', icon: '📅', label: 'Más actividades registradas', achievementName: 'Premio Brigham Young', blurb: 'Como Brigham Young, que organizó al pueblo en compañías ordenadas para la travesía al oeste (D. y C. 136) — quien más actividades organizó.', emptyMsg: 'Todavía no hay actividades registradas', rowFn: rankingActivityRowHtml, csvRow: (r) => [r.userName, r.count, r.lastDate ? fmtDateHuman(r.lastDate) : ''] },
+  { key: 'meetings', rankingKey: 'meetingsRanking', icon: '📋', label: 'Más actas de reunión registradas', achievementName: 'Premio Enoc', blurb: 'Como Enoc, cuyas palabras y ciudad quedaron registradas para siempre (Moisés 6-7) — quien más actas dejó registradas.', emptyMsg: 'Todavía no hay actas registradas', rowFn: rankingMeetingRowHtml, csvRow: (r) => [r.userName, r.count, r.lastDate ? fmtDateHuman(r.lastDate) : ''] },
 ];
+
+// Junta todas las categorías de rankings en filas planas para exportar de
+// una sola vez (CSV/PDF) — cada fila lleva su propia categoría porque son
+// 6 rankings distintos, no una sola tabla.
+function rankingsToRows(data) {
+  const rows = [];
+  ACHIEVEMENT_CATEGORIES_CLIENT.forEach((cat) => {
+    (data[cat.rankingKey] || []).slice(0, 10).forEach((r, i) => {
+      rows.push([cat.label, i + 1, ...cat.csvRow(r)]);
+    });
+  });
+  return rows;
+}
 const ACHIEVEMENT_PERIODS_CLIENT = [
   { key: 'month', label: 'Este mes' },
   { key: 'quarter', label: 'Este trimestre' },
@@ -3703,9 +4360,22 @@ async function renderAchievementsAllTime() {
   try { data = await api('/stats/rankings'); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
   el.innerHTML = `
-    <p class="hint-box" style="margin-bottom:18px;">Rankings de todo el Barrio, desde siempre — visibles solo para el Obispado.</p>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      <p class="hint-box" style="margin:0;">Rankings de todo el Barrio, desde siempre — visibles solo para el Obispado.</p>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn btn-secondary btn-sm" id="ach-export-csv" title="Exportar a CSV">⬇️ CSV</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="ach-export-pdf" title="Imprimir / Descargar PDF">🖨️ PDF</button>
+      </div>
+    </div>
     <div class="ranking-grid">${ACHIEVEMENT_CATEGORIES_CLIENT.map((cat) => rankingSectionHtml(cat, data[cat.rankingKey] || [])).join('')}</div>
   `;
+  document.getElementById('ach-export-csv').addEventListener('click', () => {
+    downloadCsv('rachas-y-logros-todo-el-tiempo.csv', ['Categoría', 'Puesto', 'Nombre', 'Valor', 'Detalle'], rankingsToRows(data));
+  });
+  document.getElementById('ach-export-pdf').addEventListener('click', () => {
+    printReport('Rachas y Logros — Todo el tiempo', `Generado ${fmtDateHuman(toISODate(new Date()))}`,
+      ['Categoría', 'Puesto', 'Nombre', 'Valor', 'Detalle'], rankingsToRows(data));
+  });
 }
 
 async function renderAchievementsCurrent() {
@@ -3715,9 +4385,22 @@ async function renderAchievementsCurrent() {
   try { data = await api(`/achievements/current?period=${state.achPeriod}`); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
   el.innerHTML = `
-    <p class="hint-box" style="margin-bottom:18px;">${esc(data.periodLabel)} — en curso. Este período se cierra solo apenas termine, y el ganador de cada categoría queda guardado para siempre en "📜 Histórico".</p>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      <p class="hint-box" style="margin:0;">${esc(data.periodLabel)} — en curso. Este período se cierra solo apenas termine, y el ganador de cada categoría queda guardado para siempre en "📜 Histórico".</p>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn btn-secondary btn-sm" id="ach-export-csv" title="Exportar a CSV">⬇️ CSV</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="ach-export-pdf" title="Imprimir / Descargar PDF">🖨️ PDF</button>
+      </div>
+    </div>
     <div class="ranking-grid">${ACHIEVEMENT_CATEGORIES_CLIENT.map((cat) => rankingSectionHtml(cat, data[cat.rankingKey] || [])).join('')}</div>
   `;
+  document.getElementById('ach-export-csv').addEventListener('click', () => {
+    downloadCsv(`rachas-y-logros-${state.achPeriod}.csv`, ['Categoría', 'Puesto', 'Nombre', 'Valor', 'Detalle'], rankingsToRows(data));
+  });
+  document.getElementById('ach-export-pdf').addEventListener('click', () => {
+    printReport(`Rachas y Logros — ${data.periodLabel}`, `Generado ${fmtDateHuman(toISODate(new Date()))}`,
+      ['Categoría', 'Puesto', 'Nombre', 'Valor', 'Detalle'], rankingsToRows(data));
+  });
 }
 
 async function renderAchievementsHistory() {
@@ -3793,6 +4476,48 @@ function openDiplomaModal(a) {
   document.getElementById('dip-close').addEventListener('click', closeModal);
   document.getElementById('dip-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'dip-modal-backdrop') closeModal(); });
   document.getElementById('dip-print').addEventListener('click', () => window.print());
+}
+
+// ---------------- Exportar reportes (CSV / imprimir-a-PDF) ----------------
+// El CSV se arma y descarga enteramente en el navegador — no hace falta
+// ningún endpoint nuevo en el servidor. El "PDF" reutiliza exactamente el
+// mismo mecanismo que ya usa el diploma de arriba: una tabla armada en un
+// contenedor .print-area + window.print() — el navegador ya sabe exportar
+// a PDF desde su propio diálogo de impresión, sin depender de ninguna
+// librería extra (coherente con que este proyecto no usa dependencias).
+function downloadCsv(filename, headers, rows) {
+  const escCsv = (v) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [headers.map(escCsv).join(','), ...rows.map((r) => r.map(escCsv).join(','))];
+  // ﻿ (BOM): para que Excel abra los acentos/ñ correctamente en vez de mostrarlos rotos.
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function printReport(title, meta, headers, rows) {
+  let area = document.getElementById('report-print-area');
+  if (!area) {
+    area = document.createElement('div');
+    area.id = 'report-print-area';
+    area.className = 'print-area';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = `
+    <div class="print-report">
+      <h2>${esc(title)}</h2>
+      <div class="print-report-meta">${esc(meta)} · ${esc(APP_NAME)}</div>
+      <table>
+        <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+  window.print();
 }
 
 function rankingSectionHtml(cat, items) {
@@ -3902,11 +4627,13 @@ async function renderBishopricPanelView() {
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;" class="bp-grid">
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">⏰ Compromisos atrasados</h3>
-        <div class="card-list">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : '<div class="empty-state">Ninguno — al día 🎉</div>'}</div>
+        <div class="card-list${data.overdueCommitments.length > 1 ? ' bp-scroll-row' : ''}" id="bp-commitments-row">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : '<div class="empty-state">Ninguno — al día 🎉</div>'}</div>
+        ${bpScrollDotsHtml(data.overdueCommitments.length, 'bp-commitments-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">🧹 Turnos de aseo sin confirmar</h3>
-        <div class="card-list">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : '<div class="empty-state">Ninguno pendiente</div>'}</div>
+        <div class="card-list${data.cleaningPending.length > 1 ? ' bp-scroll-row' : ''}" id="bp-cleaning-row">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : '<div class="empty-state">Ninguno pendiente</div>'}</div>
+        ${bpScrollDotsHtml(data.cleaningPending.length, 'bp-cleaning-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">👤 Entrevistas de los próximos 7 días</h3>
@@ -3924,28 +4651,118 @@ async function renderBishopricPanelView() {
       </div>
     </div>
   `;
+  wireBishopricPanelActions();
+  wireBishopricScrollDots();
 }
 
+// Las esferitas reemplazan la barra de scroll nativa (que queda escondida
+// por CSS) para las cajas "de a una tarjeta a la vez" del Panel de
+// Obispado: una por tarjeta, gris, y la de la tarjeta que se está viendo se
+// pinta celeste — igual que un carrusel. Se puede tocar una esfera para
+// saltar directo a esa tarjeta.
+function bpScrollDotsHtml(count, targetId) {
+  if (count <= 1) return '';
+  const dots = Array.from({ length: count }, (_, i) => `<button type="button" class="bp-scroll-dot${i === 0 ? ' active' : ''}" data-index="${i}" aria-label="Tarjeta ${i + 1} de ${count}"></button>`).join('');
+  return `<div class="bp-scroll-dots" data-target="${targetId}">${dots}</div>`;
+}
+
+function wireBishopricScrollDots() {
+  document.querySelectorAll('.bp-scroll-dots').forEach((dotsEl) => {
+    const row = document.getElementById(dotsEl.dataset.target);
+    if (!row) return;
+    const dots = Array.from(dotsEl.querySelectorAll('.bp-scroll-dot'));
+    const updateActive = () => {
+      const idx = Math.max(0, Math.min(dots.length - 1, Math.round(row.scrollLeft / Math.max(1, row.clientWidth))));
+      dots.forEach((d, i) => d.classList.toggle('active', i === idx));
+    };
+    row.addEventListener('scroll', () => window.requestAnimationFrame(updateActive));
+    dots.forEach((d, i) => {
+      d.addEventListener('click', () => row.scrollTo({ left: i * row.clientWidth, behavior: 'smooth' }));
+    });
+  });
+}
+
+// Cada tarjeta representa el compromiso de UNA persona — solo ella (o un
+// Administrador desde Reuniones y Consejos) lo puede marcar como cumplido,
+// para que el comentario "cómo se hizo" sea confiable. Por eso el botón
+// "✅ Completar" solo aparece cuando quien ve el panel ES el responsable;
+// en cualquier otra tarjeta, tocarla lleva directo a esa acta en Reuniones
+// y Consejos para hacer seguimiento con esa persona.
 function bpCommitmentRowHtml(c) {
+  const isMine = !!state.user && Number(c.assignedToUserId) === Number(state.user.id);
   return `
-    <div class="list-card">
-      <div class="lc-main">
-        <div class="lc-title">${esc(c.description)}</div>
-        <div class="lc-sub">${esc(c.organizationName)} · "${esc(c.meetingTitle)}" · responsable: ${esc(c.assignedToName)} · vencía ${esc(fmtDateHuman(c.dueDate))}</div>
+    <div class="list-card bp-commitment-card" data-meeting-id="${c.meetingId}" data-commitment-id="${c.commitmentId}" style="flex-direction:column; align-items:stretch; gap:8px; ${isMine ? '' : 'cursor:pointer;'}">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+        <div class="lc-main">
+          <div class="lc-title">${esc(c.description)}</div>
+          <div class="lc-sub">${esc(c.organizationName)} · "${esc(c.meetingTitle)}" · responsable: ${esc(c.assignedToName)} · vencía ${esc(fmtDateHuman(c.dueDate))}</div>
+        </div>
+        <span class="status-pill status-red">Atrasado</span>
       </div>
-      <span class="status-pill status-red">Atrasado</span>
+      ${isMine ? `
+      <div>
+        <button type="button" class="btn btn-secondary btn-sm bp-commitment-complete-toggle">✅ Completar</button>
+      </div>
+      <div class="bp-commitment-complete-form" style="display:none;">
+        <textarea class="bp-commitment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
+        <button type="button" class="btn btn-primary btn-sm bp-commitment-complete-save">Guardar</button>
+      </div>` : ''}
     </div>`;
 }
 
+// El líder de Obispado (o Admin) sí puede marcar cualquier turno de aseo
+// directamente desde acá — ya es la misma regla que rige todo el módulo
+// Aseo del Edificio (isObispadoLeader), no hace falta ser "responsable" de
+// nada como con los compromisos.
 function bpCleaningRowHtml(s) {
   return `
-    <div class="list-card">
-      <div class="lc-main">
-        <div class="lc-title">${esc(s.familyName)}</div>
-        <div class="lc-sub">Turno del ${esc(fmtDateHuman(s.date))}</div>
+    <div class="list-card" style="flex-direction:column; align-items:stretch; gap:8px;">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+        <div class="lc-main">
+          <div class="lc-title">${esc(s.familyName)}</div>
+          <div class="lc-sub">Turno del ${esc(fmtDateHuman(s.date))}</div>
+        </div>
+        <span class="status-pill status-amber">Sin confirmar</span>
       </div>
-      <span class="status-pill status-amber">Sin confirmar</span>
+      <div class="lc-actions">
+        <button type="button" class="btn btn-ghost btn-sm bp-cs-mark" data-id="${s.id}" data-status="done" title="Sí fue">✅ Sí fue</button>
+        <button type="button" class="btn btn-ghost btn-sm bp-cs-mark" data-id="${s.id}" data-status="not_done" title="No fue">❌ No fue</button>
+      </div>
     </div>`;
+}
+
+function wireBishopricPanelActions() {
+  document.querySelectorAll('.bp-commitment-card').forEach((card) => {
+    const toggleBtn = card.querySelector('.bp-commitment-complete-toggle');
+    if (toggleBtn) {
+      const form = card.querySelector('.bp-commitment-complete-form');
+      toggleBtn.addEventListener('click', () => { form.style.display = form.style.display === 'none' ? '' : 'none'; });
+      card.querySelector('.bp-commitment-complete-save').addEventListener('click', async (e) => {
+        const btn = e.target;
+        btn.disabled = true;
+        const comment = card.querySelector('.bp-commitment-comment').value.trim();
+        try {
+          await api(`/commitments/${card.dataset.commitmentId}/complete`, { method: 'PUT', body: { comment } });
+          toast('Compromiso completado');
+          await renderBishopricPanelView();
+        } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
+      });
+    } else {
+      // No es tu compromiso: tocar la tarjeta lleva directo a esa acta en
+      // Reuniones y Consejos (mismo destino que un resultado de búsqueda de
+      // categoría "meetings" — ver goToSearchResult).
+      card.addEventListener('click', () => goToSearchResult('meetings', Number(card.dataset.meetingId), ''));
+    }
+  });
+  document.querySelectorAll('.bp-cs-mark').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api(`/cleaning/shifts/${btn.dataset.id}/mark`, { method: 'PUT', body: { status: btn.dataset.status } });
+        toast('Turno actualizado');
+        await renderBishopricPanelView();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
 }
 
 function bpInterviewRowHtml(iv) {

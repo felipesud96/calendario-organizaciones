@@ -78,3 +78,55 @@ export async function sendRescheduleEmail(iv, previous) {
 <p>— OrganizaSion</p>`
   );
 }
+
+// Recordatorio de un compromiso (acta de Reuniones y Consejos) que vence
+// mañana — se manda al email de la cuenta de quien es responsable, igual
+// que el resto de los correos automáticos: si esa persona no tiene un email
+// real cargado (recuerda que el "usuario" de ingreso no siempre es un
+// correo de verdad), simplemente no le llega, sin error para nadie.
+export async function sendCommitmentDueSoonEmail(commitment, assigneeEmail, assigneeName, meetingTitle) {
+  if (!isEmailConfigured() || !assigneeEmail) return;
+  try {
+    await sendEmail({
+      to: assigneeEmail,
+      subject: `Recordatorio: compromiso que vence mañana`,
+      html: `<p>Hola ${escHtml(assigneeName)},</p>
+<p>Este es un recordatorio: tienes un compromiso que vence <strong>mañana</strong>, del acta "${escHtml(meetingTitle)}":</p>
+<ul><li>${escHtml(commitment.description)}</li></ul>
+<p>Puedes marcarlo como completado desde OrganizaSion → Reuniones y Consejos → Mis Asignaciones.</p>
+<p>— OrganizaSion</p>`,
+    });
+    console.log(`[notificaciones] recordatorio de compromiso enviado a ${assigneeEmail}`);
+  } catch (err) {
+    console.error(`[notificaciones] error enviando recordatorio de compromiso a ${assigneeEmail}:`, err.message);
+  }
+}
+
+// Resumen diario para el Obispado (y el Administrador): un solo correo cada
+// mañana con lo que corresponde hoy — así no hace falta entrar a la app
+// todos los días solo para confirmar que no se olvida nada. Reutiliza la
+// idea de "Panel de Obispado" pero acotada a HOY (no a los próximos 7 días).
+export async function sendDailyDigestEmail(toEmail, toName, digest) {
+  if (!isEmailConfigured() || !toEmail) return;
+  const { cleaningToday, interviewsToday, activitiesToday, commitmentsDueToday } = digest;
+  if (!cleaningToday.length && !interviewsToday.length && !activitiesToday.length && !commitmentsDueToday.length) return;
+  const section = (title, items, render) => items.length
+    ? `<p><strong>${escHtml(title)}</strong></p><ul>${items.map(render).join('')}</ul>`
+    : '';
+  try {
+    await sendEmail({
+      to: toEmail,
+      subject: `Resumen de hoy en OrganizaSion`,
+      html: `<p>Hola ${escHtml(toName)},</p>
+<p>Esto es lo que corresponde hoy en el Barrio:</p>
+${section('🧹 Turnos de aseo', cleaningToday, (s) => `<li>${escHtml(s.familyName)}</li>`)}
+${section('👤 Entrevistas', interviewsToday, (iv) => `<li>${escHtml(iv.memberName)} — ${escHtml(iv.startTime)}${iv.organizationName ? ' · ' + escHtml(iv.organizationName) : ''}</li>`)}
+${section('📅 Actividades', activitiesToday, (e) => `<li>${escHtml(e.title)} — ${escHtml(e.startTime)}${e.organizationName ? ' · ' + escHtml(e.organizationName) : ''}</li>`)}
+${section('🎯 Compromisos que vencen hoy', commitmentsDueToday, (c) => `<li>${escHtml(c.description)} — responsable: ${escHtml(c.assignedToName)}</li>`)}
+<p>— OrganizaSion</p>`,
+    });
+    console.log(`[notificaciones] resumen diario enviado a ${toEmail}`);
+  } catch (err) {
+    console.error(`[notificaciones] error enviando resumen diario a ${toEmail}:`, err.message);
+  }
+}

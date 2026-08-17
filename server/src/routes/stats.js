@@ -43,7 +43,22 @@ function evaluationForEvent(data, eventId) {
 
 function withEventInfo(ev, data) {
   const org = data.organizations.find((o) => o.id === Number(ev.organizationId));
-  return { ...ev, organizationName: org?.name || '', organizationColor: org?.color || '#999999' };
+  // rsvpYes: cuántos marcaron "Voy" — se usa como sugerencia (no obligación)
+  // de Asistencia Esperada al abrir el formulario de evaluación, ver idea
+  // "confirmación de asistencia" en app.js/evaluationModalHtml.
+  const rsvps = Array.isArray(ev.rsvps) ? ev.rsvps : [];
+  const rsvpYes = rsvps.filter((r) => r.response === 'yes').length;
+  return { ...ev, organizationName: org?.name || '', organizationColor: org?.color || '#999999', rsvpYes };
+}
+
+// Extraído a su propia función para que notifications.js pueda reutilizar
+// el mismo conteo de "actividades por evaluar" en la campana de
+// notificaciones sin duplicar esta lógica.
+export function pendingEvaluationsFor(user, data, orgId) {
+  const today = todayISO();
+  let items = data.events.filter((e) => e.date < today && !evaluationForEvent(data, e.id));
+  if (orgId !== null && orgId !== undefined) items = items.filter((e) => Number(e.organizationId) === orgId);
+  return items.map((e) => withEventInfo(e, data)).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function registerStatsRoutes(router) {
@@ -53,11 +68,7 @@ export function registerStatsRoutes(router) {
   router.get('/api/stats/pending-evaluations', requireRole(['admin', 'leader'], async (req, res) => {
     const data = load();
     const orgId = scopeOrganizationId(req);
-    const today = todayISO();
-    let items = data.events.filter((e) => e.date < today && !evaluationForEvent(data, e.id));
-    if (orgId !== null) items = items.filter((e) => Number(e.organizationId) === orgId);
-    items = items.map((e) => withEventInfo(e, data)).sort((a, b) => a.date.localeCompare(b.date));
-    sendJson(res, 200, items);
+    sendJson(res, 200, pendingEvaluationsFor(req.user, data, orgId));
   }));
 
   router.post('/api/stats/evaluations', requireRole(['admin', 'leader'], async (req, res, params, body) => {
@@ -223,13 +234,16 @@ export function commitmentsRanking(data, range) {
 // Entrevistas: "interviewerName" es texto libre (se autocompleta con el
 // nombre de quien la agenda, ver interviews.js) — se agrupa normalizado,
 // para que mayúsculas o tildes distintas no fragmenten el conteo de la
-// misma persona. Reutilizado por achievements.js. `range` es opcional
-// ({start, end} ISO, ambas inclusive) y filtra por la fecha de la
-// entrevista.
+// misma persona. Solo cuentan las que se verificaron como "Se hizo" (ver el
+// check ✅/❌ de interviews.js) — igual criterio que Aseo y Discursos, que
+// solo suman lo efectivamente cumplido, no lo agendado. Reutilizado por
+// achievements.js. `range` es opcional ({start, end} ISO, ambas inclusive) y
+// filtra por la fecha de la entrevista.
 export function interviewsRanking(data, range) {
   const inRange = (date) => !range || (date >= range.start && date <= range.end);
   const byInterviewer = new Map();
   for (const iv of data.interviews) {
+    if (iv.status !== 'done') continue;
     if (!inRange(iv.date)) continue;
     const norm = normalizeSearchText(iv.interviewerName);
     if (!norm) continue;

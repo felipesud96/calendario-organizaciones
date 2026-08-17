@@ -65,14 +65,23 @@ export function allActivityCreatorsWithStats(data, range) {
   }).sort((a, b) => b.count - a.count);
 }
 
-function withOrgInfo(item, orgs) {
+// El detalle de quién respondió no se manda al cliente (mantiene el payload
+// liviano, que viaja en cada carga de calendario) — solo el conteo de "Voy"
+// y, si se pasa el id de quien pregunta, su propia respuesta. `rsvps` en sí
+// (el arreglo crudo) se descarta del objeto que se manda.
+function withOrgInfo(item, orgs, currentUserId) {
   const org = orgs.find((o) => o.id === item.organizationId);
   const involvedIds = Array.isArray(item.involvedOrganizationIds) ? item.involvedOrganizationIds : [];
   const involvedOrganizations = involvedIds
     .map((id) => orgs.find((o) => o.id === id))
     .filter(Boolean)
     .map((o) => ({ id: o.id, name: o.name, color: o.color }));
-  return { ...item, organizationName: org?.name || '', organizationColor: org?.color || '#999999', involvedOrganizations };
+  const rsvps = Array.isArray(item.rsvps) ? item.rsvps : [];
+  const rsvpYes = rsvps.filter((r) => r.response === 'yes').length;
+  const rsvpNo = rsvps.filter((r) => r.response === 'no').length;
+  const myRsvp = currentUserId ? (rsvps.find((r) => Number(r.userId) === Number(currentUserId))?.response || null) : null;
+  const { rsvps: _omit, ...rest } = item;
+  return { ...rest, organizationName: org?.name || '', organizationColor: org?.color || '#999999', involvedOrganizations, rsvpYes, rsvpNo, myRsvp };
 }
 
 // Limpia la lista de "otras organizaciones involucradas": solo IDs de
@@ -145,7 +154,7 @@ export function registerEventRoutes(router) {
     if (query.organizationId) items = items.filter((e) => String(e.organizationId) === String(query.organizationId));
     items = items
       .filter((e) => canSeeMeeting(req.user, e))
-      .map((e) => withOrgInfo(e, data.organizations))
+      .map((e) => withOrgInfo(e, data.organizations, req.user.id))
       .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
     sendJson(res, 200, items);
   }));
@@ -180,7 +189,7 @@ export function registerEventRoutes(router) {
       return e;
     });
     const data = load();
-    sendJson(res, 201, withOrgInfo(event, data.organizations));
+    sendJson(res, 201, withOrgInfo(event, data.organizations, req.user.id));
   }));
 
   // Crea varias ocurrencias de una misma actividad/reunión de una sola vez
@@ -236,7 +245,7 @@ export function registerEventRoutes(router) {
       });
     });
     const data = load();
-    sendJson(res, 201, created.map((e) => withOrgInfo(e, data.organizations)));
+    sendJson(res, 201, created.map((e) => withOrgInfo(e, data.organizations, req.user.id)));
   }));
 
   router.put('/api/events/:id', requireAuth(async (req, res, params, body) => {
@@ -287,7 +296,40 @@ export function registerEventRoutes(router) {
       });
       return ev;
     });
-    sendJson(res, 200, withOrgInfo(updated, data.organizations));
+    sendJson(res, 200, withOrgInfo(updated, data.organizations, req.user.id));
+  }));
+
+  // Confirmación de asistencia (RSVP) por el propio usuario — "Voy" / "No
+  // puedo" — solo tiene sentido para Actividades (no para Reuniones
+  // privadas, que no son un evento al que un miembro "asista"). Volver a
+  // llamar con la misma respuesta no hace nada raro (queda igual); mandar
+  // `response: null` retira la respuesta.
+  router.post('/api/events/:id/rsvp', requireAuth(async (req, res, params, body) => {
+    const id = Number(params.id);
+    const response = body?.response;
+    if (response !== 'yes' && response !== 'no' && response !== null) {
+      return sendJson(res, 400, { error: 'Respuesta inválida (debe ser "yes", "no", o null para quitarla)' });
+    }
+    const data0 = load();
+    const existing = data0.events.find((e) => e.id === id);
+    if (!existing) return sendJson(res, 404, { error: 'Actividad no encontrada' });
+    if (existing.isMeeting) return sendJson(res, 400, { error: 'No aplica confirmar asistencia a una reunión privada' });
+    if (!canSeeMeeting(req.user, existing)) return sendJson(res, 403, { error: 'No puedes ver esta actividad' });
+    const updated = await withDb((data) => {
+      const ev = data.events.find((e) => e.id === id);
+      const rsvps = Array.isArray(ev.rsvps) ? ev.rsvps : (ev.rsvps = []);
+      const idx = rsvps.findIndex((r) => Number(r.userId) === Number(req.user.id));
+      if (response === null) {
+        if (idx !== -1) rsvps.splice(idx, 1);
+      } else if (idx !== -1) {
+        rsvps[idx] = { userId: req.user.id, response, respondedAt: new Date().toISOString() };
+      } else {
+        rsvps.push({ userId: req.user.id, response, respondedAt: new Date().toISOString() });
+      }
+      return ev;
+    });
+    const data = load();
+    sendJson(res, 200, withOrgInfo(updated, data.organizations, req.user.id));
   }));
 
   router.delete('/api/events/:id', requireAuth(async (req, res, params) => {

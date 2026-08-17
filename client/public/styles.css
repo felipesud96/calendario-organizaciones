@@ -205,6 +205,58 @@ a { color: var(--celeste-dark); }
 .role-leader { background: var(--celeste-light); color: var(--celeste-darker); }
 .role-member { background: #f1f5f9; color: #475569; }
 
+/* ---------- Íconos de la barra superior (búsqueda / notificaciones / tour) ---------- */
+.topbar-icon-btn {
+  position: relative;
+  width: 34px; height: 34px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--white);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; flex-shrink: 0;
+}
+.topbar-icon-btn:hover, .topbar-icon-btn.active { background: var(--celeste-lighter); border-color: var(--celeste); }
+.notif-badge {
+  position: absolute; top: -4px; right: -4px;
+  min-width: 16px; height: 16px; padding: 0 3px;
+  border-radius: 999px; background: #dc2626; color: white;
+  font-size: 9.5px; font-weight: 700; line-height: 16px; text-align: center;
+  border: 2px solid var(--white);
+}
+
+/* Los paneles de búsqueda/notificaciones se renderizan en el flujo normal del
+   documento (empujan el contenido hacia abajo) en vez de flotar encima —
+   así nunca se superponen ni tapan otros recuadros, ni en celular ni en
+   pantallas grandes. */
+.topbar-dropdown-panel {
+  background: var(--white);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+}
+.search-panel-row { display: flex; align-items: center; gap: 8px; max-width: 640px; margin: 0 auto; }
+.search-panel-row input[type="text"] {
+  flex: 1; height: 38px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--border); font-size: 14px; background: var(--white);
+}
+.search-panel-row input[type="text"]:focus { outline: none; border-color: var(--celeste); box-shadow: 0 0 0 3px var(--celeste-light); }
+.search-hint { font-size: 12.5px; color: var(--ink-soft); text-align: center; padding: 14px 0; }
+#search-results, #notif-results { max-width: 640px; margin: 10px auto 0; display: flex; flex-direction: column; gap: 4px; max-height: 55vh; overflow-y: auto; }
+#notif-results:empty, #search-results:empty { margin: 0; }
+.search-result-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  border: 1px solid var(--border); background: var(--white);
+  border-radius: 10px; padding: 9px 11px;
+}
+.search-result-row:hover { background: var(--celeste-lighter); border-color: var(--celeste); }
+.search-result-icon {
+  width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+  background: var(--celeste-lighter); color: var(--celeste-darker);
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.search-result-main { min-width: 0; flex: 1; }
+.search-result-title { font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-result-sub { font-size: 12px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-result-category { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--celeste-dark); flex-shrink: 0; }
+
 .tabs {
   display: flex; gap: 4px;
   padding: 8px 20px 0;
@@ -253,10 +305,52 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
   font-size: 13px; color: var(--ink);
 }
 .cal-goto input[type="date"]:focus { outline: none; border-color: var(--celeste); box-shadow: 0 0 0 3px var(--celeste-light); }
+.view-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.view-toggle-btn {
+  border: none; background: var(--white); color: var(--ink-soft);
+  padding: 0 10px; height: 32px; font-size: 12.5px; font-weight: 600;
+}
+.view-toggle-btn + .view-toggle-btn { border-left: 1px solid var(--border); }
+.view-toggle-btn.active { background: var(--celeste-lighter); color: var(--celeste-darker); }
+.agenda-list { display: flex; flex-direction: column; gap: 16px; }
+.agenda-day-header {
+  font-size: 12.5px; font-weight: 700;
+  color: var(--celeste-darker); margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.agenda-day-header::first-letter { text-transform: uppercase; }
+.agenda-day-header.is-today { color: var(--celeste); }
+
+.mini-cal-panel {
+  background: var(--white); border-bottom: 1px solid var(--border);
+  padding: 10px 20px 14px; max-width: min(320px, 100%); box-sizing: border-box;
+}
+.mini-cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mini-cal-label { font-size: 13px; font-weight: 700; color: var(--celeste-darker); text-align: center; flex: 1; }
+.mini-cal-dow-row { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 10.5px; font-weight: 700; color: var(--ink-soft); margin-bottom: 4px; }
+.mini-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.mini-cal-cell {
+  position: relative;
+  height: 30px; border: none; background: none; border-radius: 8px;
+  font-size: 12px; color: var(--ink); cursor: pointer;
+}
+.mini-cal-cell:hover { background: var(--celeste-lighter); }
+.mini-cal-cell.other-month { color: var(--border); }
+.mini-cal-cell.today { background: var(--celeste); color: white; font-weight: 700; }
+.mini-cal-dot { position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--celeste-dark); }
+.mini-cal-cell.today .mini-cal-dot { background: white; }
 .lc-location { display: inline-flex; align-items: center; gap: 3px; }
 .ro-detail-row { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink); padding: 9px 0; border-bottom: 1px solid var(--border); }
 .ro-detail-row:last-child { border-bottom: none; }
 .ro-detail-row.ro-desc { align-items: flex-start; white-space: pre-wrap; color: var(--ink-soft); }
+
+.rsvp-box {
+  margin-top: 14px; padding: 12px; border-radius: var(--radius);
+  background: var(--celeste-lighter); border: 1px solid var(--border);
+}
+.rsvp-summary { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin-bottom: 8px; }
+.rsvp-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.rsvp-buttons .btn { flex: 1 1 auto; min-width: 90px; }
 
 .org-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 .org-chip {
@@ -374,6 +468,34 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 .list-card .lc-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
 .list-card .lc-when { font-size: 12.5px; font-weight: 700; color: var(--celeste-dark); white-space: nowrap; text-align: right; }
 .list-card .lc-actions { display: flex; gap: 6px; }
+/* Panel de Obispado: "Compromisos atrasados" y "Turnos de aseo sin
+   confirmar" pueden crecer mucho a medida que se suman organizaciones — en
+   vez de estirar la página hacia abajo, esas dos cajas se scrollean de
+   lado, mostrando una tarjeta completa a la vez (nunca cortada a la mitad)
+   con sus acciones (✅/❌) a mano. La barra de scroll nativa se esconde —
+   en su lugar, .bp-scroll-dots (debajo de la caja) indica cuántas tarjetas
+   hay y cuál se está viendo, estilo carrusel. */
+.card-list.bp-scroll-row {
+  flex-direction: row; overflow-x: auto;
+  -webkit-overflow-scrolling: touch; scroll-snap-type: x mandatory;
+  min-width: 0; /* si no, la grilla de .bp-grid no lo deja achicarse y
+                   termina estirando toda la página en vez de scrollear */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* Edge/IE viejo */
+}
+.card-list.bp-scroll-row::-webkit-scrollbar { display: none; /* Chrome/Safari */ }
+.card-list.bp-scroll-row > .list-card { flex: 0 0 100%; width: 100%; scroll-snap-align: start; scroll-snap-stop: always; }
+/* Los hijos directos de .bp-grid (uno por caja) también necesitan poder
+   achicarse por la misma razón — un item de grilla no se achica bajo su
+   contenido a menos que se le diga explícitamente. */
+.bp-grid > div { min-width: 0; }
+.bp-scroll-dots { display: flex; gap: 6px; margin-top: 8px; padding-left: 2px; }
+.bp-scroll-dot {
+  width: 7px; height: 7px; border-radius: 50%; border: none; padding: 0;
+  background: var(--border); cursor: pointer; flex: 0 0 auto;
+  transition: background-color .15s ease;
+}
+.bp-scroll-dot.active { background: var(--celeste-dark); }
 .empty-state { text-align: center; color: var(--ink-soft); font-size: 13.5px; padding: 40px 10px; border: 1.5px dashed var(--border); border-radius: var(--radius); }
 
 /* ---------- Presupuesto ---------- */
@@ -389,7 +511,11 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 .budget-expense-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed var(--border); }
 .budget-expense-row:last-child { border-bottom: none; }
 
-table.data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+/* Envoltorio con scroll horizontal propio — igual que .cal-grid-wrap: en
+   celular, si la tabla no entra, se desplaza ella sola en vez de estirar
+   toda la página (lo que generaba scroll horizontal en TODA la app). */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--radius); }
+table.data-table { width: 100%; min-width: 480px; border-collapse: collapse; font-size: 13.5px; }
 table.data-table th {
   text-align: left; padding: 9px 10px; background: var(--celeste-lighter);
   color: var(--celeste-darker); font-size: 11.5px; text-transform: uppercase;
@@ -398,7 +524,7 @@ table.data-table th {
 table.data-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
 table.data-table tr:last-child td { border-bottom: none; }
 
-.subtabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.subtabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
 .subtab-btn {
   background: var(--white); border: 1.5px solid var(--border);
   padding: 6px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
@@ -530,10 +656,25 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 @media print {
   body * { visibility: hidden; }
-  #diploma-print-area, #diploma-print-area * { visibility: visible; }
-  #diploma-print-area { position: absolute; top: 0; left: 0; width: 100%; }
+  #diploma-print-area, #diploma-print-area *,
+  .print-area, .print-area * { visibility: visible; }
+  #diploma-print-area, .print-area { position: absolute; top: 0; left: 0; width: 100%; }
   .modal-backdrop { position: static !important; background: none !important; }
 }
+
+/* ---------- Exportar reportes (CSV / imprimir-a-PDF) ---------- */
+/* Fuera de la vista normal (no hace falta un modal) — @media print de
+   arriba lo reposiciona para que se vea al imprimir/exportar a PDF. */
+.print-area { position: absolute; left: -9999px; top: -9999px; width: 800px; }
+.print-report {
+  padding: 24px; max-width: 800px; margin: 0 auto;
+  font-family: inherit; color: var(--ink);
+}
+.print-report h2 { margin: 0 0 4px; color: var(--celeste-darker); }
+.print-report .print-report-meta { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 18px; }
+.print-report table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+.print-report th, .print-report td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.print-report th { color: var(--celeste-darker); font-size: 11.5px; text-transform: uppercase; }
 
 @media (max-width: 640px) {
   .ranking-grid { grid-template-columns: 1fr; }
@@ -542,4 +683,20 @@ table.data-table tr:last-child td { border-bottom: none; }
   main.view { padding: 12px; }
   .topbar-title small { display: none; }
   .bp-grid { grid-template-columns: 1fr !important; }
+  /* Barra superior: en celular se achica el espacio entre íconos y se
+     esconde el nombre completo del usuario (queda solo el avatar + rol)
+     para que quepan los 3 botones nuevos + el chip sin desbordar. */
+  /* En vez de comprimir todo en una sola fila (que se corta o se sale de
+     la pantalla), la barra superior pasa a dos filas: logo/nombre arriba,
+     e íconos + usuario + salir abajo, alineados a la derecha. Así nunca
+     hay scroll horizontal ni contenido cortado en celulares angostos. */
+  .topbar { padding: 8px 12px; gap: 6px; flex-wrap: wrap; }
+  .topbar-right { gap: 6px; flex: 1 1 100%; justify-content: flex-end; }
+  .topbar-icon-btn { width: 30px; height: 30px; font-size: 13.5px; }
+  .user-chip { padding: 4px 8px 4px 4px; gap: 6px; }
+  .user-chip > div:not(.user-avatar) > div:first-child { display: none; }
+  .user-chip .role-badge { font-size: 9px; }
+  #logout-btn { padding: 6px 10px; font-size: 12.5px; }
+  .topbar-dropdown-panel { padding: 10px 12px; }
+  .search-panel-row input[type="text"] { font-size: 16px; } /* evita zoom automático de iOS al enfocar */
 }

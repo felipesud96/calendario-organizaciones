@@ -97,7 +97,10 @@ function canEditMeeting(user, meeting) {
 // tener panorama completo desde el Obispado. Esto no afecta "Mis
 // Asignaciones": los compromisos que te asignaron siguen apareciendo ahí
 // sin importar de qué organización sea el acta que los generó.
-function canSeeMeeting(user, meeting, data) {
+// Exportada (con este nombre, distinto del canSeeMeeting de events.js que
+// resuelve otra cosa: si una REUNIÓN PRIVADA del calendario es visible) para
+// que search.js reutilice la misma regla de privacidad de las actas.
+export function canSeeMeetingRecord(user, meeting, data) {
   if (isObispadoLeader(user, data)) return true;
   return Number(meeting.organizationId) === Number(user.organizationId);
 }
@@ -144,7 +147,7 @@ export function registerMeetingRoutes(router) {
     const data = load();
     const meeting = data.meetings.find((m) => m.id === id);
     if (!meeting) return sendJson(res, 404, { error: 'Acta no encontrada' });
-    if (!canSeeMeeting(req.user, meeting, data)) {
+    if (!canSeeMeetingRecord(req.user, meeting, data)) {
       return sendJson(res, 403, { error: 'No puedes ver las actas de otra organización' });
     }
     sendJson(res, 200, withMeetingInfo(meeting, data));

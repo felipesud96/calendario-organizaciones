@@ -5,6 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OrganizaSion</title>
   <link rel="icon" type="image/png" href="/logo-bee.png" />
+  <!-- Acceso directo desde el celular/tablet ("Agregar a pantalla de inicio"):
+       el manifest + estos íconos hacen que el acceso directo muestre el logo
+       de la abeja y diga "OrganizaSion", en vez del ícono/nombre genérico del
+       navegador. apple-touch-icon es aparte porque Safari/iOS no lee el
+       manifest para el ícono del acceso directo. -->
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-apple-touch.png" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="OrganizaSion" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>

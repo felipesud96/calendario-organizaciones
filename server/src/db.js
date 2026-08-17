@@ -105,6 +105,20 @@ export function load() {
     data.stakeCalendar = { ...data.stakeCalendar, showNonBlockingEvents: true };
     migrated = true;
   }
+  // migración: entrevistas creadas antes de que existiera el check de
+  // verificación (¿se hizo o no?) — quedan como "scheduled" (pendientes de
+  // verificar), igual que cualquier entrevista nueva; el líder las puede
+  // marcar retroactivamente con ✅/❌ para que pasen al historial. Ver
+  // routes/interviews.js.
+  for (const iv of data.interviews) {
+    if (iv.status === undefined) {
+      iv.status = 'scheduled';
+      iv.comment = iv.comment || '';
+      iv.markedAt = iv.markedAt ?? null;
+      iv.markedBy = iv.markedBy ?? null;
+      migrated = true;
+    }
+  }
   if (migrated) save(data);
   return data;
 }
