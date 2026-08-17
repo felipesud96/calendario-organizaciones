@@ -519,6 +519,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   text-align: center;
   background: #fffdf7;
 }
+.diploma-logo { width: 44px; height: 44px; object-fit: contain; display: block; margin: 0 auto 10px; }
 .diploma-eyebrow { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink-soft); font-weight: 700; }
 .diploma-title { font-size: 28px; font-weight: 800; color: var(--celeste-darker); margin: 10px 0 6px; font-family: Georgia, 'Times New Roman', serif; }
 .diploma-sub { font-size: 13px; color: var(--ink-soft); margin-bottom: 22px; }

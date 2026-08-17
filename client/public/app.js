@@ -3769,6 +3769,7 @@ function openDiplomaModal(a) {
         <div class="modal-body">
           <div id="diploma-print-area" class="diploma">
             <div class="diploma-border">
+              <img class="diploma-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
               <div class="diploma-eyebrow">${esc(APP_NAME)}</div>
               <div class="diploma-title">${esc(a.achievementName)}</div>
               <div class="diploma-sub">${a.categoryIcon} ${esc(a.categoryLabel)} · ${esc(a.periodLabel)}</div>
