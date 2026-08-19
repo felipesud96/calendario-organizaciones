@@ -27,6 +27,7 @@ const state = {
   stakeEvents: [],
   stakeCalendar: null,
   interviewOrgFilter: 'all',
+  interviewsSubtab: 'pending', // Entrevistas: 'pending' (agenda) o 'requests' (solicitudes por confirmar)
   adminSubtab: 'users',
   adminUsers: [],
   loading: false,
@@ -34,6 +35,8 @@ const state = {
   assignmentsSubtab: 'cleaning',
   talksHistoryOpen: false, // Discursos: el histórico de meses pasados arranca colapsado
   interviewsHistoryOpen: false, // Entrevistas: el historial de ya verificadas arranca colapsado
+  interviewRequestsHistoryOpen: false, // Entrevistas → Solicitudes: historial de ya decididas arranca colapsado
+  expenseRequestsHistoryOpen: false, // Presupuesto: historial de solicitudes de gasto ya decididas arranca colapsado
   statsSubtab: 'pending',
   statsYear: null,
   statsOrgId: null,
@@ -167,11 +170,67 @@ function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 function isSameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function fmtTime(t) { return t ? t.slice(0, 5) : ''; }
+const WEEKDAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 function fmtDateHuman(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   const date = new Date(y, m - 1, d);
-  const dow = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'][date.getDay()];
+  const dow = WEEKDAY_NAMES[date.getDay()];
   return `${dow} ${d} de ${MONTH_LABELS[m - 1]}`;
+}
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// Igual que timesOverlap() en el servidor (db.js): si falta la hora de
+// término se asume una duración típica de 30 minutos, solo para poder
+// comparar si dos horarios se superponen.
+function timeToMinutes(t) { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; }
+function effectiveEndMinutes(startTime, endTime) { return endTime ? timeToMinutes(endTime) : timeToMinutes(startTime) + 30; }
+function timesOverlap(aStart, aEnd, bStart, bEnd) {
+  return timeToMinutes(aStart) < effectiveEndMinutes(bStart, bEnd) && timeToMinutes(bStart) < effectiveEndMinutes(aStart, aEnd);
+}
+// Punto 4 (ampliación): a partir de la agenda semanal declarada por un líder
+// (weekday + rango de horas), calcula las próximas fechas concretas que
+// calzan dentro de las próximas 6 semanas — para que el miembro elija un día
+// real ("martes 25 de agosto") en vez de tener que adivinar cuál de sus
+// propios días de la semana es un martes o un jueves. `busy` (entrevistas ya
+// agendadas con ese líder, ver GET /interview-requests/orgs) descarta las
+// fechas cuyo horario ya está ocupado, para no ofrecer como "disponible" un
+// día que en realidad ya tiene una entrevista encima.
+function computeUpcomingAvailableDates(windows, busy) {
+  if (!Array.isArray(windows) || !windows.length) return [];
+  const busyList = Array.isArray(busy) ? busy : [];
+  const out = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = 1; i <= 42; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + i);
+    const weekday = d.getDay();
+    const dateStr = isoDate(d);
+    for (const w of windows) {
+      if (Number(w.weekday) !== weekday) continue;
+      const occupied = busyList.some((b) => b.date === dateStr && timesOverlap(w.startTime, w.endTime, b.startTime, b.endTime));
+      if (!occupied) out.push({ date: dateStr, weekday, startTime: w.startTime, endTime: w.endTime });
+    }
+  }
+  return out;
+}
+// Texto corto tipo "martes y jueves, 20:00–22:00" a partir de la agenda
+// semanal declarada — agrupa los días que comparten exactamente el mismo
+// rango de horas para no repetirlo, que es el caso más común (un líder que
+// entrevista siempre a la misma hora, distintos días).
+function availabilityWindowsSummary(windows) {
+  if (!Array.isArray(windows) || !windows.length) return '';
+  const byRange = {};
+  for (const w of windows) {
+    const key = `${w.startTime}-${w.endTime}`;
+    (byRange[key] ||= []).push(w.weekday);
+  }
+  return Object.entries(byRange).map(([range, days]) => {
+    const [start, end] = range.split('-');
+    const dayNames = [...new Set(days)].sort((a, b) => a - b).map((d) => WEEKDAY_NAMES[d]);
+    return `${dayNames.join(', ')} de ${start} a ${end}`;
+  }).join(' · ');
 }
 
 // ---------------- Lugar estandarizado ----------------
@@ -582,7 +641,7 @@ async function boot() {
     state.organizations = await api('/organizations');
     await loadCalendarData();
     render();
-    maybeStartOnboardingTour();
+    maybeShowMandatoryProfileModal(() => maybeStartOnboardingTour());
   } catch (e) {
     setToken(null);
     renderLogin();
@@ -664,6 +723,171 @@ function startOnboardingTour() {
     document.getElementById('tour-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tour-backdrop') { closeModal(); markTourSeen(); } });
   };
   renderStep();
+}
+
+// ---------------- Mi Perfil ----------------
+// Fecha de nacimiento, sexo, teléfono y foto de perfil — la fecha de
+// nacimiento y el sexo son los que determinan con qué organización se
+// puede agendar una entrevista (ver interviewEligibility en el servidor):
+// un hombre adulto con Cuórum de Élderes o con el Obispado; una mujer
+// adulta con Sociedad de Socorro o con el Obispado; un joven o una joven
+// solo con el Obispado (el Obispo y sus consejeros pueden entrevistar a
+// cualquiera, sin restricción).
+//
+// Comprime la foto en el propio navegador (un canvas, recortada a cuadrado
+// y reducida a un máximo de 320px de lado) antes de mandarla como data URI
+// en base64 — así no hace falta ninguna librería de subida de archivos ni
+// almacenamiento aparte: la foto queda guardada directo en el usuario,
+// igual que el resto de sus datos.
+function compressImageFile(file, maxSize = 320) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Archivo de imagen inválido'));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const outSize = Math.min(maxSize, side);
+        const canvas = document.createElement('canvas');
+        canvas.width = outSize; canvas.height = outSize;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, outSize, outSize);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Punto 8 (ampliación): ¿a esta persona le corresponde declarar un
+// llamamiento (Presidente/Obispo, Consejero o Secretario)? Solo si es líder
+// de Obispado, Cuórum de Élderes o Sociedad de Socorro.
+function callingApplies(u) {
+  if (!u || u.role !== 'leader' || !u.organizationId) return false;
+  const org = orgById(u.organizationId);
+  return !!(org && PRESIDENT_ORGS.includes(org.name));
+}
+
+// Al ingresar, si a la cuenta le falta la fecha de nacimiento, el sexo, o —
+// para líderes de Obispado/Cuórum de Élderes/Sociedad de Socorro — el
+// llamamiento (cuentas creadas antes de que existieran estos campos), se le
+// pide completarlo con un modal que no se puede cerrar sin guardar — recién
+// después de eso sigue el resto (recorrido guiado, etc.). `onDone` se
+// llama tanto si hacía falta completarlo (después de guardar) como si el
+// perfil ya estaba completo (de inmediato).
+function maybeShowMandatoryProfileModal(onDone) {
+  const needsCalling = callingApplies(state.user) && !state.user.calling;
+  if (state.user.birthDate && state.user.sex && !needsCalling) { onDone(); return; }
+  openProfileModal({ mandatory: true, onDone });
+}
+
+function openProfileModal({ mandatory = false, onDone } = {}) {
+  const u = state.user;
+  let photoDataUri = u.profilePhoto || null;
+  const showCalling = callingApplies(u);
+  const callingOrg = showCalling ? orgById(u.organizationId) : null;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="prof-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>${mandatory ? 'Completa tu perfil' : 'Mi Perfil'}</h3>
+          ${mandatory ? '' : '<button class="modal-close" id="prof-modal-close">×</button>'}
+        </div>
+        <div class="modal-body">
+          <div id="prof-error"></div>
+          ${mandatory ? `<div class="hint-box" style="margin-top:0;">Antes de seguir, nos falta ${(!u.birthDate || !u.sex) ? 'tu fecha de nacimiento y tu sexo' : ''}${(!u.birthDate || !u.sex) && showCalling && !u.calling ? ' y ' : ''}${showCalling && !u.calling ? 'tu llamamiento' : ''} — se usan para saber con quién puedes agendar una entrevista (por ejemplo, un hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta con Sociedad de Socorro o con el Obispado; un joven o una joven solo con el Obispado)${showCalling ? ', y quién de la presidencia realiza entrevistas' : ''}.</div>` : ''}
+          <form id="prof-form">
+            <div class="field" style="text-align:center;">
+              <label>Foto de perfil (opcional)</label>
+              <div id="prof-photo-preview" style="margin:6px auto 10px;">${photoDataUri ? `<img src="${esc(photoDataUri)}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;" />` : `<div class="user-avatar" style="width:96px;height:96px;font-size:28px;margin:0 auto;">${esc(initials(u.name))}</div>`}</div>
+              <input type="file" id="prof-photo-input" accept="image/*" style="display:block; margin:0 auto;" />
+              ${photoDataUri ? '<button type="button" class="btn btn-ghost btn-sm" id="prof-photo-remove" style="margin-top:6px;">Quitar foto</button>' : ''}
+            </div>
+            <div class="two-col">
+              <div class="field">
+                <label>Fecha de nacimiento</label>
+                <input type="date" name="birthDate" required value="${esc(u.birthDate || '')}" />
+              </div>
+              <div class="field">
+                <label>Sexo</label>
+                <select name="sex" required>
+                  <option value="" disabled ${!u.sex ? 'selected' : ''}>Selecciona…</option>
+                  <option value="M" ${u.sex === 'M' ? 'selected' : ''}>Hombre</option>
+                  <option value="F" ${u.sex === 'F' ? 'selected' : ''}>Mujer</option>
+                </select>
+              </div>
+            </div>
+            ${showCalling ? `
+            <div class="field">
+              <label>Llamamiento en ${esc(callingOrg.name)}</label>
+              <select name="calling" ${mandatory && !u.calling ? 'required' : ''}>
+                <option value="" disabled ${!u.calling ? 'selected' : ''}>Selecciona…</option>
+                <option value="Presidente" ${u.calling === 'Presidente' ? 'selected' : ''}>${esc(callingLabel(callingOrg.name, 'Presidente'))}</option>
+                <option value="Consejero" ${u.calling === 'Consejero' ? 'selected' : ''}>${esc(callingLabel(callingOrg.name, 'Consejero'))}</option>
+                <option value="Secretario" ${u.calling === 'Secretario' ? 'selected' : ''}>${esc(callingLabel(callingOrg.name, 'Secretario'))}</option>
+              </select>
+              <div class="hint-box" style="margin-top:6px;">Se usa para saber a quién se le puede pedir una entrevista (el Secretario/a no entrevista, según el Manual General) y para dirigir avisos como la Coordinación de Ministración trimestral a la persona correcta. Si te marcas como ${esc(callingLabel(callingOrg.name, 'Presidente'))}, se desmarca automáticamente a quien lo fuera antes.</div>
+            </div>` : ''}
+            <div class="field">
+              <label>Teléfono (opcional)</label>
+              <input type="text" name="phone" value="${esc(u.phone || '')}" placeholder="Ej: +56 9 1234 5678" />
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            ${mandatory ? '' : '<button class="btn btn-secondary" id="prof-cancel">Cancelar</button>'}
+            <button class="btn btn-primary" id="prof-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  if (!mandatory) {
+    const guardedClose = wireUnsavedChangesGuard(document.getElementById('prof-form'));
+    document.getElementById('prof-modal-close').addEventListener('click', guardedClose);
+    document.getElementById('prof-cancel').addEventListener('click', guardedClose);
+    document.getElementById('prof-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'prof-modal-backdrop') guardedClose(); });
+  }
+  document.getElementById('prof-photo-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      photoDataUri = await compressImageFile(file);
+      document.getElementById('prof-photo-preview').innerHTML = `<img src="${esc(photoDataUri)}" style="width:96px;height:96px;border-radius:50%;object-fit:cover;" />`;
+    } catch (err) {
+      document.getElementById('prof-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
+    }
+  });
+  const removeBtn = document.getElementById('prof-photo-remove');
+  if (removeBtn) removeBtn.addEventListener('click', () => {
+    photoDataUri = null;
+    document.getElementById('prof-photo-preview').innerHTML = `<div class="user-avatar" style="width:96px;height:96px;font-size:28px;margin:0 auto;">${esc(initials(u.name))}</div>`;
+  });
+  document.getElementById('prof-save').addEventListener('click', async () => {
+    const form = document.getElementById('prof-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = { birthDate: fd.get('birthDate'), sex: fd.get('sex'), phone: fd.get('phone') || null, profilePhoto: photoDataUri };
+    try {
+      let updated = await api('/auth/me/profile', { method: 'PUT', body });
+      if (showCalling && fd.get('calling')) {
+        updated = await api('/auth/me/calling', { method: 'PUT', body: { calling: fd.get('calling') } });
+      }
+      state.user = updated;
+      closeModal();
+      toast('Perfil guardado');
+      render();
+      if (onDone) onDone();
+    } catch (err) {
+      document.getElementById('prof-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
+    }
+  });
 }
 
 // ---------------- Búsqueda global (barra superior) ----------------
@@ -758,6 +982,16 @@ async function goToSearchResult(category, id, date) {
   render();
 }
 
+// Atajo desde los avisos del Panel de Obispado (Puntos 8 y 10): lleva a
+// Reuniones y Consejos y abre directo el modal de "Nueva acta" con el tipo
+// ya preseleccionado, para no tener que buscarlo en el combo.
+function goCreateMeetingOfType(type) {
+  state.view = 'meetings';
+  state.meetingsSubtab = 'manage';
+  render();
+  openMeetingModal(type);
+}
+
 // ---------------- Campana de notificaciones ----------------
 // Resumen liviano (no en vivo — se vuelve a pedir cada vez que se abre)
 // reutilizando exactamente los mismos cálculos que ya usan sus propias
@@ -816,6 +1050,7 @@ async function renderNotifPanel() {
         if (state.view === 'meetings') state.meetingsSubtab = row.dataset.subtab;
         else if (state.view === 'stats') state.statsSubtab = row.dataset.subtab;
         else if (state.view === 'cleaning') state.assignmentsSubtab = row.dataset.subtab;
+        else if (state.view === 'interviews') state.interviewsSubtab = row.dataset.subtab;
       }
       render();
     });
@@ -934,6 +1169,30 @@ async function renderRegister() {
             <label>¿De qué organización?</label>
             <select name="requestedOrganizationId" id="reg-org"></select>
           </div>
+          <div class="field" id="reg-calling-field" style="display:none;">
+            <label>¿Cuál es tu llamamiento ahí?</label>
+            <select id="reg-calling-select">
+              <option value="" disabled selected>Selecciona…</option>
+              <option value="Presidente">Presidente/Obispo</option>
+              <option value="Consejero">Consejero/a</option>
+              <option value="Secretario">Secretario/a</option>
+            </select>
+          </div>
+          <div class="two-col">
+            <div class="field">
+              <label>Fecha de nacimiento</label>
+              <input type="date" name="birthDate" required />
+            </div>
+            <div class="field">
+              <label>Sexo</label>
+              <select name="sex" required>
+                <option value="" disabled selected>Selecciona…</option>
+                <option value="M">Hombre</option>
+                <option value="F">Mujer</option>
+              </select>
+            </div>
+          </div>
+          <div class="hint-box" style="margin-top:0;">La fecha de nacimiento y el sexo se usan para saber con quién puedes agendar una entrevista (por ejemplo, un hombre adulto con el presidente de Cuórum de Élderes o con el Obispado; una mujer adulta con la presidenta de Sociedad de Socorro o con el Obispado; un joven o una joven solo con el Obispado) — no se muestran a nadie más.</div>
           <div class="hint-box" style="margin-top:0;">El administrador puede corregir tu perfil si lo eliges mal — no pasa nada si no estás 100% seguro.</div>
           <button class="btn btn-primary btn-block" type="submit">Enviar solicitud</button>
         </form>
@@ -945,15 +1204,26 @@ async function renderRegister() {
   `;
   document.getElementById('go-login').addEventListener('click', (e) => { e.preventDefault(); renderLogin(); });
 
+  let publicOrgs = [];
   try {
-    const orgs = await api('/public/organizations');
+    publicOrgs = await api('/public/organizations');
     const orgSelect = document.getElementById('reg-org');
-    orgSelect.innerHTML = orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
+    orgSelect.innerHTML = publicOrgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
   } catch (e) { /* si falla, el selector queda vacío; el backend igual valida */ }
 
-  document.getElementById('reg-role').addEventListener('change', (e) => {
-    document.getElementById('reg-org-field').style.display = e.target.value === 'leader' ? '' : 'none';
-  });
+  // Punto 8 (ampliación): si va a liderar Obispado, Cuórum de Élderes o
+  // Sociedad de Socorro, pide de entrada si es el presidente/Obispo, un
+  // consejero o el secretario — el administrador lo puede corregir al
+  // aprobar la solicitud.
+  const updateRegCallingField = () => {
+    const role = document.getElementById('reg-role').value;
+    document.getElementById('reg-org-field').style.display = role === 'leader' ? '' : 'none';
+    const org = publicOrgs.find((o) => String(o.id) === document.getElementById('reg-org').value);
+    const isTargetOrg = role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    document.getElementById('reg-calling-field').style.display = isTargetOrg ? '' : 'none';
+  };
+  document.getElementById('reg-role').addEventListener('change', updateRegCallingField);
+  document.getElementById('reg-org').addEventListener('change', updateRegCallingField);
 
   document.getElementById('reg-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -962,6 +1232,13 @@ async function renderRegister() {
     errBox.innerHTML = '';
     if (fd.get('password') !== fd.get('password2')) {
       errBox.innerHTML = `<div class="error-msg">Las contraseñas no coinciden</div>`;
+      return;
+    }
+    const org = publicOrgs.find((o) => String(o.id) === fd.get('requestedOrganizationId'));
+    const isTargetOrg = fd.get('requestedRole') === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    const requestedCalling = isTargetOrg ? document.getElementById('reg-calling-select').value : '';
+    if (isTargetOrg && !requestedCalling) {
+      errBox.innerHTML = `<div class="error-msg">Indica si eres el Presidente/Obispo, un Consejero o el Secretario</div>`;
       return;
     }
     const btn = e.target.querySelector('button[type="submit"]');
@@ -973,6 +1250,9 @@ async function renderRegister() {
         password: fd.get('password'),
         requestedRole: fd.get('requestedRole'),
         requestedOrganizationId: fd.get('requestedRole') === 'leader' ? fd.get('requestedOrganizationId') : null,
+        requestedCalling: requestedCalling || undefined,
+        birthDate: fd.get('birthDate'),
+        sex: fd.get('sex'),
       };
       const res = await api('/auth/register', { method: 'POST', body });
       e.target.style.display = 'none';
@@ -988,6 +1268,24 @@ async function renderRegister() {
 
 // ---------------- Shell / navegación ----------------
 function orgById(id) { return state.organizations.find((o) => o.id === Number(id)); }
+
+// Punto 8 (ampliación): las tres organizaciones cuya presidencia distingue
+// Presidente/Obispo, Consejero(a) y Secretario(a) — mismas tres que ya
+// distinguía isPresident (Coordinación de Ministración) y las reglas de
+// elegibilidad de entrevista. Ver callingLabel() en el servidor (db.js) —
+// esta es la misma función, duplicada acá porque el cliente no puede pedirle
+// al servidor que le traduzca un string suelto.
+const PRESIDENT_ORGS = ['Obispado', 'Cuórum de Élderes', 'Sociedad de Socorro'];
+function callingLabel(orgName, calling) {
+  if (!calling) return '';
+  if (orgName === 'Obispado' && calling === 'Presidente') return 'Obispo';
+  if (orgName === 'Sociedad de Socorro') {
+    if (calling === 'Presidente') return 'Presidenta';
+    if (calling === 'Consejero') return 'Consejera';
+    if (calling === 'Secretario') return 'Secretaria';
+  }
+  return calling;
+}
 
 function canEditEventsFor(orgId) {
   if (!state.user) return false;
@@ -1102,6 +1400,11 @@ function canViewAllInterviews() {
 function initials(name) {
   return name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join('');
 }
+// Foto de perfil (Mi Perfil) si existe, si no las iniciales de siempre.
+function userAvatarHtml(u) {
+  if (u.profilePhoto) return `<img class="user-avatar" src="${esc(u.profilePhoto)}" alt="${esc(u.name)}" style="object-fit:cover;" />`;
+  return `<div class="user-avatar">${esc(initials(u.name))}</div>`;
+}
 
 function render() {
   if (!state.user) { renderLogin(); return; }
@@ -1118,8 +1421,8 @@ function render() {
         <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">🔍</button>
         <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">🔔<span class="notif-badge" id="notif-badge" hidden></span></button>
         <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">❓</button>
-        <div class="user-chip">
-          <div class="user-avatar">${esc(initials(u.name))}</div>
+        <div class="user-chip" id="my-profile-btn" title="Mi Perfil" style="cursor:pointer;">
+          ${userAvatarHtml(u)}
           <div>
             <div style="font-weight:600;">${esc(u.name)}</div>
             <span class="role-badge role-${u.role}">${ROLE_LABELS[u.role]}</span>
@@ -1146,6 +1449,7 @@ function render() {
     <div id="confirm-root"></div>
   `;
   document.getElementById('logout-btn').addEventListener('click', logout);
+  document.getElementById('my-profile-btn').addEventListener('click', () => openProfileModal());
   root.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => { state.view = btn.dataset.view; renderCurrentView(); });
   });
@@ -1803,6 +2107,7 @@ function openReadOnlyModal(item, kind) {
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
+          ${kind === 'event' && item.supervisingAdults && item.supervisingAdults.length ? `<div class="ro-detail-row">🧑‍🤝‍🧑 Adultos supervisores: ${item.supervisingAdults.map(esc).join(', ')}</div>` : ''}
           ${kind === 'stake' ? `<div class="hint-box" style="margin-top:10px;">🔗 Sincronizada automáticamente desde el calendario de Estaca — no se puede editar aquí. ${item.blocking === false ? 'Es informativa: no bloquea que se agende algo encima.' : 'Tiene prioridad: no se puede agendar algo encima sin autorización del líder de Obispado.'}</div>` : ''}
           ${rsvpApplies(item, kind) ? rsvpSectionHtml(item) : ''}
         </div>
@@ -1815,6 +2120,319 @@ function openReadOnlyModal(item, kind) {
   document.getElementById('ro-modal-close2').addEventListener('click', closeModal);
   document.getElementById('ro-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ro-modal-backdrop') closeModal(); });
   if (rsvpApplies(item, kind)) wireRsvpButtons(item);
+}
+
+// ---------------- Punto 4: solicitud de entrevista ----------------
+// En vez de que el líder deje horarios abiertos para que cualquiera
+// reserve, cualquier usuario pide una entrevista proponiendo fecha, hora y
+// un motivo opcional — eligiendo entre las organizaciones que le
+// corresponden según el Manual General (ver interviewEligibility en el
+// servidor). La solicitud le llega a cualquiera de los líderes de esa
+// organización (o siempre al Obispado), quien la confirma (puede ajustar
+// la fecha/hora) o la rechaza con un comentario — ver
+// server/routes/interview-requests.js.
+async function loadMyInterviewRequests() {
+  try { return await api('/interview-requests?mine=1'); } catch (e) { return []; }
+}
+
+// Solo interesa mostrar acá lo pendiente (para poder retirarlo) y lo
+// rechazado (para saber por qué, con el comentario de quien decidió) — lo
+// ya confirmado se vuelve una entrevista normal y aparece igual que
+// siempre en la lista de arriba, así que repetirlo acá sería redundante.
+function myInterviewRequestsSectionHtml(items) {
+  const relevant = items.filter((r) => r.status === 'pending' || r.status === 'rejected');
+  return `
+    <div style="margin:24px 0 8px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin:0;">📝 Solicitudes de entrevista</h3>
+        <button type="button" class="btn btn-primary btn-sm" id="my-act-request-interview">Solicitar entrevista</button>
+      </div>
+      ${relevant.length ? `<div class="card-list" id="my-interview-requests-list">
+        ${relevant.map((r) => `
+          <div class="list-card">
+            <span class="org-dot" style="background:${r.organizationColor}"></span>
+            <div class="lc-main">
+              <div class="lc-title">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} ${r.status === 'pending' ? '<span class="status-pill status-amber">Esperando confirmación</span>' : '<span class="status-pill status-red">Rechazada</span>'}</div>
+              <div class="lc-sub">Propusiste: ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
+              ${r.status === 'rejected' && r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
+            </div>
+            ${r.status === 'pending' ? `<button type="button" class="btn btn-ghost btn-sm my-req-withdraw" data-id="${r.id}">Retirar</button>` : ''}
+          </div>`).join('')}
+      </div>` : `<div class="hint-box" style="margin-top:0;">Todavía no has solicitado ninguna entrevista.</div>`}
+    </div>`;
+}
+
+function wireMyInterviewRequestButtons(onChanged) {
+  const newBtn = document.getElementById('my-act-request-interview');
+  if (newBtn) newBtn.addEventListener('click', () => openInterviewRequestModal(onChanged));
+  document.querySelectorAll('.my-req-withdraw').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!(await confirmModal('¿Retirar esta solicitud de entrevista?', { title: 'Retirar solicitud', confirmText: 'Retirar', danger: true }))) return;
+      try {
+        await api(`/interview-requests/${btn.dataset.id}`, { method: 'DELETE' });
+        toast('Solicitud retirada');
+        await onChanged();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  });
+}
+
+// Modal donde cualquier usuario (Miembro o Líder) pide una entrevista: elige
+// la organización (ya filtrada por el servidor según su perfil — sexo/edad),
+// propone fecha y hora, y opcionalmente un motivo. La lista de organizaciones
+// muestra a quién le va a llegar (el presidente o cualquiera de sus
+// consejeros).
+async function openInterviewRequestModal(onDone) {
+  let data;
+  try { data = await api('/interview-requests/orgs'); } catch (e) { toast(e.message, 'error'); return; }
+  if (data.profileIncomplete) {
+    toast('Completa tu fecha de nacimiento y sexo en "Mi Perfil" antes de solicitar una entrevista', 'error');
+    return;
+  }
+  if (!data.orgs.length) { toast('No hay ninguna organización disponible para agendar una entrevista', 'error'); return; }
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="reqiv-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Solicitar entrevista</h3><button class="modal-close" id="reqiv-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="reqiv-error"></div>
+          <form id="reqiv-form">
+            <div class="field">
+              <label>¿Con quién?</label>
+              <select name="organizationId" id="reqiv-org" required>
+                ${data.orgs.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field" id="reqiv-leader-field">
+              <label>¿Con qué líder? (opcional)</label>
+              <select id="reqiv-leader"></select>
+            </div>
+            <div class="hint-box" style="margin-top:0;" id="reqiv-org-hint"></div>
+            <div id="reqiv-date-mode-avail" style="display:none;">
+              <div class="field">
+                <label>Elige un día disponible</label>
+                <select id="reqiv-avail-date"></select>
+              </div>
+              <div class="field">
+                <label>Hora dentro de ese rango</label>
+                <input type="time" id="reqiv-avail-time" />
+              </div>
+            </div>
+            <div id="reqiv-date-mode-free">
+              <div class="two-col">
+                <div class="field">
+                  <label>Fecha que te acomoda</label>
+                  <input type="date" id="reqiv-free-date" />
+                </div>
+                <div class="field">
+                  <label>Hora</label>
+                  <input type="time" id="reqiv-free-start" />
+                </div>
+              </div>
+            </div>
+            <div class="field">
+              <label>Hora de término (opcional)</label>
+              <input type="time" id="reqiv-endtime" />
+            </div>
+            <div class="field">
+              <label>Motivo (opcional)</label>
+              <textarea name="note" placeholder="Ej: Recomendación para el templo"></textarea>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="reqiv-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="reqiv-save">Enviar solicitud</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const orgsById = Object.fromEntries(data.orgs.map((o) => [String(o.id), o]));
+  let upcomingDates = [];
+
+  // Reconstruye el selector de líder según la organización elegida, y deja
+  // "Sin preferencia" (fecha/hora libre) como opción por defecto.
+  const updateLeaderOptions = () => {
+    const org = orgsById[document.getElementById('reqiv-org').value];
+    const leaderSelect = document.getElementById('reqiv-leader');
+    const leaders = (org && org.leaders) || [];
+    leaderSelect.innerHTML = `<option value="">Sin preferencia</option>` + leaders.map((l) => `
+      <option value="${l.id}">${esc(l.name)}${l.callingLabel ? ' — ' + esc(l.callingLabel) : (l.isPresident ? ' ★ Presidente' : '')}${l.availability.length ? '' : ' (sin agenda declarada)'}</option>`).join('');
+    document.getElementById('reqiv-leader-field').style.display = leaders.length ? '' : 'none';
+  };
+
+  // Alterna entre "elige un día disponible" (líder con agenda declarada) y
+  // "fecha/hora libre" (sin preferencia, o un líder sin agenda declarada) —
+  // y actualiza el texto de a quién le va a llegar la solicitud.
+  const updateDateMode = () => {
+    const org = orgsById[document.getElementById('reqiv-org').value];
+    const leaderSelect = document.getElementById('reqiv-leader');
+    const leaders = (org && org.leaders) || [];
+    const leader = leaders.find((l) => String(l.id) === leaderSelect.value);
+    const hint = document.getElementById('reqiv-org-hint');
+    const availDateSelect = document.getElementById('reqiv-avail-date');
+    const availTime = document.getElementById('reqiv-avail-time');
+    const freeDate = document.getElementById('reqiv-free-date');
+    const freeStart = document.getElementById('reqiv-free-start');
+    const dates = leader ? computeUpcomingAvailableDates(leader.availability, leader.busy) : [];
+    if (leader && leader.availability.length && dates.length) {
+      upcomingDates = dates;
+      document.getElementById('reqiv-date-mode-avail').style.display = '';
+      document.getElementById('reqiv-date-mode-free').style.display = 'none';
+      availDateSelect.required = true; availTime.required = true;
+      freeDate.required = false; freeStart.required = false;
+      availDateSelect.innerHTML = upcomingDates.map((d, i) => `<option value="${i}">${esc(fmtDateHuman(d.date))} (${esc(d.startTime)}–${esc(d.endTime)})</option>`).join('');
+      const syncTime = () => {
+        const d = upcomingDates[Number(availDateSelect.value)];
+        if (!d) return;
+        availTime.min = d.startTime; availTime.max = d.endTime; availTime.value = d.startTime;
+      };
+      availDateSelect.onchange = syncTime;
+      syncTime();
+      hint.textContent = `Le llegará una confirmación a ${leader.name} — disponible: ${availabilityWindowsSummary(leader.availability)}.`;
+    } else {
+      document.getElementById('reqiv-date-mode-avail').style.display = 'none';
+      document.getElementById('reqiv-date-mode-free').style.display = '';
+      availDateSelect.required = false; availTime.required = false;
+      freeDate.required = true; freeStart.required = true;
+      if (leader && leader.availability.length) {
+        hint.textContent = `${leader.name} no tiene horarios libres dentro de sus próximas 6 semanas declaradas (${availabilityWindowsSummary(leader.availability)}) — puedes proponer otra fecha/hora igual, queda sujeta a su confirmación.`;
+      } else {
+        hint.textContent = leader
+          ? `Le llegará a ${leader.name}.`
+          : (leaders.length ? `Le llegará a: ${leaders.map((l) => l.name).join(', ')}.` : 'Le llegará a quien corresponda en esa organización.');
+      }
+    }
+  };
+  document.getElementById('reqiv-org').addEventListener('change', () => { updateLeaderOptions(); updateDateMode(); });
+  document.getElementById('reqiv-leader').addEventListener('change', updateDateMode);
+  updateLeaderOptions();
+  updateDateMode();
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('reqiv-form'));
+  document.getElementById('reqiv-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('reqiv-cancel').addEventListener('click', guardedClose);
+  document.getElementById('reqiv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'reqiv-modal-backdrop') guardedClose(); });
+  document.getElementById('reqiv-save').addEventListener('click', async () => {
+    const form = document.getElementById('reqiv-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const usingAvail = document.getElementById('reqiv-date-mode-avail').style.display !== 'none';
+    const date = usingAvail ? (upcomingDates[Number(document.getElementById('reqiv-avail-date').value)] || {}).date : document.getElementById('reqiv-free-date').value;
+    const startTime = usingAvail ? document.getElementById('reqiv-avail-time').value : document.getElementById('reqiv-free-start').value;
+    const body = {
+      organizationId: Number(fd.get('organizationId')),
+      targetLeaderUserId: document.getElementById('reqiv-leader').value ? Number(document.getElementById('reqiv-leader').value) : null,
+      date,
+      startTime,
+      endTime: document.getElementById('reqiv-endtime').value || null,
+      note: fd.get('note') || '',
+    };
+    try {
+      await api('/interview-requests', { method: 'POST', body });
+      closeModal();
+      toast('Solicitud enviada');
+      if (onDone) await onDone();
+    } catch (e) {
+      document.getElementById('reqiv-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Punto 4 (ampliación): un Líder declara sus propios días/horas habituales
+// de entrevista (p. ej. "martes y jueves, 20:00 a 22:00") — es solo una
+// guía para lo que un miembro puede proponer al pedir una entrevista con
+// él/ella; no reserva nada ni le impide agendar manualmente ("+ Agendar
+// entrevista") un día fuera de lo declarado, para los casos extraordinarios.
+function openLeaderAvailabilityModal() {
+  let rows = (state.user.interviewAvailability || []).map((w, i) => ({ key: i, ...w }));
+  let nextKey = rows.length;
+  const modalRoot = document.getElementById('modal-root');
+  function renderRows() {
+    const list = document.getElementById('avail-rows');
+    if (!list) return;
+    list.innerHTML = rows.length ? rows.map((r) => `
+      <div class="two-col" style="align-items:end; gap:8px;" data-row="${r.key}">
+        <div class="field">
+          <label>Día</label>
+          <select data-field="weekday" data-row="${r.key}">
+            ${WEEKDAY_NAMES.map((name, idx) => `<option value="${idx}" ${idx === r.weekday ? 'selected' : ''}>${name.charAt(0).toUpperCase() + name.slice(1)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" style="display:flex; gap:8px;">
+          <div style="flex:1;">
+            <label>Desde</label>
+            <input type="time" data-field="startTime" data-row="${r.key}" value="${esc(r.startTime || '20:00')}" />
+          </div>
+          <div style="flex:1;">
+            <label>Hasta</label>
+            <input type="time" data-field="endTime" data-row="${r.key}" value="${esc(r.endTime || '22:00')}" />
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm avail-remove" data-row="${r.key}" title="Quitar" style="align-self:flex-end;">🗑️</button>
+        </div>
+      </div>`).join('') : '<div class="hint-box" style="margin-top:0;">Todavía no has declarado ningún día habitual — puedes seguir agendando entrevistas manualmente igual.</div>';
+    list.querySelectorAll('select[data-field], input[data-field]').forEach((el) => {
+      el.addEventListener('change', () => {
+        const row = rows.find((r) => r.key === Number(el.dataset.row));
+        if (!row) return;
+        const val = el.dataset.field === 'weekday' ? Number(el.value) : el.value;
+        row[el.dataset.field] = val;
+      });
+    });
+    list.querySelectorAll('.avail-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        rows = rows.filter((r) => r.key !== Number(btn.dataset.row));
+        renderRows();
+      });
+    });
+  }
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="avail-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>🗓️ Mi disponibilidad para entrevistas</h3><button class="modal-close" id="avail-modal-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">Declara los días y horas de la semana en que sueles recibir entrevistas (ej. martes y jueves de 20:00 a 22:00). Cuando un miembro pida una entrevista contigo, solo podrá proponer esos días — igual puedes agendar tú manualmente una entrevista extraordinaria fuera de estos horarios cuando haga falta.</p>
+          <div id="avail-error"></div>
+          <div id="avail-rows"></div>
+          <button type="button" class="btn btn-secondary btn-sm" id="avail-add" style="margin-top:10px;">+ Agregar día</button>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="avail-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="avail-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  renderRows();
+  document.getElementById('avail-modal-close').addEventListener('click', closeModal);
+  document.getElementById('avail-cancel').addEventListener('click', closeModal);
+  document.getElementById('avail-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'avail-modal-backdrop') closeModal(); });
+  document.getElementById('avail-add').addEventListener('click', () => {
+    rows.push({ key: nextKey++, weekday: 2, startTime: '20:00', endTime: '22:00' });
+    renderRows();
+  });
+  document.getElementById('avail-save').addEventListener('click', async () => {
+    for (const r of rows) {
+      if (!r.startTime || !r.endTime || r.startTime >= r.endTime) {
+        document.getElementById('avail-error').innerHTML = `<div class="error-msg">La hora de término debe ser después de la de inicio</div>`;
+        return;
+      }
+    }
+    const windows = rows.map((r) => ({ weekday: r.weekday, startTime: r.startTime, endTime: r.endTime }));
+    try {
+      const updated = await api('/auth/me/availability', { method: 'PUT', body: { windows } });
+      state.user = updated;
+      closeModal();
+      toast('Disponibilidad guardada');
+      if (state.view === 'interviews') await renderInterviewsView();
+    } catch (e) {
+      document.getElementById('avail-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 function editableOrgOptions(mode) {
@@ -1868,6 +2486,9 @@ async function renderMyActivitiesLeaderView() {
   // Obispado entrevista al líder de Cuórum de Élderes), esa entrevista debe
   // aparecerte acá aunque no la haya agendado tu propia organización.
   try { interviews = await api('/interviews'); } catch (e) { interviews = []; }
+  // Punto 4: mis solicitudes de entrevista pendientes o rechazadas (las ya
+  // confirmadas aparecen arriba como una entrevista normal).
+  const myRequests = await loadMyInterviewRequests();
   const myOrgId = Number(state.user.organizationId);
   // Además de tu propia organización (siempre, no es opcional — la
   // administras tú), podés seguir otras organizaciones igual que un
@@ -1931,10 +2552,12 @@ async function renderMyActivitiesLeaderView() {
             </div>`).join('')}
         </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id: 'my-act-empty-new', label: '+ Agregar la primera' })}
     </div>
+    ${myInterviewRequestsSectionHtml(myRequests)}
   `;
 
   document.getElementById('my-act-new').addEventListener('click', () => openEventModal());
   wireEmptyStateCta('my-act-empty-new', () => openEventModal());
+  wireMyInterviewRequestButtons(renderMyActivitiesLeaderView);
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
   document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
     state.myActivitiesPrefsOpen = !prefsOpen;
@@ -1951,7 +2574,12 @@ async function renderMyActivitiesLeaderView() {
     } catch (e) { toast(e.message, 'error'); }
   });
   container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
+    // Los .list-card de "Horarios de entrevista disponibles" (Punto 4) no
+    // tienen data-kind/data-id — son horarios, no actividades/entrevistas —
+    // así que no corresponde abrirles el modal de detalle.
+    if (!card.dataset.kind) return;
     const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
+    if (!it) return;
     openItemModal(it, it.kind);
   }));
 }
@@ -1965,6 +2593,9 @@ async function renderMyActivitiesMemberView() {
   // usuarios registrados, el servidor la devuelve acá aunque la sección
   // Entrevistas no esté disponible para el perfil Miembro.
   try { myInterviews = await api('/interviews'); } catch (e) { myInterviews = []; }
+  // Punto 4: mis solicitudes de entrevista pendientes o rechazadas (las ya
+  // confirmadas aparecen arriba como una entrevista normal).
+  const myRequests = await loadMyInterviewRequests();
   const followedIds = (state.user.followedOrganizationIds || []).map(Number);
   events = events.filter((ev) => ev.isWardActivity || followedIds.includes(Number(ev.organizationId)) || (ev.involvedOrganizations || []).some((o) => followedIds.includes(Number(o.id))));
   const todayIso = toISODate(new Date());
@@ -2019,9 +2650,11 @@ async function renderMyActivitiesMemberView() {
             </div>`).join('')}
         </div>`).join('') : `<div class="empty-state">${followedIds.length ? 'No hay actividades próximas de las organizaciones que elegiste' : 'Elige qué organizaciones te interesan para ver sus actividades acá'}</div>`}
     </div>
+    ${myInterviewRequestsSectionHtml(myRequests)}
   `;
 
   document.getElementById('my-act-export').addEventListener('click', () => openCalendarExportModal());
+  wireMyInterviewRequestButtons(renderMyActivitiesMemberView);
   document.getElementById('my-act-prefs-toggle').addEventListener('click', () => {
     state.myActivitiesPrefsOpen = !prefsOpen;
     renderMyActivitiesMemberView();
@@ -2037,9 +2670,85 @@ async function renderMyActivitiesMemberView() {
     } catch (e) { toast(e.message, 'error'); }
   });
   container.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
+    // Los .list-card de "Horarios de entrevista disponibles" (Punto 4) no
+    // tienen data-kind/data-id — son horarios, no actividades/entrevistas —
+    // así que no corresponde abrirles el modal de detalle.
+    if (!card.dataset.kind) return;
     const it = list.find((x) => x.kind === card.dataset.kind && x.id === Number(card.dataset.id));
+    if (!it) return;
     openItemModal(it, it.kind);
   }));
+}
+
+// Punto 11 — aviso (no bloqueante) de actividad en lunes por la noche: el
+// Manual General reserva esa noche para la Noche de Hogar (20.7.1) — es
+// puramente informativo, no impide crear o guardar la actividad.
+function isMondayEveningISO(dateISO, startTime) {
+  if (!dateISO || !startTime) return false;
+  const [y, m, d] = dateISO.split('-').map(Number);
+  if (!y || !m || !d) return false;
+  const isMonday = new Date(y, m - 1, d).getDay() === 1;
+  return isMonday && startTime >= '18:00';
+}
+
+function mondayWarningHtml() {
+  return `<div class="hint-box" style="margin-top:0; border-color:#fde68a; background:#fef3c7; color:#92400e;">⚠️ Es lunes en la noche — esa noche normalmente está reservada para la Noche de Hogar (Manual General 20.7.1). Puedes seguir igual si hace falta, esto es solo un recordatorio.</div>`;
+}
+
+// Punto 13 — en actividades de Hombres Jóvenes, Mujeres Jóvenes y Primaria
+// es obligación dejar registrados los nombres de al menos 2 adultos
+// supervisores (Manual General 20.7.1) — el servidor lo exige igual (ver
+// SUPERVISION_REQUIRED_ORG_NAMES en events.js), esto es para que quede
+// claro de entrada en el formulario y no rebote recién al guardar.
+const SUPERVISION_REQUIRED_ORG_NAMES = ['Hombres Jóvenes', 'Mujeres Jóvenes', 'Primaria'];
+
+function orgRequiresSupervisingAdultsClient(orgId) {
+  const org = orgById(Number(orgId));
+  return !!org && SUPERVISION_REQUIRED_ORG_NAMES.includes(org.name);
+}
+
+function supervisingAdultRowHtml(name = '') {
+  return `
+    <div class="commitment-row" style="display:flex; align-items:center; gap:8px; padding:0; border:none; margin-bottom:8px;">
+      <input type="text" class="sa-name-input" required placeholder="Nombre del adulto" value="${esc(name)}" style="flex:1;" />
+      <button type="button" class="btn btn-ghost btn-sm sa-remove">🗑️</button>
+    </div>`;
+}
+
+function supervisingAdultsFieldHtml(existingAdults) {
+  const names = (existingAdults && existingAdults.length ? existingAdults : ['', '']);
+  return `
+    <div class="field" id="ev-sa-field">
+      <label>Adultos supervisores (obligatorio — mínimo 2)</label>
+      <div class="hint-box" style="margin-top:0; margin-bottom:8px;">El Manual General exige que estas actividades cuenten con al menos dos adultos supervisores registrados (20.7.1).</div>
+      <div id="ev-sa-rows">${names.map((n) => supervisingAdultRowHtml(n)).join('')}</div>
+      <button type="button" class="btn btn-secondary btn-sm" id="ev-sa-add">+ Agregar adulto</button>
+    </div>`;
+}
+
+function wireSupervisingAdultsRows() {
+  const rows = document.getElementById('ev-sa-rows');
+  if (!rows) return;
+  const wireRow = (row) => row.querySelector('.sa-remove').addEventListener('click', () => {
+    if (rows.children.length > 2) row.remove();
+  });
+  Array.from(rows.children).forEach(wireRow);
+  const addBtn = document.getElementById('ev-sa-add');
+  if (addBtn) addBtn.addEventListener('click', () => {
+    rows.insertAdjacentHTML('beforeend', supervisingAdultRowHtml());
+    wireRow(rows.lastElementChild);
+  });
+}
+
+function updateSupervisingAdultsSection(orgId, existingAdults) {
+  const box = document.getElementById('ev-supervising-field');
+  if (!box) return;
+  if (orgRequiresSupervisingAdultsClient(orgId)) {
+    box.innerHTML = supervisingAdultsFieldHtml(existingAdults);
+    wireSupervisingAdultsRows();
+  } else {
+    box.innerHTML = '';
+  }
 }
 
 function openEventModal(existing = null) {
@@ -2068,6 +2777,7 @@ function openEventModal(existing = null) {
               </select>
               ${options.length === 1 ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
+            <div id="ev-supervising-field">${orgRequiresSupervisingAdultsClient(existing?.organizationId ?? options[0]?.id) ? supervisingAdultsFieldHtml(existing?.supervisingAdults) : ''}</div>
             <div class="field">
               <label>Descripción de la actividad</label>
               <input type="text" name="title" required placeholder="Ej: Reunión de presidencia de Cuórum" value="${esc(existing?.title || '')}" />
@@ -2106,6 +2816,7 @@ function openEventModal(existing = null) {
                 <input type="time" name="endTime" value="${existing?.endTime || ''}" />
               </div>
             </div>
+            <div id="ev-monday-warning"></div>
           </form>
         </div>
         <div class="modal-footer">
@@ -2144,10 +2855,23 @@ function openEventModal(existing = null) {
   wireLocationField('ev', resetConflictCheck);
   document.getElementById('ev-location-other-field').querySelector('input').addEventListener('input', resetConflictCheck);
 
+  // Punto 11: aviso no bloqueante si la actividad cae un lunes en la noche.
+  const updateMondayWarning = () => {
+    const dateVal = form.querySelector('[name="date"]').value;
+    const startVal = form.querySelector('[name="startTime"]').value;
+    document.getElementById('ev-monday-warning').innerHTML = isMondayEveningISO(dateVal, startVal) ? mondayWarningHtml() : '';
+  };
+  form.querySelector('[name="date"]').addEventListener('change', updateMondayWarning);
+  form.querySelector('[name="startTime"]').addEventListener('change', updateMondayWarning);
+  updateMondayWarning();
+
+  wireSupervisingAdultsRows();
+
   const orgSelectEl = document.getElementById('ev-org-select');
   refreshInvolvedOrgOptions('ev', orgSelectEl.value);
   orgSelectEl.addEventListener('change', () => {
     refreshInvolvedOrgOptions('ev', orgSelectEl.value);
+    updateSupervisingAdultsSection(orgSelectEl.value);
     resetConflictCheck();
   });
   document.querySelectorAll('#ev-involved-orgs input[type="checkbox"]').forEach((cb) => cb.addEventListener('change', resetConflictCheck));
@@ -2178,6 +2902,9 @@ function openEventModal(existing = null) {
     body.isWardActivity = document.getElementById('ev-ward-activity').checked;
     body.involvedOrganizationIds = body.isWardActivity ? [] : computeInvolvedOrgIds(fd);
     body.isMeeting = document.getElementById('ev-type-select').value === 'meeting';
+    body.supervisingAdults = orgRequiresSupervisingAdultsClient(body.organizationId)
+      ? Array.from(document.querySelectorAll('#ev-sa-rows .sa-name-input')).map((i) => i.value.trim()).filter(Boolean)
+      : [];
 
     document.getElementById('ev-error').innerHTML = '';
 
@@ -2272,7 +2999,63 @@ async function renderInterviewsView() {
   const container = document.getElementById('view-root');
   const seesAll = canViewAllInterviews();
   const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews && (seesAll || o.id === state.user.organizationId));
+  const canManage = canManageAnyInterviews();
   container.innerHTML = skeletonViewHtml('Entrevistas', { cards: 3 });
+  // Punto 4: solicitudes de entrevista (el propio miembro/líder propone
+  // fecha/hora) que le corresponde decidir a ESTA persona — su propia
+  // organización, o todas si es líder de Obispado/Administrador. Se piden
+  // siempre (aunque el subtab no esté abierto) para poder mostrar "cuántas
+  // hay pendientes" en el botón, sin tener que entrar primero.
+  let requests = [];
+  if (canManage) { try { requests = await api('/interview-requests'); } catch (e) { requests = []; } }
+  const pendingRequests = requests.filter((r) => r.status === 'pending');
+  const decidedRequests = requests.filter((r) => r.status !== 'pending');
+
+  if (canManage && state.interviewsSubtab === 'requests') {
+    container.innerHTML = `
+      <div class="section-header">
+        <div>
+          <h2>Entrevistas</h2>
+          <p>Solicitudes de entrevista por confirmar o rechazar</p>
+        </div>
+        <div style="display:flex; gap:8px;">
+          ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-avail">🗓️ Mi disponibilidad</button>` : ''}
+          <button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>
+        </div>
+      </div>
+      <div class="subtabs">
+        <button class="subtab-btn" data-tab="pending">🗓️ Agenda</button>
+        <button class="subtab-btn active" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
+      </div>
+      <div class="card-list">
+        ${pendingRequests.length ? pendingRequests.map((r) => interviewRequestRowHtml(r)).join('') : emptyStateHtml('No hay solicitudes de entrevista pendientes')}
+      </div>
+      ${decidedRequests.length ? `
+        <button type="button" class="btn btn-secondary btn-sm" id="ivreq-history-toggle" style="margin-top:16px;">
+          ${state.interviewRequestsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${decidedRequests.length} solicitud${decidedRequests.length === 1 ? '' : 'es'} decidida${decidedRequests.length === 1 ? '' : 's'})`}
+        </button>
+        <div class="card-list" style="margin-top:10px;">
+          ${state.interviewRequestsHistoryOpen ? decidedRequests.map((r) => interviewRequestRowHtml(r)).join('') : ''}
+        </div>` : ''}
+    `;
+    const newBtn = document.getElementById('iv-new');
+    if (newBtn) newBtn.addEventListener('click', () => openInterviewModal());
+    const availBtn = document.getElementById('iv-avail');
+    if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
+    container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
+    const historyToggle = document.getElementById('ivreq-history-toggle');
+    if (historyToggle) historyToggle.addEventListener('click', () => { state.interviewRequestsHistoryOpen = !state.interviewRequestsHistoryOpen; renderInterviewsView(); });
+    container.querySelectorAll('.ivreq-confirm-btn').forEach((b) => b.addEventListener('click', () => {
+      const r = pendingRequests.find((x) => x.id === Number(b.dataset.id));
+      if (r) openConfirmRequestModal(r);
+    }));
+    container.querySelectorAll('.ivreq-reject-btn').forEach((b) => b.addEventListener('click', () => {
+      const r = pendingRequests.find((x) => x.id === Number(b.dataset.id));
+      if (r) openRejectRequestModal(r);
+    }));
+    return;
+  }
+
   let list;
   try { list = await loadInterviewsPending(); } catch (e) { toast(e.message, 'error'); list = []; }
   // Se pide siempre (esté abierto o no el desplegable) para poder mostrar
@@ -2290,8 +3073,16 @@ async function renderInterviewsView() {
         <h2>Entrevistas</h2>
         <p>${seesAll ? 'Agendadas por los líderes de Obispado, Cuórum de Élderes y Sociedad de Socorro' : 'Entrevistas de tu organización · información privada, no visible para otras organizaciones'}</p>
       </div>
-      ${canManageAnyInterviews() ? `<button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>` : ''}
+      <div style="display:flex; gap:8px;">
+        ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-avail">🗓️ Mi disponibilidad</button>` : ''}
+        ${canManage ? `<button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>` : ''}
+      </div>
     </div>
+    ${canManage ? `
+    <div class="subtabs">
+      <button class="subtab-btn active" data-tab="pending">🗓️ Agenda</button>
+      <button class="subtab-btn" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
+    </div>` : ''}
     ${interviewOrgs.length > 1 ? `
     <div class="subtabs">
       <button class="subtab-btn ${state.interviewOrgFilter === 'all' ? 'active' : ''}" data-org="all">Todas</button>
@@ -2318,7 +3109,7 @@ async function renderInterviewsView() {
                 <button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button>
               </div>` : ''}
             </div>`).join('')}
-        </div>`).join('') : emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManageAnyInterviews() ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)}
+        </div>`).join('') : emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)}
     </div>
     ${history.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="iv-history-toggle" style="margin-top:16px;">
@@ -2331,8 +3122,11 @@ async function renderInterviewsView() {
 
   const newBtn = document.getElementById('iv-new');
   if (newBtn) newBtn.addEventListener('click', () => openInterviewModal());
+  const availBtn = document.getElementById('iv-avail');
+  if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
   wireEmptyStateCta('iv-empty-new', () => openInterviewModal());
-  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.interviewOrgFilter = b.dataset.org === 'all' ? 'all' : Number(b.dataset.org); renderInterviewsView(); }));
+  container.querySelectorAll('.subtabs .subtab-btn[data-tab]').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
+  container.querySelectorAll('.subtabs .subtab-btn[data-org]').forEach((b) => b.addEventListener('click', () => { state.interviewOrgFilter = b.dataset.org === 'all' ? 'all' : Number(b.dataset.org); renderInterviewsView(); }));
   container.querySelectorAll('[data-edit-iv]').forEach((b) => b.addEventListener('click', () => {
     const iv = list.find((i) => i.id === Number(b.dataset.editIv));
     openInterviewModal(iv);
@@ -2344,6 +3138,31 @@ async function renderInterviewsView() {
   const historyToggle = document.getElementById('iv-history-toggle');
   if (historyToggle) historyToggle.addEventListener('click', () => { state.interviewsHistoryOpen = !state.interviewsHistoryOpen; renderInterviewsView(); });
   wireInterviewHistoryCards(history);
+}
+
+// Tarjeta de UNA solicitud de entrevista — pendiente (con Confirmar/
+// Rechazar) o ya decidida (solo lectura, para el historial).
+function interviewRequestRowHtml(r) {
+  const statusPill = r.status === 'pending'
+    ? '<span class="status-pill status-amber">Pendiente</span>'
+    : r.status === 'confirmed'
+      ? '<span class="status-pill status-green">Confirmada</span>'
+      : '<span class="status-pill status-red">Rechazada</span>';
+  return `
+    <div class="list-card">
+      <span class="org-dot" style="background:${r.organizationColor}"></span>
+      <div class="lc-main">
+        <div class="lc-title">${esc(r.memberName)} ${statusPill}</div>
+        <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
+        ${r.status === 'rejected' && r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
+        ${r.status !== 'pending' && r.decidedByName ? `<div class="lc-sub" style="margin-top:2px;">Decidida por ${esc(r.decidedByName)}</div>` : ''}
+      </div>
+      ${r.status === 'pending' ? `
+      <div class="lc-actions">
+        <button type="button" class="btn btn-primary btn-sm ivreq-confirm-btn" data-id="${r.id}">Confirmar</button>
+        <button type="button" class="btn btn-ghost btn-sm ivreq-reject-btn" data-id="${r.id}">Rechazar</button>
+      </div>` : ''}
+    </div>`;
 }
 
 // editable=false, de solo lectura: muestra el estado (pill), el comentario
@@ -2738,6 +3557,135 @@ async function refreshAfterInterviewChange() {
   else { await loadCalendarData(); if (state.view === 'calendar') renderCalendarView(); }
 }
 
+// Punto 4 — Confirmar una solicitud de entrevista: el líder (de la
+// organización correspondiente, o cualquier líder de Obispado) puede
+// mantener la fecha/hora que propuso quien la pidió, o ajustarla — más el
+// lugar y quién la va a realizar. Al guardar se crea la entrevista real.
+function openConfirmRequestModal(r) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ivc-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Confirmar entrevista</h3><button class="modal-close" id="ivc-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ivc-error"></div>
+          <p class="hint-box" style="margin-top:0;">${esc(r.memberName)} pidió una entrevista con ${esc(r.organizationName)}${r.targetLeaderName ? ' (' + esc(r.targetLeaderName) + ')' : ''}${r.note ? ' · ' + esc(r.note) : ''}</p>
+          <form id="ivc-form">
+            <div class="two-col">
+              <div class="field">
+                <label>Día</label>
+                <input type="date" name="date" required value="${esc(r.date)}" />
+              </div>
+              <div class="field">
+                <label>Hora de inicio</label>
+                <input type="time" name="startTime" required value="${esc(r.startTime)}" />
+              </div>
+            </div>
+            <div class="field">
+              <label>Hora de término (opcional)</label>
+              <input type="time" name="endTime" value="${esc(r.endTime || '')}" />
+            </div>
+            ${locationFieldHtml('ivc')}
+            <div class="field">
+              <label>Líder que realizará la entrevista</label>
+              <input type="text" name="interviewerName" required placeholder="Nombre del líder" value="${esc(r.targetLeaderName || state.user.name)}" />
+            </div>
+            <div class="two-col">
+              <div class="field">
+                <label>Email del líder (opcional)</label>
+                <input type="email" name="interviewerEmail" placeholder="lider@correo.com" value="${esc(state.user.email || '')}" />
+              </div>
+              <div class="field">
+                <label>WhatsApp del líder (opcional)</label>
+                <input type="text" name="interviewerPhone" placeholder="+56 9 ..." />
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ivc-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ivc-save">Confirmar entrevista</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  wireLocationField('ivc');
+  const ivcGuardedClose = wireUnsavedChangesGuard(document.getElementById('ivc-form'));
+  document.getElementById('ivc-modal-close').addEventListener('click', ivcGuardedClose);
+  document.getElementById('ivc-cancel').addEventListener('click', ivcGuardedClose);
+  document.getElementById('ivc-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivc-modal-backdrop') ivcGuardedClose(); });
+  document.getElementById('ivc-save').addEventListener('click', async () => {
+    const form = document.getElementById('ivc-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const location = computeLocationFromForm(fd);
+    if (fd.get('locationType') === 'Otro' && !location) {
+      document.getElementById('ivc-error').innerHTML = `<div class="error-msg">Escribe cuál es el lugar</div>`;
+      return;
+    }
+    const sala = computeSalaFromForm(fd, location);
+    const body = {
+      date: fd.get('date'),
+      startTime: fd.get('startTime'),
+      endTime: fd.get('endTime') || null,
+      location,
+      sala,
+      interviewerName: fd.get('interviewerName'),
+      interviewerEmail: fd.get('interviewerEmail') || '',
+      interviewerPhone: fd.get('interviewerPhone') || '',
+    };
+    try {
+      await api(`/interview-requests/${r.id}/confirm`, { method: 'PUT', body });
+      closeModal();
+      toast('Entrevista confirmada');
+      await renderInterviewsView();
+    } catch (e) {
+      document.getElementById('ivc-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Rechazar una solicitud, con un comentario opcional explicando por qué —
+// mismo patrón que openInterviewMarkModal (✅/❌ de una entrevista ya
+// agendada).
+function openRejectRequestModal(r) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ivrj-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Rechazar solicitud</h3><button class="modal-close" id="ivrj-modal-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">${esc(r.memberName)} · ${esc(fmtDateHuman(r.date))} · ${esc(r.organizationName)}</p>
+          <div class="field">
+            <label>Comentario (opcional)</label>
+            <textarea id="ivrj-comment" placeholder="Ej: Ese día no puedo, coordina otra fecha por favor"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ivrj-cancel">Cancelar</button>
+            <button class="btn btn-danger" id="ivrj-save">Rechazar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('ivrj-modal-close').addEventListener('click', closeModal);
+  document.getElementById('ivrj-cancel').addEventListener('click', closeModal);
+  document.getElementById('ivrj-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivrj-modal-backdrop') closeModal(); });
+  document.getElementById('ivrj-save').addEventListener('click', async () => {
+    const comment = document.getElementById('ivrj-comment').value.trim();
+    try {
+      await api(`/interview-requests/${r.id}/reject`, { method: 'PUT', body: { comment } });
+      closeModal();
+      toast('Solicitud rechazada');
+      await renderInterviewsView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
 // ---------------- Presupuesto ----------------
 // Trimestral: el líder de Obispado asigna un monto a cada organización
 // (incluida la suya) y puede crear categorías extra que no son de una sola
@@ -2782,6 +3730,15 @@ async function renderBudgetView() {
 
   const { quarter, isCurrentQuarter, isObispado, categories } = budgetData;
 
+  // Punto 12: para el Obispado/Admin, la bandeja de solicitudes de gasto
+  // pendientes de aprobar; para cualquier otro líder, el estado de las
+  // solicitudes que él mismo ha hecho — ver GET /api/budget/expense-requests
+  // (el servidor ya filtra según quién pregunta).
+  let expenseRequests = [];
+  try { expenseRequests = await api('/budget/expense-requests'); } catch (e) { expenseRequests = []; }
+  const pendingRequests = expenseRequests.filter((r) => r.status === 'pending');
+  const decidedRequests = expenseRequests.filter((r) => r.status !== 'pending');
+
   container.innerHTML = `
     <div class="section-header">
       <div>
@@ -2804,6 +3761,24 @@ async function renderBudgetView() {
     <div class="card-list" id="budget-cats">
       ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id: 'budget-empty-new', label: '+ Crear la primera' } : null)}
     </div>
+    ${isObispado ? `
+      <div style="margin:24px 0 8px;">
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📋 Solicitudes de gasto pendientes de aprobación${pendingRequests.length ? ` (${pendingRequests.length})` : ''}</h3>
+        <div class="card-list">
+          ${pendingRequests.length ? pendingRequests.map((r) => expenseRequestRowHtml(r, { showActions: true })).join('') : '<div class="empty-state">No hay solicitudes pendientes</div>'}
+        </div>
+        ${decidedRequests.length ? `
+        <button type="button" class="btn btn-secondary btn-sm" id="exp-req-history-toggle" style="margin-top:10px;">
+          ${state.expenseRequestsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${decidedRequests.length} solicitud${decidedRequests.length === 1 ? '' : 'es'} decidida${decidedRequests.length === 1 ? '' : 's'})`}
+        </button>
+        <div class="card-list" style="margin-top:10px;">${state.expenseRequestsHistoryOpen ? decidedRequests.map((r) => expenseRequestRowHtml(r, {})).join('') : ''}</div>` : ''}
+      </div>
+    ` : (expenseRequests.length ? `
+      <div style="margin:24px 0 8px;">
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📋 Mis solicitudes de gasto</h3>
+        <div class="card-list">${expenseRequests.map((r) => expenseRequestRowHtml(r, { showWithdraw: r.status === 'pending' && isCurrentQuarter })).join('')}</div>
+      </div>
+    ` : '')}
   `;
 
   document.getElementById('budget-quarter-select').addEventListener('change', (e) => {
@@ -2827,6 +3802,9 @@ async function renderBudgetView() {
   });
   wireEmptyStateCta('budget-empty-new', () => openBudgetCategoryModal());
   wireBudgetCategoryCards(categories, isCurrentQuarter, isObispado);
+  wireExpenseRequestActions();
+  const expReqHistoryToggle = document.getElementById('exp-req-history-toggle');
+  if (expReqHistoryToggle) expReqHistoryToggle.addEventListener('click', () => { state.expenseRequestsHistoryOpen = !state.expenseRequestsHistoryOpen; renderBudgetView(); });
 }
 
 function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
@@ -2853,7 +3831,11 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
         </div>` : ''}
       <div class="budget-actions-row">
         <button type="button" class="btn btn-ghost btn-sm budget-toggle-expenses">${cat.expenses.length ? `Ver gastos (${cat.expenses.length})` : 'Sin gastos registrados'}</button>
-        ${canExpense ? `<button type="button" class="btn btn-primary btn-sm budget-add-expense">+ Registrar gasto</button>` : ''}
+        ${canExpense ? (isObispado
+          ? `<button type="button" class="btn btn-primary btn-sm budget-add-expense">+ Registrar gasto</button>`
+          // Punto 12: un líder común no registra el gasto directo — primero
+          // pide aprobación al Obispado (Manual General 20.2.6).
+          : `<button type="button" class="btn btn-primary btn-sm budget-request-expense">📋 Solicitar aprobación de gasto</button>`) : ''}
       </div>
       <div class="budget-expenses-list" style="display:none;">
         ${cat.expenses.length ? cat.expenses.map((e) => budgetExpenseRowHtml(e, canExpense)).join('') : '<div class="empty-state" style="padding:8px;">Sin gastos registrados</div>'}
@@ -2899,6 +3881,7 @@ function wireBudgetCategoryCards(categories) {
       });
     }
     card.querySelector('.budget-add-expense')?.addEventListener('click', () => openBudgetExpenseModal(cat));
+    card.querySelector('.budget-request-expense')?.addEventListener('click', () => openExpenseRequestModal(cat));
     card.querySelectorAll('.budget-edit-expense').forEach((btn) => {
       const row = btn.closest('.budget-expense-row');
       const expense = cat.expenses.find((e) => e.id === Number(row.dataset.expenseId));
@@ -2996,6 +3979,148 @@ async function openBudgetExpenseModal(cat, existing = null) {
       renderBudgetView();
     } catch (e) {
       document.getElementById('be-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Punto 12 — Solicitud de aprobación de gasto (Manual General 20.2.6): un
+// líder común ya no registra el gasto directo, primero pide aprobación al
+// Obispado. Aplica a TODOS los gastos de su organización, sin un mínimo —
+// ver el gate correspondiente en server/routes/budget.js.
+function expenseRequestStatusPillHtml(status) {
+  if (status === 'pending') return `<span class="status-pill status-amber">Pendiente</span>`;
+  if (status === 'approved') return `<span class="status-pill status-green">Aprobado</span>`;
+  return `<span class="status-pill status-red">Rechazado</span>`;
+}
+
+function expenseRequestRowHtml(r, opts = {}) {
+  const { showActions, showWithdraw } = opts;
+  return `
+    <div class="list-card" data-request-id="${r.id}" style="flex-direction:column; align-items:stretch; gap:8px;">
+      <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+        <div class="lc-main">
+          <div class="lc-title">${esc(r.description)}${r.eventTitle ? ` · <span style="color:var(--celeste-dark);">🔗 ${esc(r.eventTitle)}</span>` : ''}</div>
+          <div class="lc-sub">${esc(r.categoryName)} · ${esc(fmtDateHuman(r.date))} · solicitado por ${esc(r.requestedByName)}</div>
+          ${r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+          <strong>${fmtMoney(r.amount)}</strong>
+          ${expenseRequestStatusPillHtml(r.status)}
+        </div>
+      </div>
+      ${showActions ? `
+      <div class="lc-actions">
+        <button type="button" class="btn btn-primary btn-sm exp-req-approve" data-id="${r.id}">✅ Aprobar</button>
+        <button type="button" class="btn btn-secondary btn-sm exp-req-reject-toggle">❌ Rechazar</button>
+      </div>
+      <div class="exp-req-reject-form" style="display:none;">
+        <textarea class="exp-req-reject-comment" placeholder="Motivo del rechazo (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
+        <button type="button" class="btn btn-danger btn-sm exp-req-reject-save" data-id="${r.id}">Confirmar rechazo</button>
+      </div>` : ''}
+      ${showWithdraw ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm exp-req-withdraw" data-id="${r.id}">🗑️ Retirar solicitud</button></div>` : ''}
+    </div>`;
+}
+
+function wireExpenseRequestActions() {
+  document.querySelectorAll('.exp-req-approve').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      await api(`/budget/expense-requests/${btn.dataset.id}/approve`, { method: 'PUT' });
+      toast('Gasto aprobado y registrado');
+      await renderBudgetView();
+    } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+  }));
+  document.querySelectorAll('.exp-req-reject-toggle').forEach((btn) => btn.addEventListener('click', () => {
+    const form = btn.closest('.list-card').querySelector('.exp-req-reject-form');
+    form.style.display = form.style.display === 'none' ? '' : 'none';
+  }));
+  document.querySelectorAll('.exp-req-reject-save').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const comment = btn.closest('.list-card').querySelector('.exp-req-reject-comment').value.trim();
+    try {
+      await api(`/budget/expense-requests/${btn.dataset.id}/reject`, { method: 'PUT', body: { comment } });
+      toast('Solicitud rechazada');
+      await renderBudgetView();
+    } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+  }));
+  document.querySelectorAll('.exp-req-withdraw').forEach((btn) => btn.addEventListener('click', async () => {
+    if (!(await confirmModal('¿Retirar esta solicitud de gasto?', { title: 'Retirar solicitud', confirmText: 'Retirar', danger: true }))) return;
+    try {
+      await api(`/budget/expense-requests/${btn.dataset.id}`, { method: 'DELETE' });
+      toast('Solicitud retirada');
+      await renderBudgetView();
+    } catch (e) { toast(e.message, 'error'); }
+  }));
+}
+
+async function openExpenseRequestModal(cat) {
+  let events = [];
+  try {
+    if (cat.categoryType === 'organization') events = await api(`/events?organizationId=${cat.organizationId}`);
+    else { const all = await api('/events'); events = all.filter((ev) => ev.isWardActivity); }
+  } catch (e) { events = []; }
+  events = events.slice().sort((a, b) => (b.date + b.startTime).localeCompare(a.date + a.startTime));
+
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ber-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Solicitar aprobación de gasto — ${esc(cat.categoryName)}</h3><button class="modal-close" id="ber-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ber-error"></div>
+          <div class="hint-box" style="margin-top:0;">El Manual General pide obtener la aprobación del Obispo antes de gastar dinero para actividades (20.2.6). Esta solicitud llega al Obispado/Administrador, que la aprueba o la rechaza — recién ahí queda registrada como gasto.</div>
+          <form id="ber-form">
+            <div class="field">
+              <label>Monto</label>
+              <input type="number" name="amount" min="1" step="1" required placeholder="0" />
+            </div>
+            <div class="field">
+              <label>Descripción</label>
+              <input type="text" name="description" required placeholder="Ej: Materiales para actividad" />
+            </div>
+            <div class="field">
+              <label>Fecha</label>
+              <input type="date" name="date" required value="${toISODate(new Date())}" />
+            </div>
+            <div class="field">
+              <label>Actividad relacionada (opcional)</label>
+              <select name="eventId">
+                <option value="">— Ninguna —</option>
+                ${events.map((ev) => `<option value="${ev.id}">${esc(fmtDateHuman(ev.date))} · ${esc(ev.title)}</option>`).join('')}
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ber-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ber-save">Enviar solicitud</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const berGuardedClose = wireUnsavedChangesGuard(document.getElementById('ber-form'));
+  document.getElementById('ber-modal-close').addEventListener('click', berGuardedClose);
+  document.getElementById('ber-cancel').addEventListener('click', berGuardedClose);
+  document.getElementById('ber-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ber-modal-backdrop') berGuardedClose(); });
+  const berForm = document.getElementById('ber-form');
+  document.getElementById('ber-save').addEventListener('click', async () => {
+    if (!berForm.reportValidity()) return;
+    const fd = new FormData(berForm);
+    const body = Object.fromEntries(fd.entries());
+    body.amount = Number(body.amount);
+    body.eventId = body.eventId ? Number(body.eventId) : null;
+    body.categoryType = cat.categoryType;
+    body.organizationId = cat.organizationId;
+    body.budgetCategoryId = cat.budgetCategoryId;
+    try {
+      await api('/budget/expense-requests', { method: 'POST', body });
+      closeModal();
+      toast('Solicitud enviada — queda pendiente de aprobación del Obispado');
+      await renderBudgetView();
+    } catch (e) {
+      document.getElementById('ber-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
   });
 }
@@ -3201,9 +4326,13 @@ function openApproveModal(reqItem) {
             </div>
             <div class="field" id="ar-org-field" style="${reqItem.requestedRole === 'leader' ? '' : 'display:none;'}">
               <label>Organización</label>
-              <select name="organizationId">
+              <select name="organizationId" id="ar-org-select">
                 ${state.organizations.map((o) => `<option value="${o.id}" ${reqItem.requestedOrganizationId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
               </select>
+            </div>
+            <div class="field" id="ar-calling-field" style="display:none;">
+              <label>Llamamiento (lo que la persona indicó al registrarse — puedes corregirlo)</label>
+              <select id="ar-calling-select"></select>
             </div>
           </form>
         </div>
@@ -3219,14 +4348,35 @@ function openApproveModal(reqItem) {
   document.getElementById('ar-modal-close').addEventListener('click', closeModal);
   document.getElementById('ar-cancel').addEventListener('click', closeModal);
   document.getElementById('ar-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ar-modal-backdrop') closeModal(); });
-  document.getElementById('ar-role').addEventListener('change', (e) => {
-    document.getElementById('ar-org-field').style.display = e.target.value === 'leader' ? '' : 'none';
-  });
+  const updateArCallingField = () => {
+    const role = document.getElementById('ar-role').value;
+    document.getElementById('ar-org-field').style.display = role === 'leader' ? '' : 'none';
+    const org = state.organizations.find((o) => String(o.id) === document.getElementById('ar-org-select').value);
+    const isTargetOrg = role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    document.getElementById('ar-calling-field').style.display = isTargetOrg ? '' : 'none';
+    if (isTargetOrg) {
+      const sel = document.getElementById('ar-calling-select');
+      const current = reqItem.requestedCalling || '';
+      sel.innerHTML = `<option value="" disabled ${current ? '' : 'selected'}>Selecciona…</option>` + ['Presidente', 'Consejero', 'Secretario'].map((c) => `<option value="${c}" ${current === c ? 'selected' : ''}>${esc(callingLabel(org.name, c))}</option>`).join('');
+    }
+  };
+  document.getElementById('ar-role').addEventListener('change', updateArCallingField);
+  document.getElementById('ar-org-select').addEventListener('change', updateArCallingField);
+  updateArCallingField();
   document.getElementById('ar-save').addEventListener('click', async () => {
     const form = document.getElementById('ar-form');
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
     const body = { name: fd.get('name'), role: fd.get('role'), organizationId: fd.get('role') === 'leader' ? fd.get('organizationId') : null };
+    const org = state.organizations.find((o) => String(o.id) === String(body.organizationId));
+    const isTargetOrg = body.role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    if (isTargetOrg) {
+      body.calling = document.getElementById('ar-calling-select').value;
+      if (!body.calling) {
+        document.getElementById('ar-error').innerHTML = `<div class="error-msg">Indica el llamamiento (Presidente/Obispo, Consejero o Secretario)</div>`;
+        return;
+      }
+    }
     try {
       await api(`/registration-requests/${reqItem.id}/approve`, { method: 'POST', body });
       closeModal();
@@ -3256,7 +4406,7 @@ async function renderAdminUsers() {
             <td>${esc(u.name)}</td>
             <td>${esc(u.email)}</td>
             <td><span class="role-badge role-${u.role}">${ROLE_LABELS[u.role]}</span></td>
-            <td>${esc(u.organizationName || '—')}</td>
+            <td>${esc(u.organizationName || '—')}${u.calling ? ` <span class="status-pill ${u.calling === 'Presidente' ? 'status-green' : 'status-gray'}" title="Llamamiento en ${esc(u.organizationName || '')}">${u.calling === 'Presidente' ? '★ ' : ''}${esc(callingLabel(u.organizationName, u.calling))}</span>` : (u.isPresident ? ' <span class="status-pill status-green" title="Presidente/titular de la organización">★ Presidente</span>' : '')}</td>
             <td style="text-align:right; white-space:nowrap;">
               <button class="btn btn-secondary btn-sm" data-edit-user="${u.id}">Editar</button>
               ${u.id !== state.user.id ? `<button class="btn btn-danger btn-sm" data-del-user="${u.id}">Eliminar</button>` : ''}
@@ -3299,10 +4449,22 @@ function openUserModal(existing = null) {
             </div>
             <div class="field" id="u-org-field">
               <label>Organización</label>
-              <select name="organizationId">
+              <select name="organizationId" id="u-org-select">
                 <option value="">— Ninguna —</option>
                 ${state.organizations.map((o) => `<option value="${o.id}" ${existing?.organizationId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
               </select>
+            </div>
+            <div class="field" id="u-president-field" style="display:none;">
+              <label style="display:flex; align-items:center; gap:8px; font-weight:600;">
+                <input type="checkbox" name="isPresident" style="width:auto;" ${existing?.isPresident ? 'checked' : ''} />
+                Es el presidente/titular de esa organización
+              </label>
+              <div class="hint-box" style="margin-top:6px;">Solo puede haber uno por organización — si marcas a esta persona, se desmarca automáticamente a quien lo fuera antes. Se usa para dirigir avisos como la Coordinación de Ministración trimestral a la persona correcta, no a "un líder" cualquiera.</div>
+            </div>
+            <div class="field" id="u-calling-field" style="display:none;">
+              <label>Llamamiento</label>
+              <select id="u-calling-select"></select>
+              <div class="hint-box" style="margin-top:6px;">Quien tenga el llamamiento de Presidente/Obispo dirige avisos como la Coordinación de Ministración trimestral y aparece marcado con ★. El Secretario/a es líder (edita actividades, actas, etc.) pero, según el Manual General, no realiza entrevistas — por eso no aparece como opción al pedir una entrevista.</div>
             </div>
             <div class="field"><label>Teléfono (opcional)</label><input type="text" name="phone" value="${esc(existing?.phone || '')}" /></div>
           </form>
@@ -3316,6 +4478,25 @@ function openUserModal(existing = null) {
         </div>
       </div>
     </div>`;
+  // Punto 8 (ampliación): en Obispado, Cuórum de Élderes y Sociedad de
+  // Socorro se pide el llamamiento específico (Presidente/Obispo, Consejero
+  // o Secretario) en vez del checkbox genérico "★ Presidente/Titular" — en
+  // cualquier otra organización se mantiene el checkbox de siempre.
+  const updatePresidencyFields = () => {
+    const role = document.getElementById('u-role').value;
+    const org = state.organizations.find((o) => String(o.id) === document.getElementById('u-org-select').value);
+    const isTargetOrg = role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    document.getElementById('u-calling-field').style.display = isTargetOrg ? '' : 'none';
+    document.getElementById('u-president-field').style.display = (role === 'leader' && !isTargetOrg) ? '' : 'none';
+    if (isTargetOrg) {
+      const sel = document.getElementById('u-calling-select');
+      const current = existing?.calling || '';
+      sel.innerHTML = `<option value="" disabled ${current ? '' : 'selected'}>Selecciona…</option>` + ['Presidente', 'Consejero', 'Secretario'].map((c) => `<option value="${c}" ${current === c ? 'selected' : ''}>${esc(callingLabel(org.name, c))}</option>`).join('');
+    }
+  };
+  document.getElementById('u-role').addEventListener('change', updatePresidencyFields);
+  document.getElementById('u-org-select').addEventListener('change', updatePresidencyFields);
+  updatePresidencyFields();
   const uGuardedClose = wireUnsavedChangesGuard(document.getElementById('u-form'));
   document.getElementById('u-modal-close').addEventListener('click', uGuardedClose);
   document.getElementById('u-cancel').addEventListener('click', uGuardedClose);
@@ -3327,6 +4508,19 @@ function openUserModal(existing = null) {
     const body = Object.fromEntries(fd.entries());
     if (!body.password) delete body.password;
     if (!body.organizationId) body.organizationId = null;
+    const org = state.organizations.find((o) => String(o.id) === String(body.organizationId));
+    const isTargetOrg = body.role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
+    if (isTargetOrg) {
+      body.calling = document.getElementById('u-calling-select').value;
+      if (!body.calling) {
+        document.getElementById('u-error').innerHTML = `<div class="error-msg">Indica el llamamiento (Presidente/Obispo, Consejero o Secretario)</div>`;
+        return;
+      }
+      body.isPresident = false;
+    } else {
+      body.isPresident = body.role === 'leader' && fd.get('isPresident') === 'on';
+      body.calling = '';
+    }
     try {
       if (isEdit) await api(`/users/${existing.id}`, { method: 'PUT', body });
       else await api('/users', { method: 'POST', body });
@@ -3580,11 +4774,12 @@ async function renderMeetingsManage() {
 function meetingCardHtml(m) {
   const done = m.commitments.filter((c) => c.status === 'completed').length;
   const total = m.commitments.length;
+  const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   return `
     <div class="list-card meeting-card" data-id="${m.id}" style="cursor:pointer;">
       <div class="lc-main">
-        <div class="lc-title">${esc(m.title)}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
-        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · ${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}</div>
+        <div class="lc-title">${m.confidential ? '🔒 ' : ''}${esc(m.title)}${typeLabel ? ` <span class="status-pill status-gray">${typeLabel}</span>` : ''}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
+        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
       </div>
     </div>`;
 }
@@ -3609,7 +4804,7 @@ function commitmentStatusPillHtml(c) {
   return `<span class="status-pill ${cls}">${label}</span>`;
 }
 
-async function openMeetingModal() {
+async function openMeetingModal(presetType) {
   let assignable;
   try { assignable = await api('/meetings/assignable-users'); }
   catch (e) { toast(e.message, 'error'); return; }
@@ -3637,6 +4832,39 @@ async function openMeetingModal() {
       <button type="button" class="btn btn-ghost btn-sm cr-remove">🗑️ Quitar compromiso</button>
     </div>`;
 
+  // Punto 7: un tema de agenda es solo un título + quién lo presenta — las
+  // notas/decisión se completan durante o después de la reunión, desde el
+  // detalle del acta (openMeetingDetailModal).
+  const agendaRowHtml = () => `
+    <div class="commitment-row">
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;">
+          <label>Tema</label>
+          <input type="text" class="ar-topic" required placeholder="Ej: Presupuesto de actividades de agosto" />
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Quién lo presenta (opcional)</label>
+          <input type="text" class="ar-presenter" placeholder="Ej: Roberto Fuentes" />
+        </div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm ar-remove">🗑️ Quitar tema</button>
+    </div>`;
+
+  // Punto 8: "Consejo de Barrio" y "Coordinación de Ministración" son tipos
+  // reservados al Obispado (ver OBISPADO_ONLY_TYPES en meetings.js) — un
+  // líder común solo puede crear actas "generales" (ej. de su propia
+  // presidencia), así que ni se le muestran esas opciones.
+  const isObispadoTier = isObispadoUser();
+  const typeOptionsHtml = isObispadoTier ? `
+    <div class="field">
+      <label>Tipo de acta</label>
+      <select name="type" id="mt-type">
+        <option value="general">General (ej. presidencia de una organización)</option>
+        <option value="consejo_barrio">Consejo de Barrio</option>
+        <option value="coordinacion_ministracion">Coordinación de Ministración (trimestral)</option>
+      </select>
+    </div>` : '';
+
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="mt-modal-backdrop">
@@ -3652,6 +4880,19 @@ async function openMeetingModal() {
             <div class="field">
               <label>Fecha de la reunión</label>
               <input type="date" name="date" required value="${toISODate(new Date())}" />
+            </div>
+            ${typeOptionsHtml}
+            <div class="field">
+              <label style="display:flex; align-items:center; gap:8px; font-weight:600;">
+                <input type="checkbox" name="confidential" style="width:auto;" />
+                Acta confidencial
+              </label>
+              <div class="hint-box" style="margin-top:6px;">Solo el Obispado/Administrador (y quien la creó) van a poder ver los temas y compromisos — el resto la ve en la lista, pero sin el contenido.</div>
+            </div>
+            <div class="field">
+              <label>Agenda — temas a tratar (opcional, se puede armar antes de la reunión)</label>
+              <div id="mt-agenda"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
             </div>
             <div class="field">
               <label>Compromisos (opcional — también se pueden agregar después)</label>
@@ -3669,6 +4910,19 @@ async function openMeetingModal() {
         </div>
       </div>
     </div>`;
+
+  if (presetType) {
+    const typeSel = document.getElementById('mt-type');
+    if (typeSel) typeSel.value = presetType;
+  }
+
+  const agendaBox = document.getElementById('mt-agenda');
+  const wireAgendaRow = (row) => { row.querySelector('.ar-remove').addEventListener('click', () => row.remove()); };
+  const addAgendaRow = () => {
+    agendaBox.insertAdjacentHTML('beforeend', agendaRowHtml());
+    wireAgendaRow(agendaBox.lastElementChild);
+  };
+  document.getElementById('mt-add-agenda').addEventListener('click', addAgendaRow);
 
   const commitmentsBox = document.getElementById('mt-commitments');
   const wireRow = (row) => {
@@ -3697,8 +4951,24 @@ async function openMeetingModal() {
         dueDate: row.querySelector('.cr-due').value,
       }))
       .filter((c) => c.description);
+    const agendaItems = Array.from(document.querySelectorAll('#mt-agenda .commitment-row'))
+      .map((row) => ({
+        topic: row.querySelector('.ar-topic').value.trim(),
+        presenter: row.querySelector('.ar-presenter').value.trim(),
+      }))
+      .filter((a) => a.topic);
     try {
-      await api('/meetings', { method: 'POST', body: { title: fd.get('title'), date: fd.get('date'), commitments } });
+      await api('/meetings', {
+        method: 'POST',
+        body: {
+          title: fd.get('title'),
+          date: fd.get('date'),
+          type: isObispadoTier ? fd.get('type') : 'general',
+          confidential: fd.get('confidential') === 'on',
+          commitments,
+          agendaItems,
+        },
+      });
       closeModal();
       toast('Acta creada');
       await renderMeetingsManage();
@@ -3708,21 +4978,37 @@ async function openMeetingModal() {
   });
 }
 
+const MEETING_TYPE_LABELS = { general: '', consejo_barrio: '⛪ Consejo de Barrio', coordinacion_ministracion: '🤝 Coordinación de Ministración' };
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
+  const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
       <div class="modal" style="max-width:560px;">
         <div class="modal-header"><h3>${esc(m.title)}</h3><button class="modal-close" id="md-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}</div>
+          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}</div>
+          ${m.contentRedacted ? `<div class="empty-state">🔒 Esta acta es confidencial — solo el Obispado, el Administrador o quien la creó pueden ver su contenido.</div>` : `
+          <div id="md-agenda">
+            ${m.agendaItems && m.agendaItems.length ? `
+              <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin-bottom:6px;">📋 Agenda</div>
+              ${m.agendaItems.map((a) => `
+                <div class="commitment-detail-row" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                  ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
+                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button>` : ''}
+                </div>`).join('')}
+            ` : ''}
+          </div>
+          ${canEdit ? `<div style="margin:10px 0 14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-agenda">+ Agregar tema a la agenda</button></div>` : ''}
           <div id="md-commitments">
             ${m.commitments.length ? m.commitments.map((c) => `
               <div class="commitment-detail-row">
                 <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
                   <div style="min-width:0;">
-                    <div style="font-weight:600; font-size:13.5px;">${esc(c.description)}</div>
+                    <div style="font-weight:600; font-size:13.5px;">${c.redacted ? '🔒 ' : ''}${esc(c.description)}</div>
                     <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Responsable: ${esc(c.assignedToName)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
                     ${c.status === 'completed' && c.completionComment ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">💬 "${esc(c.completionComment)}"</div>` : ''}
                   </div>
@@ -3731,9 +5017,13 @@ async function openMeetingDetailModal(m) {
               </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null)}
           </div>
           ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
+          `}
         </div>
         <div class="modal-footer">
-          <div>${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
+            ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? '🔓 Quitar confidencialidad' : '🔒 Marcar confidencial'}</button>` : ''}
+          </div>
           <div><button class="btn btn-secondary" id="md-close">Cerrar</button></div>
         </div>
       </div>
@@ -3741,9 +5031,28 @@ async function openMeetingDetailModal(m) {
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
-  wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
+  if (!m.contentRedacted) wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
   if (canEdit) {
-    document.getElementById('md-add-commitment').addEventListener('click', () => openAddCommitmentModal(m));
+    document.getElementById('md-toggle-confidential').addEventListener('click', async () => {
+      try {
+        const updated = await api(`/meetings/${m.id}/confidential`, { method: 'PUT', body: { confidential: !m.confidential } });
+        toast(updated.confidential ? 'Acta marcada confidencial' : 'Acta ya no es confidencial');
+        openMeetingDetailModal(updated);
+        renderMeetingsManage();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+    const addAgendaBtn = document.getElementById('md-add-agenda');
+    if (addAgendaBtn) addAgendaBtn.addEventListener('click', () => openAddAgendaItemModal(m));
+    document.querySelectorAll('.agenda-edit-notes').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('[data-agenda-id]');
+        const itemId = Number(row.dataset.agendaId);
+        const item = m.agendaItems.find((a) => a.id === itemId);
+        openEditAgendaNotesModal(m, item);
+      });
+    });
+    const addCommitmentBtn = document.getElementById('md-add-commitment');
+    if (addCommitmentBtn) addCommitmentBtn.addEventListener('click', () => openAddCommitmentModal(m));
     document.getElementById('md-archive').addEventListener('click', async () => {
       if (!(await confirmModal('¿Verificar y archivar esta acta? Los compromisos que sigan pendientes quedarán documentados como "no cumplida" y ya no aparecerán en "Mis Asignaciones" de nadie.', { title: 'Verificar y archivar', confirmText: 'Verificar y archivar' }))) return;
       try {
@@ -3754,6 +5063,85 @@ async function openMeetingDetailModal(m) {
       } catch (e) { toast(e.message, 'error'); }
     });
   }
+}
+
+function openAddAgendaItemModal(m) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ai-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Agregar tema a la agenda</h3><button class="modal-close" id="ai-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ai-error"></div>
+          <form id="ai-form">
+            <div class="field"><label>Tema</label><input type="text" name="topic" required placeholder="Ej: Presupuesto de agosto" /></div>
+            <div class="field"><label>Quién lo presenta (opcional)</label><input type="text" name="presenter" /></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ai-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ai-save">Agregar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const aiGuardedClose = wireUnsavedChangesGuard(document.getElementById('ai-form'));
+  document.getElementById('ai-modal-close').addEventListener('click', aiGuardedClose);
+  document.getElementById('ai-cancel').addEventListener('click', aiGuardedClose);
+  document.getElementById('ai-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ai-modal-backdrop') aiGuardedClose(); });
+  document.getElementById('ai-save').addEventListener('click', async () => {
+    const form = document.getElementById('ai-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      const updated = await api(`/meetings/${m.id}/agenda-items`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+      closeModal();
+      toast('Tema agregado a la agenda');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('ai-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+function openEditAgendaNotesModal(m, item) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="an-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${esc(item.topic)}</h3><button class="modal-close" id="an-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="an-error"></div>
+          <form id="an-form">
+            <div class="field"><label>Qué se decidió / notas</label><textarea name="notes" rows="4">${esc(item.notes || '')}</textarea></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="an-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="an-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const anGuardedClose = wireUnsavedChangesGuard(document.getElementById('an-form'));
+  document.getElementById('an-modal-close').addEventListener('click', anGuardedClose);
+  document.getElementById('an-cancel').addEventListener('click', anGuardedClose);
+  document.getElementById('an-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'an-modal-backdrop') anGuardedClose(); });
+  document.getElementById('an-save').addEventListener('click', async () => {
+    const fd = new FormData(document.getElementById('an-form'));
+    try {
+      const updated = await api(`/meetings/${m.id}/agenda-items/${item.id}`, { method: 'PUT', body: { notes: fd.get('notes') } });
+      closeModal();
+      toast('Notas guardadas');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('an-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 async function openAddCommitmentModal(m) {
@@ -4948,6 +6336,8 @@ async function renderBishopricPanelView() {
     <div class="section-header">
       <div><h2>Panel de Obispado</h2><p>Resumen de todas las organizaciones — para no tener que revisar módulo por módulo</p></div>
     </div>
+    ${bpWardCouncilAlertHtml(data.wardCouncil)}
+    ${bpMinisteringAlertHtml(data.ministeringCoordination)}
     <div class="stats-cards" style="margin-bottom:22px;">
       <div class="stat-card"><div class="stat-card-label">Compromisos atrasados</div><div class="stat-card-value">${data.overdueCommitments.length}</div></div>
       <div class="stat-card"><div class="stat-card-label">Turnos de aseo sin confirmar</div><div class="stat-card-value">${data.cleaningPending.length}</div></div>
@@ -4983,6 +6373,55 @@ async function renderBishopricPanelView() {
   `;
   wireBishopricPanelActions();
   wireBishopricScrollDots();
+}
+
+// Punto 10 — aviso de Consejo de Barrio pendiente: la frecuencia esperada
+// (en días) la define el Obispo y puede irla editando acá mismo, sin tener
+// que ir a otra pantalla (ver PUT /api/ward-settings).
+function bpWardCouncilAlertHtml(wc) {
+  const okClass = wc.overdue ? '' : ' ok';
+  const statusText = !wc.lastDate
+    ? 'Todavía no hay ningún Consejo de Barrio registrado.'
+    : wc.overdue
+      ? `Han pasado ${wc.daysSinceLast} días desde el último (${esc(fmtDateHuman(wc.lastDate))}) — la frecuencia esperada es cada ${wc.frequencyDays} días.`
+      : `Al día — el último fue hace ${wc.daysSinceLast} día${wc.daysSinceLast === 1 ? '' : 's'} (${esc(fmtDateHuman(wc.lastDate))}).`;
+  return `
+    <div class="council-alert-box${okClass}">
+      <div class="council-alert-icon">${wc.overdue ? '⚠️' : '✅'}</div>
+      <div class="council-alert-body">
+        <div class="council-alert-title">⛪ Consejo de Barrio</div>
+        <div>${statusText}</div>
+        ${wc.overdue ? `<button type="button" class="btn btn-secondary btn-sm" id="bp-create-council">📋 Crear acta de Consejo de Barrio</button>` : ''}
+        <form class="council-alert-freq-form" id="bp-council-freq-form">
+          <label for="bp-council-freq" style="font-weight:600; font-size:12.5px;">Frecuencia esperada (días):</label>
+          <input type="number" id="bp-council-freq" min="1" max="90" value="${wc.frequencyDays}" />
+          <button type="submit" class="btn btn-ghost btn-sm">Guardar</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+// Punto 8 — aviso de Coordinación de Ministración trimestral: dirigido a
+// las tres personas que el Manual General identifica específicamente (el
+// Obispo, el presidente del Cuórum de Élderes y la presidenta de la
+// Sociedad de Socorro — ver isPresident en users.js), no a "un líder"
+// cualquiera de esas organizaciones.
+function bpMinisteringAlertHtml(mc) {
+  const okClass = mc.overdue ? '' : ' ok';
+  const leaderName = (l) => l ? esc(l.name) : '(sin definir — marcar en Usuarios)';
+  const statusText = mc.overdue
+    ? `Todavía no se ha registrado una Coordinación de Ministración este trimestre (${esc(mc.quarterLabel)}).`
+    : `Al día — ya se registró en este trimestre (${esc(mc.quarterLabel)}).`;
+  return `
+    <div class="council-alert-box${okClass}">
+      <div class="council-alert-icon">${mc.overdue ? '⚠️' : '✅'}</div>
+      <div class="council-alert-body">
+        <div class="council-alert-title">🤝 Coordinación de Ministración (trimestral)</div>
+        <div>${statusText}</div>
+        <div style="margin-top:6px; font-size:12.5px;">Obispo: ${leaderName(mc.keyLeaders.bishop)} · Presidente Cuórum de Élderes: ${leaderName(mc.keyLeaders.eldersQuorumPresident)} · Presidenta Sociedad de Socorro: ${leaderName(mc.keyLeaders.reliefSocietyPresident)}</div>
+        ${mc.overdue ? `<button type="button" class="btn btn-secondary btn-sm" id="bp-create-ministering">📋 Crear acta de Coordinación de Ministración</button>` : ''}
+      </div>
+    </div>`;
 }
 
 // Las esferitas reemplazan la barra de scroll nativa (que queda escondida
@@ -5062,6 +6501,19 @@ function bpCleaningRowHtml(s) {
 }
 
 function wireBishopricPanelActions() {
+  document.getElementById('bp-create-council')?.addEventListener('click', () => goCreateMeetingOfType('consejo_barrio'));
+  document.getElementById('bp-create-ministering')?.addEventListener('click', () => goCreateMeetingOfType('coordinacion_ministracion'));
+  document.getElementById('bp-council-freq-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('bp-council-freq');
+    const days = Number(input.value);
+    if (!Number.isFinite(days) || days < 1 || days > 90) { toast('La frecuencia debe ser un número entre 1 y 90 días', 'error'); return; }
+    try {
+      await api('/ward-settings', { method: 'PUT', body: { councilFrequencyDays: days } });
+      toast('Frecuencia actualizada');
+      await renderBishopricPanelView();
+    } catch (err) { toast(err.message, 'error'); }
+  });
   document.querySelectorAll('.bp-commitment-card').forEach((card) => {
     const toggleBtn = card.querySelector('.bp-commitment-complete-toggle');
     if (toggleBtn) {

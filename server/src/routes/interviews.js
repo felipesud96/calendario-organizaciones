@@ -1,7 +1,29 @@
 import { sendJson } from '../router.js';
-import { load, withDb, nextId } from '../db.js';
+import { load, withDb, nextId, interviewEligibility } from '../db.js';
 import { requireAuth } from '../guard.js';
 import { sendCancellationEmail, sendRescheduleEmail } from '../notifications.js';
+
+// Con quién se puede agendar una entrevista, según el Manual General: un
+// hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta
+// con Sociedad de Socorro o con el Obispado; un joven o una joven solo con
+// el Obispado (el Obispo y sus consejeros pueden entrevistar a cualquiera,
+// sin restricción — ver interviewEligibility en db.js). Aplica tanto a las
+// solicitudes de entrevista (interview-requests.js) como acá, cuando el
+// líder agenda a mano. Solo se puede validar si el nombre está vinculado a
+// una cuenta registrada (memberUserId) y esa cuenta ya completó su perfil —
+// un nombre escrito a mano, o un miembro cuyo perfil todavía está
+// incompleto, no se puede validar y se permite igual que siempre.
+function checkInterviewEligibility(data, organizationId, memberUserId) {
+  if (!memberUserId) return null;
+  const org = data.organizations.find((o) => o.id === Number(organizationId));
+  const member = data.users.find((u) => u.id === Number(memberUserId));
+  if (!org || !member) return null;
+  const eligible = interviewEligibility(org.name, member);
+  if (eligible === false) {
+    return `Esta entrevista es de ${org.name} y ${member.name} no corresponde según su perfil (sexo/edad) — según el Manual General, agenda con el Obispado en su lugar.`;
+  }
+  return null;
+}
 
 function canScheduleOrg(user, organizationId) {
   if (user.role === 'admin') return true;
@@ -177,12 +199,15 @@ export function registerInterviewRoutes(router) {
     if (!canScheduleOrg(req.user, organizationId)) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agendar entrevistas' });
     }
+    const normalizedMemberUserId = normalizeMemberUserId(memberUserId, data.users) || null;
+    const eligibilityError = checkInterviewEligibility(data, organizationId, normalizedMemberUserId);
+    if (eligibilityError) return sendJson(res, 400, { error: eligibilityError });
     const now = new Date().toISOString();
     const interview = await withDb((d) => {
       const i = {
         id: nextId(d, 'interviews'),
         memberName,
-        memberUserId: normalizeMemberUserId(memberUserId, data.users) || null,
+        memberUserId: normalizedMemberUserId,
         memberPhone: memberPhone || '',
         memberEmail: memberEmail || '',
         description: description || '',
@@ -222,6 +247,11 @@ export function registerInterviewRoutes(router) {
     if (!existing) return sendJson(res, 404, { error: 'Entrevista no encontrada' });
     if (!canScheduleOrg(req.user, existing.organizationId)) {
       return sendJson(res, 403, { error: 'No tienes permiso para editar esta entrevista' });
+    }
+    if (body.memberUserId !== undefined) {
+      const nextMemberUserId = normalizeMemberUserId(body.memberUserId, data.users);
+      const eligibilityError = checkInterviewEligibility(data, existing.organizationId, nextMemberUserId);
+      if (eligibilityError) return sendJson(res, 400, { error: eligibilityError });
     }
     // se guarda la fecha/hora previas para poder avisar "antes → ahora" si
     // cambian, antes de que withDb las sobrescriba.

@@ -14,6 +14,28 @@ export function isObispadoLeader(user, data) {
   return !!org && org.name === 'Obispado';
 }
 
+// Punto 8: identifica, por nombre de organización, a la persona marcada
+// como presidente/titular (ver isPresident en users.js) — usado para dirigir
+// el aviso de la reunión trimestral de Coordinación de Ministración
+// exactamente al Obispo, al presidente de Cuórum de Élderes y a la
+// presidenta de Sociedad de Socorro, no a "un líder" cualquiera de esas
+// organizaciones. Si nadie fue marcado todavía, devuelve null para esa
+// organización (el cliente muestra "sin definir" en vez de un nombre).
+export function presidentOf(data, orgName) {
+  const org = data.organizations.find((o) => o.name === orgName);
+  if (!org) return null;
+  const user = data.users.find((u) => u.role === 'leader' && Number(u.organizationId) === org.id && u.isPresident);
+  return user ? { id: user.id, name: user.name } : null;
+}
+
+export function keyLeadersForMinistering(data) {
+  return {
+    bishop: presidentOf(data, 'Obispado'),
+    eldersQuorumPresident: presidentOf(data, 'Cuórum de Élderes'),
+    reliefSocietyPresident: presidentOf(data, 'Sociedad de Socorro'),
+  };
+}
+
 function withStakeDisplay(ev, data) {
   return {
     ...ev,

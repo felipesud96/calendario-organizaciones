@@ -1,9 +1,10 @@
 import { sendJson } from '../router.js';
-import { load } from '../db.js';
+import { load, withDb } from '../db.js';
 import { requireRole } from '../guard.js';
-import { isObispadoLeader } from './stake.js';
-import { currentQuarter, quarterLabel } from '../quarter.js';
+import { isObispadoLeader, keyLeadersForMinistering } from './stake.js';
+import { currentQuarter, quarterLabel, quarterOf } from '../quarter.js';
 import { allCategoryRefs, summaryFor } from './budget.js';
+import { lastMeetingDateOfType } from './meetings.js';
 
 // Módulo "Panel de Obispado": un resumen de una sola pantalla que junta lo
 // más urgente de TODAS las organizaciones — compromisos atrasados, turnos
@@ -99,6 +100,33 @@ export function computeBishopricOverview(data) {
     const totalAssigned = categorySummaries.reduce((s, c) => s + c.assigned, 0);
     const totalSpent = categorySummaries.reduce((s, c) => s + c.spent, 0);
 
+    // Punto 10: aviso si pasó más tiempo del que el Obispo definió (por
+    // defecto 7 días) desde el último Consejo de Barrio registrado — la
+    // frecuencia es configurable, ver PUT /api/ward-settings.
+    const councilFrequencyDays = data.wardSettings?.councilFrequencyDays || 7;
+    const lastCouncilDate = lastMeetingDateOfType(data, 'consejo_barrio');
+    const daysSinceCouncil = lastCouncilDate ? Math.floor((Date.parse(today) - Date.parse(lastCouncilDate)) / 86400000) : null;
+    const wardCouncil = {
+      frequencyDays: councilFrequencyDays,
+      lastDate: lastCouncilDate,
+      daysSinceLast: daysSinceCouncil,
+      overdue: lastCouncilDate ? daysSinceCouncil > councilFrequencyDays : true,
+    };
+
+    // Punto 8: la Coordinación de Ministración debe darse al menos una vez
+    // por trimestre (Manual General 7.1.1.1) — se avisa si la última
+    // registrada no cae dentro del trimestre en curso, dirigido a las tres
+    // personas que el manual identifica (no "un líder" cualquiera de esas
+    // organizaciones — ver isPresident en users.js).
+    const lastMinisteringDate = lastMeetingDateOfType(data, 'coordinacion_ministracion');
+    const ministeringCoordination = {
+      quarter,
+      quarterLabel: quarterLabel(quarter),
+      lastDate: lastMinisteringDate,
+      overdue: !lastMinisteringDate || quarterOf(lastMinisteringDate) !== quarter,
+      keyLeaders: keyLeadersForMinistering(data),
+    };
+
     return {
       generatedAt: new Date().toISOString(),
       overdueCommitments,
@@ -113,6 +141,8 @@ export function computeBishopricOverview(data) {
         totalSpent,
         totalBalance: totalAssigned - totalSpent,
       },
+      wardCouncil,
+      ministeringCoordination,
     };
 }
 
@@ -123,5 +153,22 @@ export function registerDashboardRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver el Panel de Obispado' });
     }
     sendJson(res, 200, computeBishopricOverview(data));
+  }));
+
+  // Punto 10: el Obispo define (y puede ir editando) cada cuántos días
+  // espera tener un Consejo de Barrio — no queda fijo en el código.
+  router.put('/api/ward-settings', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+    const data0 = load();
+    if (!isObispadoLeader(req.user, data0)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden cambiar esta configuración' });
+    }
+    const days = Number(body?.councilFrequencyDays);
+    if (!Number.isFinite(days) || days < 1 || days > 90) {
+      return sendJson(res, 400, { error: 'La frecuencia debe ser un número de días entre 1 y 90' });
+    }
+    await withDb((data) => {
+      data.wardSettings = { ...data.wardSettings, councilFrequencyDays: Math.round(days) };
+    });
+    sendJson(res, 200, load().wardSettings);
   }));
 }

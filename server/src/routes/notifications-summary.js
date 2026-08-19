@@ -51,6 +51,18 @@ export function registerNotificationsSummaryRoutes(router) {
           view: 'stats', subtab: 'pending',
         });
       }
+      // Solicitudes de entrevista por confirmar (Punto 4) — la propia
+      // organización, o todas si es líder de Obispado/Administrador (mismo
+      // alcance que la bandeja de Entrevistas → Solicitudes).
+      const pendingRequests = data.interviewRequests.filter((r) => r.status === 'pending'
+        && (isObispadoLeader(user, data) || Number(r.organizationId) === Number(user.organizationId)));
+      if (pendingRequests.length > 0) {
+        items.push({
+          key: 'pendingInterviewRequests', icon: '📥', count: pendingRequests.length,
+          label: `Solicitud${pendingRequests.length === 1 ? '' : 'es'} de entrevista por confirmar`,
+          view: 'interviews', subtab: 'requests',
+        });
+      }
     }
 
     if (isObispadoLeader(user, data)) {

@@ -30,6 +30,22 @@ const LEADER_NAMES = {
   'Primaria': 'Camila Vidal',
 };
 
+// Perfil (fecha de nacimiento + sexo) de cada líder principal — necesario
+// para la elegibilidad de entrevistas (ver interviewEligibility en db.js).
+// A propósito, Pedro Salinas (hombre adulto) y Daniela Rojas (mujer adulta)
+// quedan como los ejemplos "positivos" de Cuórum de Élderes y Sociedad de
+// Socorro respectivamente.
+const LEADER_PROFILES = {
+  'Obispado': { birthDate: '1978-03-10', sex: 'M' },
+  'Cuórum de Élderes': { birthDate: '1985-07-22', sex: 'M' },
+  'Sociedad de Socorro': { birthDate: '1980-11-05', sex: 'F' },
+  'Escuela Dominical': { birthDate: '1990-02-14', sex: 'F' },
+  'Hombres Jóvenes': { birthDate: '1988-09-30', sex: 'M' },
+  'Mujeres Jóvenes': { birthDate: '1992-05-18', sex: 'F' },
+  'JAS': { birthDate: '1965-01-01', sex: 'M' },
+  'Primaria': { birthDate: '1995-08-08', sex: 'F' },
+};
+
 function slugify(name) {
   return name
     .toLowerCase()
@@ -54,10 +70,10 @@ for (const org of ORGS) {
   }
 }
 
-function upsertUser({ name, email, password, role, organizationId }) {
+function upsertUser({ name, email, password, role, organizationId, isPresident = false, birthDate = null, sex = null }) {
   let existing = data.users.find((u) => u.email === email);
   if (existing) {
-    Object.assign(existing, { name, role, organizationId, passwordHash: hashPassword(password) });
+    Object.assign(existing, { name, role, organizationId, passwordHash: hashPassword(password), isPresident, birthDate, sex });
     return existing;
   }
   const u = {
@@ -68,28 +84,44 @@ function upsertUser({ name, email, password, role, organizationId }) {
     role,
     organizationId: organizationId || null,
     phone: null,
+    birthDate,
+    sex,
+    profilePhoto: null,
+    isPresident,
     createdAt: new Date().toISOString(),
   };
   data.users.push(u);
   return u;
 }
 
+// Punto 8 (Coordinación de Ministración trimestral, Manual General 20.2.1):
+// la app necesita identificar a la persona EXACTA que preside cada una de
+// estas tres organizaciones (no "un líder cualquiera" de la organización) —
+// ver isPresident en users.js/stake.js. En los datos de ejemplo, el líder
+// principal de cada una queda marcado como su presidente/titular.
+const PRESIDENT_ORGS = ['Obispado', 'Cuórum de Élderes', 'Sociedad de Socorro'];
+
 const credentials = [];
 
-upsertUser({ name: 'Administrador General', email: 'admin@ward.local', password: 'admin123', role: 'admin', organizationId: null });
+upsertUser({ name: 'Administrador General', email: 'admin@ward.local', password: 'admin123', role: 'admin', organizationId: null, birthDate: '1975-06-01', sex: 'M' });
 credentials.push(['admin@ward.local', 'admin123', 'Administrador']);
 
 for (const org of ORGS) {
   const email = `lider.${slugify(org.name)}@ward.local`;
   const name = LEADER_NAMES[org.name] || `Líder de ${org.name}`;
-  upsertUser({ name, email, password: 'lider123', role: 'leader', organizationId: orgIds[org.name] });
-  credentials.push([email, 'lider123', `${name} (Líder de ${org.name})`]);
+  const isPresident = PRESIDENT_ORGS.includes(org.name);
+  const profile = LEADER_PROFILES[org.name] || {};
+  upsertUser({ name, email, password: 'lider123', role: 'leader', organizationId: orgIds[org.name], isPresident, ...profile });
+  credentials.push([email, 'lider123', `${name} (Líder de ${org.name})${isPresident ? ' · ★ Presidente' : ''}`]);
 }
 
 // Segundo líder de ejemplo en Cuórum de Élderes — a propósito, para mostrar
 // que una organización puede tener más de un líder (ej. presidente y
 // consejero) y que cada uno aparece en los selectores de responsable (módulo
-// Reuniones) por su propio nombre, no por un rótulo genérico compartido.
+// Reuniones) por su propio nombre, no por un rótulo genérico compartido. A
+// propósito también se deja SIN fecha de nacimiento ni sexo (perfil
+// incompleto), para mostrar el aviso obligatorio de "completa tu perfil" que
+// le aparece a cualquier cuenta creada antes de que existiera este campo.
 upsertUser({
   name: 'Ignacio Herrera',
   email: 'lider2.cuorum.de.elderes@ward.local',
@@ -97,10 +129,14 @@ upsertUser({
   role: 'leader',
   organizationId: orgIds['Cuórum de Élderes'],
 });
-credentials.push(['lider2.cuorum.de.elderes@ward.local', 'lider123', 'Ignacio Herrera (Líder de Cuórum de Élderes)']);
+credentials.push(['lider2.cuorum.de.elderes@ward.local', 'lider123', 'Ignacio Herrera (Líder de Cuórum de Élderes) · perfil incompleto a propósito']);
 
-upsertUser({ name: 'Miembro de Ejemplo', email: 'miembro@ward.local', password: 'miembro123', role: 'member', organizationId: null });
-credentials.push(['miembro@ward.local', 'miembro123', 'Miembro']);
+// Miembro de ejemplo — a propósito un JOVEN (Manual General: un joven o una
+// joven solo puede agendar entrevista con el Obispado, no con Cuórum de
+// Élderes ni Sociedad de Socorro), para poder mostrar esa restricción en el
+// auto-agendamiento (Entrevistas → "Mis Actividades").
+upsertUser({ name: 'Miembro de Ejemplo', email: 'miembro@ward.local', password: 'miembro123', role: 'member', organizationId: null, birthDate: '2010-01-15', sex: 'M' });
+credentials.push(['miembro@ward.local', 'miembro123', 'Miembro (joven de ejemplo, 16 años)']);
 
 // Limpieza: el rol "secretario" se fusionó con "líder" — elimina las cuentas
 // de ejemplo de secretarios que hayan quedado de una siembra anterior.

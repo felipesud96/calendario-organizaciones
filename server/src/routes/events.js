@@ -33,6 +33,23 @@ function blockedByStake(conflicts, body, user, data) {
 // cuentan en ese balance.
 export const PURPOSE_OPTIONS = ['Espiritual', 'Físico', 'Académico', 'Social', 'Servicio'];
 
+// Punto 13 (Manual General 20.7.1): "Debe haber al menos dos adultos
+// presentes" en cualquier actividad con jóvenes o niños. Para las
+// organizaciones de Mujeres Jóvenes, Hombres Jóvenes y Primaria, la app
+// exige el nombre de al menos dos adultos supervisores antes de poder
+// guardar la actividad — no es solo un recordatorio, es un campo obligatorio.
+export const SUPERVISION_REQUIRED_ORG_NAMES = ['Hombres Jóvenes', 'Mujeres Jóvenes', 'Primaria'];
+
+export function orgRequiresSupervisingAdults(orgs, organizationId) {
+  const org = orgs.find((o) => o.id === Number(organizationId));
+  return !!org && SUPERVISION_REQUIRED_ORG_NAMES.includes(org.name);
+}
+
+function cleanSupervisingAdults(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  return [...new Set(arr.map((n) => String(n || '').trim()).filter(Boolean))];
+}
+
 export function canEditOrg(user, organizationId) {
   if (user.role === 'admin') return true;
   if (user.role === 'leader' && Number(user.organizationId) === Number(organizationId)) return true;
@@ -114,7 +131,7 @@ export function canSeeMeeting(user, item) {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function buildEventFields(body, orgs) {
-  const { title, description, location, sala, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose } = body || {};
+  const { title, description, location, sala, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose, supervisingAdults } = body || {};
   const wardWide = !!isWardActivity;
   // Si es "de todo el Barrio" no hace falta guardar la lista de
   // organizaciones involucradas: se asume que participan todas.
@@ -137,7 +154,22 @@ function buildEventFields(body, orgs) {
     isWardActivity: wardWide,
     isMeeting: !!isMeeting,
     purpose: purpose || null,
+    supervisingAdults: cleanSupervisingAdults(supervisingAdults),
   };
+}
+
+// Valida el Punto 13 contra el estado FINAL del evento (después de aplicar
+// el body sobre lo existente, si corresponde) — se llama tanto al crear
+// como al editar, porque una actividad puede pasar a ser de una de estas
+// tres organizaciones recién al editarla.
+function supervisingAdultsError(orgs, organizationId, supervisingAdults) {
+  if (!orgRequiresSupervisingAdults(orgs, organizationId)) return null;
+  const clean = cleanSupervisingAdults(supervisingAdults);
+  if (clean.length < 2) {
+    const org = orgs.find((o) => o.id === Number(organizationId));
+    return `Las actividades de ${org?.name || 'esta organización'} requieren los nombres de al menos dos adultos supervisores (Manual General 20.7.1)`;
+  }
+  return null;
 }
 
 export function registerEventRoutes(router) {
@@ -171,6 +203,8 @@ export function registerEventRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
     }
     const data0 = load();
+    const supervisionError = supervisingAdultsError(data0.organizations, organizationId, body?.supervisingAdults);
+    if (supervisionError) return sendJson(res, 400, { error: supervisionError });
     const stakeConflicts = findStakeConflicts(data0, { date, startTime, endTime: body.endTime });
     const stakeBlock = blockedByStake(stakeConflicts, body, req.user, data0);
     if (stakeBlock) return sendJson(res, 409, stakeBlock);
@@ -217,6 +251,8 @@ export function registerEventRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el líder de la organización o un administrador puede agregar actividades aquí' });
     }
     const data0 = load();
+    const supervisionError = supervisingAdultsError(data0.organizations, organizationId, body?.supervisingAdults);
+    if (supervisionError) return sendJson(res, 400, { error: supervisionError });
     // Se revisa CADA fecha del lote (no solo la primera, a diferencia del
     // aviso "suave" del cliente): si cualquiera choca con Estaca, se rechaza
     // el lote completo para no dejar una repetición creada a medias — salvo
@@ -260,6 +296,9 @@ export function registerEventRoutes(router) {
     const finalDate = body.date ?? existing.date;
     const finalStartTime = body.startTime ?? existing.startTime;
     const finalEndTime = body.endTime ?? existing.endTime;
+    const finalSupervisingAdults = body.supervisingAdults !== undefined ? body.supervisingAdults : existing.supervisingAdults;
+    const supervisionError = supervisingAdultsError(data.organizations, targetOrg, finalSupervisingAdults);
+    if (supervisionError) return sendJson(res, 400, { error: supervisionError });
     const stakeConflicts = findStakeConflicts(data, { date: finalDate, startTime: finalStartTime, endTime: finalEndTime });
     const stakeBlock = blockedByStake(stakeConflicts, body, req.user, data);
     if (stakeBlock) return sendJson(res, 409, stakeBlock);
@@ -292,6 +331,7 @@ export function registerEventRoutes(router) {
         isWardActivity,
         isMeeting,
         purpose: PURPOSE_OPTIONS.includes(body.purpose) ? body.purpose : ev.purpose ?? null,
+        supervisingAdults: body.supervisingAdults !== undefined ? cleanSupervisingAdults(body.supervisingAdults) : (ev.supervisingAdults || []),
         updatedAt: new Date().toISOString(),
       });
       return ev;

@@ -5,7 +5,7 @@
 // si hace falta) desde el panel de Administración → Solicitudes.
 
 import { sendJson } from '../router.js';
-import { load, withDb, nextId } from '../db.js';
+import { load, withDb, nextId, resolveCallingAndPresident, unmarkOtherPresidents, PRESIDENT_ORGS } from '../db.js';
 import { requireRole } from '../guard.js';
 import { hashPassword, publicUser } from '../auth.js';
 
@@ -32,7 +32,7 @@ export function registerRegistrationRoutes(router) {
   });
 
   router.post('/api/auth/register', async (req, res, params, body) => {
-    const { name, email, password, requestedRole, requestedOrganizationId, phone } = body || {};
+    const { name, email, password, requestedRole, requestedOrganizationId, phone, birthDate, sex, requestedCalling } = body || {};
     if (!name || !email || !password || !requestedRole) {
       return sendJson(res, 400, { error: 'Nombre, usuario, contraseña y perfil son requeridos' });
     }
@@ -44,6 +44,31 @@ export function registerRegistrationRoutes(router) {
     }
     if (String(password).length < 6) {
       return sendJson(res, 400, { error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+    // Punto 8 (ampliación): si va a liderar Obispado, Cuórum de Élderes o
+    // Sociedad de Socorro, tiene que decir de entrada si es el
+    // presidente/Obispo, un consejero o el secretario — el Administrador
+    // puede corregirlo al aprobar, pero es información que ya conviene
+    // pedir de una vez (igual que la fecha de nacimiento y el sexo).
+    let requestedCallingValue = null;
+    if (requestedRole === 'leader' && requestedOrganizationId) {
+      const data0 = load();
+      const org0 = data0.organizations.find((o) => o.id === Number(requestedOrganizationId));
+      if (org0 && PRESIDENT_ORGS.includes(org0.name)) {
+        if (!['Presidente', 'Consejero', 'Secretario'].includes(requestedCalling)) {
+          return sendJson(res, 400, { error: 'Indica si es el Presidente/Obispo, un Consejero o el Secretario' });
+        }
+        requestedCallingValue = requestedCalling;
+      }
+    }
+    // Punto 4 (ampliación): la fecha de nacimiento y el sexo son requeridos
+    // desde el registro — se necesitan para saber con quién se puede
+    // agendar una entrevista (ver interviewEligibility() en db.js).
+    if (!birthDate || Number.isNaN(new Date(`${birthDate}T00:00:00`).getTime())) {
+      return sendJson(res, 400, { error: 'Falta la fecha de nacimiento' });
+    }
+    if (sex !== 'M' && sex !== 'F') {
+      return sendJson(res, 400, { error: 'Falta el sexo' });
     }
     const normalizedEmail = String(email).toLowerCase().trim();
     const data = load();
@@ -60,7 +85,10 @@ export function registerRegistrationRoutes(router) {
         passwordHash: hashPassword(password),
         requestedRole,
         requestedOrganizationId: requestedOrganizationId ? Number(requestedOrganizationId) : null,
+        requestedCalling: requestedCallingValue,
         phone: phone || null,
+        birthDate,
+        sex,
         createdAt: new Date().toISOString(),
       });
     });
@@ -98,6 +126,15 @@ export function registerRegistrationRoutes(router) {
       await withDb((d) => { d.registrationRequests = d.registrationRequests.filter((r) => r.id !== id); });
       return sendJson(res, 409, { error: 'Ya existe un usuario activo con ese nombre de usuario; la solicitud fue descartada' });
     }
+    // El Administrador puede corregir el llamamiento que la persona pidió
+    // (o declarar uno si no se pidió ninguno, ej. porque cambió de
+    // organización al aprobar) — misma regla que Administración → Usuarios.
+    const { calling, isPresident } = resolveCallingAndPresident(data, {
+      organizationId: finalRole === 'leader' ? finalOrgId : null,
+      role: finalRole,
+      callingInput: (body && body.calling !== undefined) ? body.calling : reqItem.requestedCalling,
+      isPresidentInput: body && body.isPresident,
+    });
     const user = await withDb((d) => {
       const u = {
         id: nextId(d, 'users'),
@@ -107,8 +144,15 @@ export function registerRegistrationRoutes(router) {
         role: finalRole,
         organizationId: finalRole === 'leader' ? finalOrgId : null,
         phone: reqItem.phone || null,
+        birthDate: reqItem.birthDate || null,
+        sex: reqItem.sex || null,
+        profilePhoto: null,
+        isPresident,
+        calling,
+        interviewAvailability: [],
         createdAt: new Date().toISOString(),
       };
+      if (isPresident) unmarkOtherPresidents(d, u.organizationId, u.id);
       d.users.push(u);
       d.registrationRequests = d.registrationRequests.filter((r) => r.id !== id);
       return u;
