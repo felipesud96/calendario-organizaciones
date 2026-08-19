@@ -194,6 +194,17 @@ export function load() {
     if (r.targetLeaderUserId === undefined) { r.targetLeaderUserId = null; migrated = true; }
     if (r.targetLeaderName === undefined) { r.targetLeaderName = null; migrated = true; }
   }
+  // migración: entrevistas creadas antes de que existiera la posibilidad de
+  // entrevistar a más de una persona a la vez (matrimonios, compañerismos de
+  // ministración) — ver routes/interviews.js. Cada entrevista real de "un
+  // registro por persona" ahora comparte un `groupId` con las demás personas
+  // citadas en el mismo horario; una entrevista de toda la vida (una sola
+  // persona) simplemente queda con `groupId` igual a su propio `id`, así el
+  // resto del código siempre puede tratar "un grupo de 1" igual que "un
+  // grupo de varios" sin casos especiales.
+  for (const iv of data.interviews) {
+    if (iv.groupId === undefined) { iv.groupId = iv.id; migrated = true; }
+  }
   if (migrated) save(data);
   return data;
 }

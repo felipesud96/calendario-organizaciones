@@ -1547,7 +1547,7 @@ async function renderCalendarView() {
     const dayStake = state.stakeEvents.filter((s) => s.date === iso);
     const items = [
       ...dayEvents.map((e) => ({ ...e, kind: 'event' })),
-      ...dayInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.memberName })),
+      ...dayInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.memberNames || iv.memberName })),
       ...dayStake.map((s) => ({ ...s, kind: 'stake' })),
     ].sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
 
@@ -1869,7 +1869,7 @@ async function shiftMonth(delta, forceReplace = false) {
 function openDayModal(iso) {
   const items = [
     ...state.events.filter((e) => e.date === iso).map((e) => ({ ...e, kind: 'event' })),
-    ...state.interviews.filter((iv) => iv.date === iso).map((iv) => ({ ...iv, kind: 'interview', title: iv.memberName })),
+    ...state.interviews.filter((iv) => iv.date === iso).map((iv) => ({ ...iv, kind: 'interview', title: iv.memberNames || iv.memberName })),
     ...state.stakeEvents.filter((s) => s.date === iso).map((s) => ({ ...s, kind: 'stake' })),
   ].sort((a, b) => (a.startTime || '00:00').localeCompare(b.startTime || '00:00'));
   const modalRoot = document.getElementById('modal-root');
@@ -2092,7 +2092,7 @@ function wireRsvpButtons(item) {
 
 function openReadOnlyModal(item, kind) {
   if (!item) return;
-  const title = kind === 'interview' ? item.memberName : item.title;
+  const title = kind === 'interview' ? (item.memberNames || item.memberName) : item.title;
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ro-modal-backdrop">
@@ -2497,7 +2497,12 @@ async function renderMyActivitiesLeaderView() {
   events = events.filter((ev) => Number(ev.organizationId) === myOrgId || ev.isWardActivity
     || followedIds.includes(Number(ev.organizationId))
     || (ev.involvedOrganizations || []).some((o) => Number(o.id) === myOrgId || followedIds.includes(Number(o.id))));
-  const myOwnInterviews = interviews.filter((iv) => Number(iv.memberUserId) === Number(state.user.id));
+  // Cada entrevista puede ahora citar a más de una persona (matrimonio,
+  // compañerismo de ministración): si a mí me entrevistaron junto con otra
+  // persona y yo no fui la primera en agendarse, mi propio memberUserId
+  // puede no coincidir con el `memberUserId` de nivel superior (que es el de
+  // la primera persona del grupo) — por eso se revisa dentro de `members`.
+  const myOwnInterviews = interviews.filter((iv) => (Array.isArray(iv.members) && iv.members.length ? iv.members : [iv]).some((m) => Number(m.memberUserId) === Number(state.user.id)));
   const todayIso = toISODate(new Date());
   // Las actividades cuya fecha ya pasó desaparecen de este listado para
   // mantener la pantalla limpia (siguen existiendo — se pueden seguir
@@ -2990,9 +2995,23 @@ function interviewStatusPillHtml(status) {
   return `<span class="status-pill status-amber">Por verificar</span>`;
 }
 
+// Si se citó a más de una persona a la vez (matrimonio, compañerismo de
+// ministración), muestra una línea con el historial de cada una por
+// separado (cada quien tiene su propio conteo de "veces entrevistado", no
+// se mezclan); si es una sola persona, la línea de siempre.
 function interviewStatsLine(iv) {
-  const times = iv.timesInterviewed === 1 ? '1 vez' : `${iv.timesInterviewed || 0} veces`;
-  return `Se le ha entrevistado ${times} en total${iv.lastInterviewDate ? ' · última vez ' + esc(fmtDateHuman(iv.lastInterviewDate)) : ''}`;
+  const members = Array.isArray(iv.members) && iv.members.length
+    ? iv.members
+    : [{ memberName: iv.memberName, timesInterviewed: iv.timesInterviewed, lastInterviewDate: iv.lastInterviewDate }];
+  if (members.length === 1) {
+    const m = members[0];
+    const times = m.timesInterviewed === 1 ? '1 vez' : `${m.timesInterviewed || 0} veces`;
+    return `Se le ha entrevistado ${times} en total${m.lastInterviewDate ? ' · última vez ' + esc(fmtDateHuman(m.lastInterviewDate)) : ''}`;
+  }
+  return members.map((m) => {
+    const times = m.timesInterviewed === 1 ? '1 vez' : `${m.timesInterviewed || 0} veces`;
+    return `${esc(m.memberName)}: ${times}${m.lastInterviewDate ? ' (última: ' + esc(fmtDateHuman(m.lastInterviewDate)) + ')' : ''}`;
+  }).join(' · ');
 }
 
 async function renderInterviewsView() {
@@ -3097,8 +3116,8 @@ async function renderInterviewsView() {
             <div class="list-card">
               <span class="org-dot" style="background:${iv.organizationColor}"></span>
               <div class="lc-main">
-                <div class="lc-title">${esc(iv.memberName)}${iv.memberUserId ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
-                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+                <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
+                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
                 <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
               </div>
               <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
@@ -3166,15 +3185,22 @@ function interviewRequestRowHtml(r) {
 }
 
 // editable=false, de solo lectura: muestra el estado (pill), el comentario
-// si se dejó uno, y el nombre se puede apretar para ver el historial
-// completo de esa persona (igual que en Discursos).
+// si se dejó uno, y CADA nombre (si se citó a más de una persona a la vez)
+// se puede apretar por separado para ver el historial completo de esa
+// persona en particular (igual que en Discursos) — el historial de "veces
+// entrevistado" nunca se mezcla entre las personas de un mismo grupo.
 function interviewHistoryCardHtml(iv) {
+  const members = Array.isArray(iv.members) && iv.members.length ? iv.members : [{ memberName: iv.memberName, memberUserId: iv.memberUserId }];
+  const namesHtml = members.map((m, idx) => {
+    const sep = idx === 0 ? '' : (idx === members.length - 1 ? ' y ' : ', ');
+    return `${sep}<span class="clickable-name iv-history-name" data-member-name="${esc(m.memberName)}" data-member-user-id="${m.memberUserId || ''}" title="Ver historial completo de entrevistas">${esc(m.memberName)}</span>`;
+  }).join('');
   return `
     <div class="list-card" data-id="${iv.id}">
       <span class="org-dot" style="background:${iv.organizationColor}"></span>
       <div class="lc-main">
         <div class="lc-title">
-          <span class="clickable-name iv-history-name" data-member-name="${esc(iv.memberName)}" data-member-user-id="${iv.memberUserId || ''}" title="Ver historial completo de entrevistas">${esc(iv.memberName)}</span>
+          ${namesHtml}
           ${interviewStatusPillHtml(iv.status)}
         </div>
         <div class="lc-sub">${esc(iv.organizationName)}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}</div>
@@ -3187,8 +3213,15 @@ function interviewHistoryCardHtml(iv) {
 }
 
 function wireInterviewHistoryCards(history) {
+  // openInterviewMemberDetailModal espera una lista PLANA (una fila por
+  // persona por entrevista, como toda la vida) — se aplana acá el historial
+  // agrupado que llega del servidor (un grupo puede tener varias personas).
+  const flatHistory = history.flatMap((iv) => {
+    const members = Array.isArray(iv.members) && iv.members.length ? iv.members : [{ memberName: iv.memberName, memberUserId: iv.memberUserId }];
+    return members.map((m) => ({ date: iv.date, status: iv.status, comment: iv.comment, memberName: m.memberName, memberUserId: m.memberUserId }));
+  });
   document.querySelectorAll('.iv-history-name').forEach((el) => {
-    el.addEventListener('click', () => openInterviewMemberDetailModal(el.dataset.memberName, el.dataset.memberUserId, history));
+    el.addEventListener('click', () => openInterviewMemberDetailModal(el.dataset.memberName, el.dataset.memberUserId, flatHistory));
   });
   document.querySelectorAll('.iv-history-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -3250,7 +3283,7 @@ function openInterviewMarkModal(iv, status) {
       <div class="modal">
         <div class="modal-header"><h3>${isDone ? '✅ ¿Se realizó la entrevista?' : '❌ ¿No se realizó la entrevista?'}</h3><button class="modal-close" id="ivm-modal-close">×</button></div>
         <div class="modal-body">
-          <p class="hint-box" style="margin-top:0;">${esc(iv.memberName)} · ${esc(fmtDateHuman(iv.date))}</p>
+          <p class="hint-box" style="margin-top:0;">${esc(iv.memberNames || iv.memberName)} · ${esc(fmtDateHuman(iv.date))}</p>
           <div class="field">
             <label>Comentario (opcional)</label>
             <textarea id="ivm-comment" placeholder="${isDone ? 'Ej: Se hizo todo muy bien, el hermano está buscando trabajo, pero está con ánimo.' : 'Ej: Se canceló porque el hermano está enfermo.'}">${esc(iv.comment || '')}</textarea>
@@ -3379,14 +3412,16 @@ async function openInterviewModal(existing = null) {
   let directory = [];
   let allInterviews = [];
   try { directory = await api('/users/directory'); } catch (e) { directory = []; }
-  // Solo para mostrar "se le ha entrevistado X veces" al elegir/escribir el
-  // miembro — igual patrón que allTalks en Discursos. No filtra por status:
-  // aunque este registro puntual esté "scheduled", ya trae computado el
-  // conteo histórico de ESA persona (memberInterviewStats en el servidor
-  // cuenta sus entrevistas "done", sin importar el status de este registro).
-  try { allInterviews = await api('/interviews'); } catch (e) { allInterviews = []; }
+  // Solo para mostrar "se le ha entrevistado X veces" al elegir/escribir a
+  // cada persona — igual patrón que allTalks en Discursos. No filtra por
+  // status: aunque este registro puntual esté "scheduled", ya trae
+  // computado el conteo histórico de ESA persona (memberInterviewStats en
+  // el servidor cuenta sus entrevistas "done", sin importar el status de
+  // este registro). Cada entrevista ahora puede tener más de una persona
+  // (matrimonio, compañerismo de ministración — ver groupId en el
+  // servidor), así que se aplana a una sola lista de personas para buscar.
+  try { allInterviews = (await api('/interviews')).flatMap((g) => g.members || []); } catch (e) { allInterviews = []; }
   const modalRoot = document.getElementById('modal-root');
-  const selectedUserId = existing?.memberUserId || '';
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="iv-modal-backdrop">
       <div class="modal">
@@ -3401,17 +3436,10 @@ async function openInterviewModal(existing = null) {
               </select>
               ${options.length === 1 && !isEdit ? `<input type="hidden" name="organizationId" value="${options[0].id}" />` : ''}
             </div>
-            ${memberPickerFieldHtml('iv', selectedUserId, existing?.memberName)}
-            <div id="iv-member-stats" class="hint-box" style="margin-top:0; display:none;"></div>
-            <div class="two-col">
-              <div class="field">
-                <label>Teléfono (opcional)</label>
-                <input type="text" name="memberPhone" placeholder="+56 9 ..." value="${esc(existing?.memberPhone || '')}" />
-              </div>
-              <div class="field">
-                <label>Email del miembro (opcional)</label>
-                <input type="email" name="memberEmail" placeholder="miembro@correo.com" value="${esc(existing?.memberEmail || '')}" />
-              </div>
+            <div class="field">
+              <label>¿A quién o quiénes se entrevista?</label>
+              <div id="iv-member-rows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="iv-add-row">+ Agregar otra persona (matrimonio, compañerismo de ministración...)</button>
             </div>
             <div class="field">
               <label>Descripción / motivo</label>
@@ -3489,24 +3517,61 @@ async function openInterviewModal(existing = null) {
   wireLocationField('iv', resetIvConflictCheck);
   document.getElementById('iv-location-other-field').querySelector('input').addEventListener('input', resetIvConflictCheck);
 
-  const ivStatsBox = document.getElementById('iv-member-stats');
-  const showIvMemberStats = () => {
-    const nameInput = document.getElementById('iv-member-name');
-    const hiddenId = document.getElementById('iv-member-user-id');
-    const norm = normalizeSearchText(nameInput.value);
-    if (!norm) { ivStatsBox.style.display = 'none'; return; }
-    const userId = hiddenId.value;
-    const match = userId
-      ? allInterviews.find((i) => Number(i.memberUserId) === Number(userId))
-      : allInterviews.find((i) => !i.memberUserId && normalizeSearchText(i.memberName) === norm);
-    ivStatsBox.style.display = '';
-    ivStatsBox.textContent = match
-      ? `Se le ha entrevistado ${match.timesInterviewed} ${match.timesInterviewed === 1 ? 'vez' : 'veces'}${match.lastInterviewDate ? ' · última vez: ' + fmtDateHuman(match.lastInterviewDate) : ''}`
-      : 'Nunca ha sido entrevistado';
+  // Una fila por persona citada (matrimonio, compañerismo de ministración,
+  // etc.) — igual patrón que "+ Agregar otro discursante" en Discursos:
+  // cada fila tiene su propio buscador con autocompletado (memberPickerFieldHtml),
+  // su estadística ("se le ha entrevistado X veces") y su teléfono/email.
+  const interviewMemberRowHtml = (rowId, selectedUserId, selectedName, phone, email) => `
+    <div class="family-row" data-row-id="${rowId}">
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        <div style="flex:1;">
+          ${memberPickerFieldHtml(rowId, selectedUserId, selectedName)}
+          <div id="${rowId}-stats" class="hint-box" style="margin-top:0; display:none;"></div>
+          <div class="two-col" style="margin-top:6px;">
+            <div class="field"><input type="text" class="iv-row-phone" placeholder="Teléfono (opcional)" value="${esc(phone || '')}" /></div>
+            <div class="field"><input type="email" class="iv-row-email" placeholder="Email (opcional)" value="${esc(email || '')}" /></div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm iv-row-remove" title="Quitar a esta persona">🗑️</button>
+      </div>
+    </div>`;
+  const wireIvMemberRow = (rowEl, rowId) => {
+    const nameInput = document.getElementById(`${rowId}-member-name`);
+    const hiddenId = document.getElementById(`${rowId}-member-user-id`);
+    const statsBox = document.getElementById(`${rowId}-stats`);
+    const showRowStats = () => {
+      const norm = normalizeSearchText(nameInput.value);
+      if (!norm) { statsBox.style.display = 'none'; return; }
+      const userId = hiddenId.value;
+      const match = userId
+        ? allInterviews.find((m) => Number(m.memberUserId) === Number(userId))
+        : allInterviews.find((m) => !m.memberUserId && normalizeSearchText(m.memberName) === norm);
+      statsBox.style.display = '';
+      statsBox.textContent = match
+        ? `Se le ha entrevistado ${match.timesInterviewed} ${match.timesInterviewed === 1 ? 'vez' : 'veces'}${match.lastInterviewDate ? ' · última vez: ' + fmtDateHuman(match.lastInterviewDate) : ''}`
+        : 'Nunca ha sido entrevistado';
+    };
+    wireMemberPicker(rowId, directory, () => { resetIvConflictCheck(); showRowStats(); });
+    nameInput.addEventListener('input', showRowStats);
+    rowEl.querySelector('.iv-row-remove').addEventListener('click', () => {
+      const box = rowEl.parentElement;
+      if (box.children.length > 1) { rowEl.remove(); resetIvConflictCheck(); } // siempre queda al menos una fila
+    });
+    if (nameInput.value) showRowStats();
   };
-  wireMemberPicker('iv', directory, () => { resetIvConflictCheck(); showIvMemberStats(); });
-  document.getElementById('iv-member-name').addEventListener('input', showIvMemberStats);
-  if (isEdit) showIvMemberStats();
+  const ivRowsBox = document.getElementById('iv-member-rows');
+  let ivRowCounter = 0;
+  const addIvRow = (selectedUserId, selectedName, phone, email) => {
+    const rowId = `iv-row-${ivRowCounter++}`;
+    ivRowsBox.insertAdjacentHTML('beforeend', interviewMemberRowHtml(rowId, selectedUserId, selectedName, phone, email));
+    wireIvMemberRow(ivRowsBox.lastElementChild, rowId);
+  };
+  document.getElementById('iv-add-row').addEventListener('click', () => addIvRow());
+  if (isEdit && Array.isArray(existing.members) && existing.members.length) {
+    existing.members.forEach((m) => addIvRow(m.memberUserId, m.memberName, m.memberPhone, m.memberEmail));
+  } else {
+    addIvRow(existing?.memberUserId, existing?.memberName, existing?.memberPhone, existing?.memberEmail);
+  }
 
   ivSaveBtn.addEventListener('click', async () => {
     if (!ivForm.reportValidity()) return;
@@ -3521,8 +3586,26 @@ async function openInterviewModal(existing = null) {
       document.getElementById('iv-error').innerHTML = `<div class="error-msg">Escribe cuál es la sala</div>`;
       return;
     }
+    const members = Array.from(ivRowsBox.children).map((rowEl) => {
+      const rowId = rowEl.dataset.rowId;
+      return {
+        memberName: document.getElementById(`${rowId}-member-name`).value.trim(),
+        memberUserId: document.getElementById(`${rowId}-member-user-id`).value || null,
+        memberPhone: rowEl.querySelector('.iv-row-phone').value.trim(),
+        memberEmail: rowEl.querySelector('.iv-row-email').value.trim(),
+      };
+    }).filter((m) => m.memberName);
+    if (!members.length) {
+      document.getElementById('iv-error').innerHTML = `<div class="error-msg">Agrega al menos una persona</div>`;
+      return;
+    }
     const body = Object.fromEntries(fd.entries());
-    body.memberUserId = body.memberUserId ? Number(body.memberUserId) : null;
+    // memberName/memberUserId vienen repetidos (uno por fila) dentro del
+    // FormData — se descartan acá y se reemplazan por el arreglo `members`
+    // recién armado arriba, que sí trae uno por fila correctamente.
+    delete body.memberName;
+    delete body.memberUserId;
+    body.members = members;
     body.location = location;
     body.sala = sala;
     delete body.locationType;

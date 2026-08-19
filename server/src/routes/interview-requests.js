@@ -237,8 +237,15 @@ export function registerInterviewRequestRoutes(router) {
     const now = new Date().toISOString();
     const interview = await withDb((d) => {
       const r = d.interviewRequests.find((x) => x.id === id);
+      const newId = nextId(d, 'interviews');
       const iv = {
-        id: nextId(d, 'interviews'),
+        id: newId,
+        // una solicitud siempre es de UNA sola persona (quien la pidió) —
+        // "groupId" queda igual a su propio id, como cualquier entrevista de
+        // una sola persona (ver groupInterviews() en interviews.js). Si hace
+        // falta sumar a alguien más (por ejemplo, su cónyuge), el líder puede
+        // editarla después desde Entrevistas y agregar otra persona al grupo.
+        groupId: newId,
         memberName: r.memberName,
         memberUserId: r.memberUserId,
         memberPhone: '',

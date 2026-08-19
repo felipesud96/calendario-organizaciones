@@ -255,17 +255,24 @@ export function commitmentsRanking(data, range) {
 // para que mayúsculas o tildes distintas no fragmenten el conteo de la
 // misma persona. Solo cuentan las que se verificaron como "Se hizo" (ver el
 // check ✅/❌ de interviews.js) — igual criterio que Aseo y Discursos, que
-// solo suman lo efectivamente cumplido, no lo agendado. Reutilizado por
-// achievements.js. `range` es opcional ({start, end} ISO, ambas inclusive) y
-// filtra por la fecha de la entrevista.
+// solo suman lo efectivamente cumplido, no lo agendado. Cuando se entrevistó
+// a más de una persona a la vez (matrimonio, compañerismo de ministración),
+// cuenta como UNA sola entrevista realizada, no una por persona citada — se
+// dedup por `groupId` (ver interviews.js). Reutilizado por achievements.js.
+// `range` es opcional ({start, end} ISO, ambas inclusive) y filtra por la
+// fecha de la entrevista.
 export function interviewsRanking(data, range) {
   const inRange = (date) => !range || (date >= range.start && date <= range.end);
   const byInterviewer = new Map();
+  const countedGroups = new Set();
   for (const iv of data.interviews) {
     if (iv.status !== 'done') continue;
     if (!inRange(iv.date)) continue;
     const norm = normalizeSearchText(iv.interviewerName);
     if (!norm) continue;
+    const groupKey = `${norm}::${iv.groupId}`;
+    if (countedGroups.has(groupKey)) continue;
+    countedGroups.add(groupKey);
     if (!byInterviewer.has(norm)) byInterviewer.set(norm, { interviewerName: iv.interviewerName, count: 0 });
     byInterviewer.get(norm).count += 1;
   }

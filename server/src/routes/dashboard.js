@@ -2,6 +2,7 @@ import { sendJson } from '../router.js';
 import { load, withDb } from '../db.js';
 import { requireRole } from '../guard.js';
 import { isObispadoLeader, keyLeadersForMinistering } from './stake.js';
+import { joinNames } from './interviews.js';
 import { currentQuarter, quarterLabel, quarterOf } from '../quarter.js';
 import { allCategoryRefs, summaryFor } from './budget.js';
 import { lastMeetingDateOfType } from './meetings.js';
@@ -73,21 +74,29 @@ export function computeBishopricOverview(data) {
     // entrevistas de todas formas (ver interviews.js/orgSeesAllInterviews).
     // Solo las que todavía están "pendientes de verificar" (sin marcar
     // ✅/❌ todavía) — las ya marcadas no necesitan atención y viven en el
-    // historial de Entrevistas.
-    const upcomingInterviews = data.interviews
-      .filter((iv) => iv.date >= today && iv.date <= weekEnd && (iv.status || 'scheduled') === 'scheduled')
-      .map((iv) => {
-        const org = data.organizations.find((o) => o.id === Number(iv.organizationId));
-        return {
-          id: iv.id,
-          date: iv.date,
-          startTime: iv.startTime,
-          memberName: iv.memberName,
-          interviewerName: iv.interviewerName,
-          organizationName: org?.name || '',
-        };
-      })
-      .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
+    // historial de Entrevistas. Si se citó a más de una persona a la vez
+    // (matrimonio, compañerismo de ministración), cuenta y se muestra como
+    // UNA sola entrevista, con los nombres juntos — se agrupa por `groupId`,
+    // igual que en la pestaña Entrevistas (ver groupInterviews en
+    // interviews.js).
+    const upcomingByGroup = new Map();
+    for (const iv of data.interviews) {
+      if (!(iv.date >= today && iv.date <= weekEnd && (iv.status || 'scheduled') === 'scheduled')) continue;
+      if (!upcomingByGroup.has(iv.groupId)) upcomingByGroup.set(iv.groupId, []);
+      upcomingByGroup.get(iv.groupId).push(iv);
+    }
+    const upcomingInterviews = [...upcomingByGroup.values()].map((rows) => {
+      const first = [...rows].sort((a, b) => a.id - b.id)[0];
+      const org = data.organizations.find((o) => o.id === Number(first.organizationId));
+      return {
+        id: first.groupId,
+        date: first.date,
+        startTime: first.startTime,
+        memberName: joinNames(rows.map((r) => r.memberName)),
+        interviewerName: first.interviewerName,
+        organizationName: org?.name || '',
+      };
+    }).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
 
     // Actividades de los próximos 7 días (de todo el barrio) — solo un
     // conteo, para tener una idea de cuán cargada viene la semana.

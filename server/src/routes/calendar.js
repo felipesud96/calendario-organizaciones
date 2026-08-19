@@ -4,6 +4,7 @@ import { requireAuth } from '../guard.js';
 import { sendJson } from '../router.js';
 import { canSeeMeeting } from './events.js';
 import { buildIcsCalendar } from '../ics.js';
+import { joinNames } from './interviews.js';
 
 async function getOrCreateCalendarToken(userId) {
   const data = load();
@@ -60,6 +61,13 @@ function myActivitiesItems(user, data) {
     description: ev.description || '',
     organizationName: orgName(ev.organizationId),
   }));
+  // Si se le citó junto con alguien más (matrimonio, compañerismo de
+  // ministración — ver groupId en interviews.js), se le avisa con quién,
+  // sin exponer el teléfono/email de esa otra persona (que sigue siendo
+  // dato privado de la entrevista, no de "Mis Actividades").
+  const othersInGroup = (iv) => data.interviews
+    .filter((o) => o.groupId === iv.groupId && o.id !== iv.id)
+    .map((o) => o.memberName);
   const interviewItems = myInterviews.map((iv) => ({
     id: iv.id,
     kind: 'interview',
@@ -71,6 +79,7 @@ function myActivitiesItems(user, data) {
     description: [
       iv.interviewerName ? `Te entrevista: ${iv.interviewerName}` : '',
       orgName(iv.organizationId) ? `Organización: ${orgName(iv.organizationId)}` : '',
+      othersInGroup(iv).length ? `Junto con: ${joinNames(othersInGroup(iv))}` : '',
     ].filter(Boolean).join('\n'),
     organizationName: orgName(iv.organizationId),
   }));
