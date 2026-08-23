@@ -27,6 +27,7 @@ const state = {
   stakeEvents: [],
   stakeCalendar: null,
   interviewsSubtab: 'pending', // Entrevistas: 'pending' (agenda) o 'requests' (solicitudes por confirmar)
+  interviewsOrgTab: null, // Entrevistas: qué organización se muestra cuando el Obispado/Administrador ven más de una (null = por defecto, se recalcula al renderizar)
   adminSubtab: 'users',
   adminUsers: [],
   loading: false,
@@ -3209,25 +3210,40 @@ async function renderInterviewsView() {
   try { history = await loadInterviewsHistory(); } catch (e) { history = []; }
 
   // Quien ve entrevistas de más de una organización a la vez (Obispado o
-  // Administrador) las ve divididas en una sección por organización — cada
-  // una con su propio encabezado — en vez de una sola lista larga
-  // mezclando las tres. Un líder que solo ve la suya sigue viendo una
-  // lista simple, sin secciones (interviewOrgs.length===1 en ese caso).
+  // Administrador) las ve en sub-pestañas — una por organización — en vez
+  // de una sola lista larga o de secciones apiladas mezclando las tres.
+  // Por defecto se muestra la propia organización de quien mira (Obispado,
+  // para su líder); el Administrador, que no pertenece a ninguna, parte
+  // viendo la primera de la lista (Obispado). Un líder que solo ve la suya
+  // sigue viendo la lista simple de siempre, sin ninguna sub-pestaña
+  // (interviewOrgs.length===1 en ese caso).
   const sectioned = interviewOrgs.length > 1;
-  const pendingSectionsHtml = !list.length
-    ? emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)
-    : sectioned
-      ? interviewOrgs.map((o) => {
-          const items = list.filter((iv) => Number(iv.organizationId) === Number(o.id));
-          return `
-            <div class="iv-org-section-heading" style="display:flex; align-items:center; gap:8px; margin:18px 0 8px;">
-              <span class="org-dot" style="background:${o.color}"></span>
-              <h3 style="font-size:14px; margin:0; color:var(--celeste-darker);">${esc(o.name)}</h3>
-              <span style="font-size:12px; color:var(--ink-soft);">${items.length ? `(${items.length})` : '— sin pendientes'}</span>
-            </div>
-            ${items.length ? interviewPendingDateGroupsHtml(items) : ''}`;
-        }).join('')
-      : interviewPendingDateGroupsHtml(list);
+  if (sectioned) {
+    const validIds = interviewOrgs.map((o) => o.id);
+    if (!validIds.includes(state.interviewsOrgTab)) {
+      state.interviewsOrgTab = (interviewOrgs.find((o) => o.id === state.user.organizationId) || interviewOrgs[0]).id;
+    }
+  }
+  const activeOrg = sectioned ? interviewOrgs.find((o) => o.id === state.interviewsOrgTab) : null;
+  const visiblePending = sectioned ? list.filter((iv) => Number(iv.organizationId) === Number(activeOrg.id)) : list;
+  const visibleHistory = sectioned ? history.filter((iv) => Number(iv.organizationId) === Number(activeOrg.id)) : history;
+
+  const orgTabsHtml = sectioned ? `
+    <div class="subtabs iv-org-tabs" style="margin-top:10px;">
+      ${interviewOrgs.map((o) => {
+        const count = list.filter((iv) => Number(iv.organizationId) === Number(o.id)).length;
+        return `<button type="button" class="subtab-btn iv-org-tab ${activeOrg.id === o.id ? 'active' : ''}" data-org-id="${o.id}">
+          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${o.color}; margin-right:5px;"></span>${esc(o.name)}${count ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${count}</span>` : ''}
+        </button>`;
+      }).join('')}
+    </div>` : '';
+
+  const pendingListHtml = !visiblePending.length
+    ? emptyStateHtml(
+        sectioned ? `${activeOrg.name} no tiene entrevistas pendientes de agendar o verificar` : 'No hay entrevistas pendientes de agendar o verificar',
+        canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null
+      )
+    : interviewPendingDateGroupsHtml(visiblePending);
 
   container.innerHTML = `
     <div class="section-header">
@@ -3245,27 +3261,20 @@ async function renderInterviewsView() {
       <button class="subtab-btn active" data-tab="pending">🗓️ Agenda</button>
       <button class="subtab-btn" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
     </div>` : ''}
-    ${list.length ? `<div class="hint-box" style="margin-top:0;">Cuando la entrevista ya se realizó (o no se pudo hacer), márcala con ✅ o ❌ — puedes agregar un comentario opcional. Pasa automáticamente al historial y ya no queda pendiente acá.</div>` : ''}
-    <div class="card-list">
-      ${pendingSectionsHtml}
+    ${orgTabsHtml}
+    ${visiblePending.length ? `<div class="hint-box" style="margin-top:12px;">Cuando la entrevista ya se realizó (o no se pudo hacer), márcala con ✅ o ❌ — puedes agregar un comentario opcional. Pasa automáticamente al historial y ya no queda pendiente acá.</div>` : ''}
+    <div class="card-list" style="margin-top:${sectioned ? '12' : '0'}px;">
+      ${pendingListHtml}
     </div>
     ${history.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="iv-history-toggle" style="margin-top:16px;">
-        ${state.interviewsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${history.length} entrevista${history.length === 1 ? '' : 's'} verificada${history.length === 1 ? '' : 's'})`}
+        ${state.interviewsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${visibleHistory.length} entrevista${visibleHistory.length === 1 ? '' : 's'} verificada${visibleHistory.length === 1 ? '' : 's'})`}
       </button>
       <div class="card-list" style="margin-top:10px;">
-        ${state.interviewsHistoryOpen ? (sectioned
-          ? interviewOrgs.map((o) => {
-              const items = history.filter((iv) => Number(iv.organizationId) === Number(o.id));
-              if (!items.length) return '';
-              return `
-                <div class="iv-org-section-heading" style="display:flex; align-items:center; gap:8px; margin:14px 0 8px;">
-                  <span class="org-dot" style="background:${o.color}"></span>
-                  <h3 style="font-size:14px; margin:0; color:var(--celeste-darker);">${esc(o.name)}</h3>
-                </div>
-                ${items.map((iv) => interviewHistoryCardHtml(iv)).join('')}`;
-            }).join('')
-          : history.map((iv) => interviewHistoryCardHtml(iv)).join('')
+        ${state.interviewsHistoryOpen ? (
+          visibleHistory.length
+            ? visibleHistory.map((iv) => interviewHistoryCardHtml(iv)).join('')
+            : emptyStateHtml(sectioned ? `${activeOrg.name} no tiene entrevistas verificadas todavía` : 'No hay entrevistas verificadas todavía')
         ) : ''}
       </div>` : ''}
   `;
@@ -3276,6 +3285,7 @@ async function renderInterviewsView() {
   if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
   wireEmptyStateCta('iv-empty-new', () => openInterviewModal());
   container.querySelectorAll('.subtabs .subtab-btn[data-tab]').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
+  container.querySelectorAll('.iv-org-tab[data-org-id]').forEach((b) => b.addEventListener('click', () => { state.interviewsOrgTab = Number(b.dataset.orgId); renderInterviewsView(); }));
   container.querySelectorAll('[data-edit-iv]').forEach((b) => b.addEventListener('click', () => {
     const iv = list.find((i) => i.id === Number(b.dataset.editIv));
     openInterviewModal(iv);
@@ -3286,7 +3296,7 @@ async function renderInterviewsView() {
   }));
   const historyToggle = document.getElementById('iv-history-toggle');
   if (historyToggle) historyToggle.addEventListener('click', () => { state.interviewsHistoryOpen = !state.interviewsHistoryOpen; renderInterviewsView(); });
-  wireInterviewHistoryCards(history);
+  wireInterviewHistoryCards(visibleHistory);
 }
 
 // Tarjeta de UNA solicitud de entrevista — pendiente (con Confirmar/
