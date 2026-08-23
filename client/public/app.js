@@ -9,7 +9,10 @@ const APP_NAME = 'OrganizaSion';
 const BRAND_WORDMARK_HTML = `<span class="brand-organiza">Organiza</span><span class="brand-sion">Sion</span>`;
 const DOW_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_LABELS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-const ROLE_LABELS = { admin: 'Administrador', leader: 'Líder', member: 'Miembro' };
+// Punto 28/29/30: los 3 llamamientos de apoyo al Obispado — ver comentario
+// en server/src/routes/users.js sobre por qué son roles nuevos y no un
+// "calling" más dentro de Obispado.
+const ROLE_LABELS = { admin: 'Administrador', leader: 'Líder', member: 'Miembro', executive_secretary: 'Secretario Ejecutivo', ward_clerk: 'Secretario de Barrio', financial_clerk: 'Secretario de Finanzas' };
 const COLOR_PALETTE = ['#0EA5E9','#6366F1','#EC4899','#F59E0B','#10B981','#A855F7','#EF4444','#F97316','#14B8A6','#84CC16','#F43F5E','#8B5CF6'];
 // Debe coincidir con PURPOSE_OPTIONS en server/src/routes/events.js — el
 // balance del año del módulo Estadísticas se arma según estas categorías.
@@ -1396,10 +1399,13 @@ function canScheduleInterviewsFor(orgId) {
   if (!state.user) return false;
   if (state.user.role === 'admin') return true;
   if (state.user.role === 'leader' && state.user.organizationId === Number(orgId)) return true;
+  // Punto 28: el Secretario Ejecutivo agenda entrevistas del Obispado (ver
+  // canScheduleOrg() en interviews.js) sin ser él mismo un líder.
+  if (state.user.role === 'executive_secretary' && state.user.organizationId === Number(orgId)) return true;
   return false;
 }
 function canManageAnyInterviews() {
-  return state.user.role === 'admin' || state.user.role === 'leader';
+  return state.user.role === 'admin' || state.user.role === 'leader' || state.user.role === 'executive_secretary';
 }
 // El módulo de Entrevistas es solo para el Administrador y los líderes de
 // las organizaciones que sí agendan entrevistas (Obispado, Cuórum de
@@ -1410,18 +1416,37 @@ function canManageAnyInterviews() {
 function canSeeInterviewsTab() {
   if (!state.user) return false;
   if (state.user.role === 'admin') return true;
+  // Punto 28: el Secretario Ejecutivo administra la agenda de entrevistas
+  // del Obispado — ver canScheduleOrg() en interviews.js.
+  if (state.user.role === 'executive_secretary') return !!(state.user.organization && state.user.organization.allowsInterviews);
   return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.allowsInterviews);
 }
 function canSeeMyActivitiesTab() {
-  return !!state.user && (state.user.role === 'leader' || state.user.role === 'member');
+  // Los 3 llamamientos de apoyo al Obispado (Punto 28/29/30) también tienen
+  // "Mis Actividades" propio: pueden recibir compromisos asignados desde un
+  // acta (ver STAFF_ROLES en meetings.js) o tener su propia entrevista
+  // agendada, igual que cualquier Miembro.
+  return !!state.user && ['leader', 'member', 'executive_secretary', 'ward_clerk', 'financial_clerk'].includes(state.user.role);
 }
-// El módulo de Presupuesto es para Líderes y Administrador — los Miembros
-// no lo ven en absoluto.
+// El módulo de Presupuesto es para Líderes, Administrador y el Secretario
+// de Finanzas (Punto 30) — el resto de los llamamientos de apoyo al
+// Obispado (Ejecutivo/Barrio) no lo ven, esa mayordomía no es la suya.
 function canSeeBudgetTab() {
-  return !!state.user && state.user.role !== 'member';
+  if (!state.user) return false;
+  if (state.user.role === 'member') return false;
+  if (state.user.role === 'executive_secretary' || state.user.role === 'ward_clerk') return false;
+  return true;
 }
 function isObispadoUser() {
-  return !!state.user && (state.user.role === 'admin' || !!(state.user.organization && state.user.organization.name === 'Obispado'));
+  // Punto 28/29/30: los 3 llamamientos de apoyo al Obispado (Secretario
+  // Ejecutivo, de Barrio, de Finanzas) también pertenecen a la organización
+  // Obispado, pero a propósito NO son "líder de Obispado" — no deben heredar
+  // el panel completo, Asignaciones, ni el resto de lo que esta función
+  // habilita. Por eso exige explícitamente role === 'leader' (o admin), y no
+  // solo pertenecer a esa organización.
+  if (!state.user) return false;
+  if (state.user.role === 'admin') return true;
+  return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.name === 'Obispado');
 }
 // "Panel de Obispado": mismo criterio que Aseo del Edificio — solo
 // Administrador o líder de Obispado, porque junta datos de TODAS las
@@ -1474,7 +1499,9 @@ function tabOrderFor() {
 // "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
 // Administrador — los Miembros no las ven en absoluto.
 function canSeeMeetingsTab() {
-  return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
+  // Punto 29: el Secretario de Barrio arma las actas de Consejo de Barrio /
+  // Coordinación de Ministración — ver requireRole en meetings.js.
+  return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader' || state.user.role === 'ward_clerk');
 }
 function canSeeStatsTab() {
   return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
@@ -1488,9 +1515,13 @@ function canSeeAssignmentsTab() {
 // Las entrevistas son privadas: cada líder solo ve las de su propia
 // organización, salvo el líder de Obispado, que ve las de todas.
 function canViewAllInterviews() {
+  // Igual que orgSeesAllInterviews() en interviews.js: exige explícitamente
+  // role === 'leader' (o admin) — el Secretario Ejecutivo (Punto 28)
+  // administra la agenda de Obispado, pero no hereda ver las entrevistas de
+  // las demás organizaciones por el solo hecho de pertenecer a Obispado.
   if (!state.user) return false;
   if (state.user.role === 'admin') return true;
-  return !!(state.user.organization && state.user.organization.name === 'Obispado');
+  return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.name === 'Obispado');
 }
 
 function initials(name) {
@@ -3933,6 +3964,10 @@ function canOperateOnBudgetCategory(cat) {
   const u = state.user;
   if (!u) return false;
   if (u.role === 'admin') return true;
+  // Punto 30: el Secretario de Finanzas tiene, DENTRO del módulo
+  // Presupuesto, la misma amplitud que un líder de Obispado (todas las
+  // categorías) — ver hasFullBudgetAccess() en budget.js.
+  if (u.role === 'financial_clerk') return true;
   if (u.role !== 'leader') return false;
   if (cat.categoryType === 'organization') return Number(cat.organizationId) === Number(u.organizationId);
   return isObispadoUser();
@@ -4668,7 +4703,11 @@ function openUserModal(existing = null) {
                 <option value="admin" ${existing?.role === 'admin' ? 'selected' : ''}>Administrador (edita todo y los perfiles)</option>
                 <option value="leader" ${existing?.role === 'leader' ? 'selected' : ''}>Líder (edita actividades y entrevistas de su organización)</option>
                 <option value="member" ${existing?.role === 'member' ? 'selected' : ''}>Miembro (solo consulta)</option>
+                <option value="executive_secretary" ${existing?.role === 'executive_secretary' ? 'selected' : ''}>Secretario Ejecutivo (agenda de entrevistas del Obispado)</option>
+                <option value="ward_clerk" ${existing?.role === 'ward_clerk' ? 'selected' : ''}>Secretario de Barrio (actas de Consejo de Barrio)</option>
+                <option value="financial_clerk" ${existing?.role === 'financial_clerk' ? 'selected' : ''}>Secretario de Finanzas (solo Presupuesto)</option>
               </select>
+              <div class="hint-box" id="u-staff-hint" style="margin-top:6px; display:none;">Este llamamiento apoya al Obispado en una tarea acotada — a diferencia de un Líder de Obispado, no ve entrevistas, actas ni Presupuesto fuera de lo que le corresponde específicamente (ver Manual General).</div>
             </div>
             <div class="field" id="u-org-field">
               <label>Organización</label>
@@ -4705,17 +4744,34 @@ function openUserModal(existing = null) {
   // Socorro se pide el llamamiento específico (Presidente/Obispo, Consejero
   // o Secretario) en vez del checkbox genérico "★ Presidente/Titular" — en
   // cualquier otra organización se mantiene el checkbox de siempre.
+  const STAFF_ROLES = ['executive_secretary', 'ward_clerk', 'financial_clerk'];
   const updatePresidencyFields = () => {
     const role = document.getElementById('u-role').value;
-    const org = state.organizations.find((o) => String(o.id) === document.getElementById('u-org-select').value);
+    const orgSelect = document.getElementById('u-org-select');
+    const org = state.organizations.find((o) => String(o.id) === orgSelect.value);
     const isTargetOrg = role === 'leader' && org && PRESIDENT_ORGS.includes(org.name);
     document.getElementById('u-calling-field').style.display = isTargetOrg ? '' : 'none';
     document.getElementById('u-president-field').style.display = (role === 'leader' && !isTargetOrg) ? '' : 'none';
+    document.getElementById('u-staff-hint').style.display = STAFF_ROLES.includes(role) ? '' : 'none';
     if (isTargetOrg) {
       const sel = document.getElementById('u-calling-select');
       const current = existing?.calling || '';
       sel.innerHTML = `<option value="" disabled ${current ? '' : 'selected'}>Selecciona…</option>` + ['Presidente', 'Consejero', 'Secretario'].map((c) => `<option value="${c}" ${current === c ? 'selected' : ''}>${esc(callingLabel(org.name, c))}</option>`).join('');
     }
+    // Punto 28/29/30: los 3 llamamientos de apoyo al Obispado solo pueden
+    // asignarse dentro de la organización Obispado (ver validateStaffOrg en
+    // users.js) — se restringe el selector a esa única opción para que no
+    // se pueda elegir mal y toparse con el error del servidor recién al
+    // guardar.
+    if (STAFF_ROLES.includes(role)) {
+      const obispado = state.organizations.find((o) => o.name === 'Obispado');
+      if (obispado) {
+        orgSelect.innerHTML = `<option value="${obispado.id}" selected>${esc(obispado.name)}</option>`;
+      }
+    } else if (orgSelect.dataset.staffLocked) {
+      orgSelect.innerHTML = `<option value="">— Ninguna —</option>` + state.organizations.map((o) => `<option value="${o.id}" ${existing?.organizationId === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+    }
+    orgSelect.dataset.staffLocked = STAFF_ROLES.includes(role) ? '1' : '';
   };
   document.getElementById('u-role').addEventListener('change', updatePresidencyFields);
   document.getElementById('u-org-select').addEventListener('change', updatePresidencyFields);
@@ -5076,8 +5132,9 @@ async function openMeetingModal(presetType) {
   // Punto 8: "Consejo de Barrio" y "Coordinación de Ministración" son tipos
   // reservados al Obispado (ver OBISPADO_ONLY_TYPES en meetings.js) — un
   // líder común solo puede crear actas "generales" (ej. de su propia
-  // presidencia), así que ni se le muestran esas opciones.
-  const isObispadoTier = isObispadoUser();
+  // presidencia), así que ni se le muestran esas opciones. Punto 29: el
+  // Secretario de Barrio también puede registrar estos dos tipos.
+  const isObispadoTier = isObispadoUser() || state.user.role === 'ward_clerk';
   const typeOptionsHtml = isObispadoTier ? `
     <div class="field">
       <label>Tipo de acta</label>
@@ -5203,9 +5260,18 @@ async function openMeetingModal(presetType) {
 
 const MEETING_TYPE_LABELS = { general: '', consejo_barrio: '⛪ Consejo de Barrio', coordinacion_ministracion: '🤝 Coordinación de Ministración' };
 
+// Punto 16 (idea de UX basada en el Manual General): en vez de una nota
+// libre, un tema de Consejo de Barrio / Coordinación de Ministración sigue
+// el patrón de consejo del Manual (18.2 y 4.3) — necesidad detectada →
+// análisis → acuerdo tomado → seguimiento asignado.
+function isCouncilMeetingType(type) {
+  return type === 'consejo_barrio' || type === 'coordinacion_ministracion';
+}
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
+  const councilPattern = isCouncilMeetingType(m.type);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
@@ -5217,12 +5283,28 @@ async function openMeetingDetailModal(m) {
           <div id="md-agenda">
             ${m.agendaItems && m.agendaItems.length ? `
               <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin-bottom:6px;">📋 Agenda</div>
-              ${m.agendaItems.map((a) => `
+              ${m.agendaItems.map((a) => {
+                if (councilPattern) {
+                  const councilFields = [
+                    ['🧩 Necesidad', a.necesidad],
+                    ['🔎 Análisis', a.analisis],
+                    ['✅ Acuerdo', a.acuerdo],
+                    ['👣 Seguimiento', a.seguimiento],
+                  ].filter(([, v]) => v);
+                  return `
+                <div class="commitment-detail-row" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                  ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
+                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button>` : ''}
+                </div>`;
+                }
+                return `
                 <div class="commitment-detail-row" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
                   ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
                   ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button>` : ''}
-                </div>`).join('')}
+                </div>`;
+              }).join('')}
             ` : ''}
           </div>
           ${canEdit ? `<div style="margin:10px 0 14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-agenda">+ Agregar tema a la agenda</button></div>` : ''}
@@ -5330,7 +5412,21 @@ function openAddAgendaItemModal(m) {
 }
 
 function openEditAgendaNotesModal(m, item) {
+  const councilPattern = isCouncilMeetingType(m.type);
   const modalRoot = document.getElementById('modal-root');
+  // Punto 16: en Consejo de Barrio / Coordinación de Ministración se pide
+  // el patrón de consejo del Manual General en vez de una nota libre —
+  // necesidad → análisis → acuerdo → seguimiento — cada campo opcional para
+  // no obligar a llenarlo todo de una sola vez durante la reunión.
+  const bodyHtml = councilPattern ? `
+            <div class="hint-box" style="margin-top:0;">Patrón de consejo del Manual General: qué necesidad se detectó, qué se analizó, qué se acordó, y cómo se le hará seguimiento.</div>
+            <div class="field"><label>🧩 Necesidad</label><textarea name="necesidad" rows="2">${esc(item.necesidad || '')}</textarea></div>
+            <div class="field"><label>🔎 Análisis</label><textarea name="analisis" rows="2">${esc(item.analisis || '')}</textarea></div>
+            <div class="field"><label>✅ Acuerdo</label><textarea name="acuerdo" rows="2">${esc(item.acuerdo || '')}</textarea></div>
+            <div class="field"><label>👣 Seguimiento</label><textarea name="seguimiento" rows="2">${esc(item.seguimiento || '')}</textarea></div>
+  ` : `
+            <div class="field"><label>Qué se decidió / notas</label><textarea name="notes" rows="4">${esc(item.notes || '')}</textarea></div>
+  `;
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="an-modal-backdrop">
       <div class="modal">
@@ -5338,7 +5434,7 @@ function openEditAgendaNotesModal(m, item) {
         <div class="modal-body">
           <div id="an-error"></div>
           <form id="an-form">
-            <div class="field"><label>Qué se decidió / notas</label><textarea name="notes" rows="4">${esc(item.notes || '')}</textarea></div>
+            ${bodyHtml}
           </form>
         </div>
         <div class="modal-footer">
@@ -5356,10 +5452,13 @@ function openEditAgendaNotesModal(m, item) {
   document.getElementById('an-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'an-modal-backdrop') anGuardedClose(); });
   document.getElementById('an-save').addEventListener('click', async () => {
     const fd = new FormData(document.getElementById('an-form'));
+    const body = councilPattern
+      ? { necesidad: fd.get('necesidad'), analisis: fd.get('analisis'), acuerdo: fd.get('acuerdo'), seguimiento: fd.get('seguimiento') }
+      : { notes: fd.get('notes') };
     try {
-      const updated = await api(`/meetings/${m.id}/agenda-items/${item.id}`, { method: 'PUT', body: { notes: fd.get('notes') } });
+      const updated = await api(`/meetings/${m.id}/agenda-items/${item.id}`, { method: 'PUT', body });
       closeModal();
-      toast('Notas guardadas');
+      toast('Guardado');
       openMeetingDetailModal(updated);
     } catch (e) {
       document.getElementById('an-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;

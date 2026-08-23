@@ -3,7 +3,32 @@ import { load, withDb, nextId, resolveCallingAndPresident, unmarkOtherPresidents
 import { requireRole } from '../guard.js';
 import { hashPassword, publicUser } from '../auth.js';
 
-const VALID_ROLES = ['admin', 'leader', 'member'];
+const VALID_ROLES = ['admin', 'leader', 'member', 'executive_secretary', 'ward_clerk', 'financial_clerk'];
+
+// Punto 28/29/30 (ideas de UX basadas en el Manual General): tres llamamientos
+// de apoyo al Obispado, cada uno con una mayordomía bien acotada — a
+// propósito NO son "líder de Obispado" (no heredan `isObispadoLeader`, así
+// que no ven todas las entrevistas/actas/paneles de todo el Barrio, solo lo
+// que les corresponde a cada uno):
+//   - executive_secretary (Secretario Ejecutivo): agenda del Obispado en
+//     Entrevistas — ver interviews.js.
+//   - ward_clerk (Secretario de Barrio): actas de Consejo de Barrio /
+//     Coordinación de Ministración — ver meetings.js.
+//   - financial_clerk (Secretario de Finanzas): Presupuesto de todas las
+//     organizaciones — ver budget.js.
+// Los tres, igual que un líder, deben pertenecer a una organización — pero
+// siempre a Obispado específicamente, porque es a quien apoyan.
+const OBISPADO_STAFF_ROLES = ['executive_secretary', 'ward_clerk', 'financial_clerk'];
+const ORG_REQUIRED_ROLES = ['leader', ...OBISPADO_STAFF_ROLES];
+
+function validateStaffOrg(data, role, organizationId) {
+  if (!OBISPADO_STAFF_ROLES.includes(role)) return null;
+  const org = data.organizations.find((o) => o.id === Number(organizationId));
+  if (!org || org.name !== 'Obispado') {
+    return 'Este llamamiento de apoyo al Obispado debe asignarse dentro de la organización Obispado';
+  }
+  return null;
+}
 
 export function registerUserRoutes(router) {
   router.get('/api/users', requireRole(['admin'], async (req, res) => {
@@ -36,14 +61,16 @@ export function registerUserRoutes(router) {
     if (!VALID_ROLES.includes(role)) {
       return sendJson(res, 400, { error: 'Rol inválido' });
     }
-    if (role === 'leader' && !organizationId) {
-      return sendJson(res, 400, { error: 'Los líderes deben pertenecer a una organización' });
+    if (ORG_REQUIRED_ROLES.includes(role) && !organizationId) {
+      return sendJson(res, 400, { error: 'Debe pertenecer a una organización' });
     }
     const normalizedEmail = String(email).toLowerCase().trim();
     const data = load();
     if (data.users.some((u) => u.email === normalizedEmail)) {
       return sendJson(res, 409, { error: 'Ya existe un usuario con ese nombre de usuario' });
     }
+    const staffOrgError = validateStaffOrg(data, role, organizationId);
+    if (staffOrgError) return sendJson(res, 400, { error: staffOrgError });
     const { calling, isPresident } = resolveCallingAndPresident(data, {
       organizationId, role, callingInput: body.calling, isPresidentInput: body.isPresident,
     });
@@ -73,11 +100,19 @@ export function registerUserRoutes(router) {
 
   router.put('/api/users/:id', requireRole(['admin'], async (req, res, params, body) => {
     const id = Number(params.id);
-    const existing = load().users.find((u) => u.id === id);
+    const data = load();
+    const existing = data.users.find((u) => u.id === id);
     if (!existing) return sendJson(res, 404, { error: 'Usuario no encontrado' });
     if (body.role && !VALID_ROLES.includes(body.role)) {
       return sendJson(res, 400, { error: 'Rol inválido' });
     }
+    const resolvedRole = body.role ?? existing.role;
+    const resolvedOrgId = body.organizationId !== undefined ? body.organizationId : existing.organizationId;
+    if (ORG_REQUIRED_ROLES.includes(resolvedRole) && !resolvedOrgId) {
+      return sendJson(res, 400, { error: 'Debe pertenecer a una organización' });
+    }
+    const staffOrgError = validateStaffOrg(data, resolvedRole, resolvedOrgId);
+    if (staffOrgError) return sendJson(res, 400, { error: staffOrgError });
     const updated = await withDb((d) => {
       const u = d.users.find((x) => x.id === id);
       Object.assign(u, {

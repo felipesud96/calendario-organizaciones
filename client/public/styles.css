@@ -263,6 +263,10 @@ a { color: var(--celeste-dark); }
 .role-admin { background: #ede9fe; color: #6d28d9; }
 .role-leader { background: var(--celeste-light); color: var(--celeste-darker); }
 .role-member { background: #f1f5f9; color: #475569; }
+/* Punto 28/29/30: llamamientos de apoyo al Obispado — un tono propio,
+   distinto del celeste de "Líder", para que se note a simple vista que NO
+   son un líder de Obispado con todos los permisos. */
+.role-executive_secretary, .role-ward_clerk, .role-financial_clerk { background: #fef3c7; color: #92400e; }
 
 /* ---------- Íconos de la barra superior (búsqueda / notificaciones / tour) ---------- */
 .topbar-icon-btn {

@@ -102,6 +102,29 @@ export async function sendCommitmentDueSoonEmail(commitment, assigneeEmail, assi
   }
 }
 
+// Punto 18 (idea de UX basada en el Manual General): antes de la próxima
+// reunión de un consejo (Consejo de Barrio / Coordinación de Ministración),
+// avisa a quienes preparan la agenda qué compromisos del consejo ANTERIOR
+// siguen sin resolverse — así el consejo puede empezar revisando el
+// seguimiento, como pide el patrón de consejo del Manual, en vez de que se
+// pierdan de una reunión a la siguiente.
+export async function sendCouncilPrepEmail(toEmail, toName, meeting, pendingCommitments) {
+  if (!isEmailConfigured() || !toEmail || !pendingCommitments.length) return;
+  try {
+    await sendEmail({
+      to: toEmail,
+      subject: `Antes de "${meeting.title}": compromisos pendientes del consejo anterior`,
+      html: `<p>Hola ${escHtml(toName)},</p>
+<p>El próximo <strong>${escHtml(meeting.title)}</strong> es el <strong>${escHtml(meeting.date)}</strong>. Del consejo anterior quedaron estos compromisos sin resolver — puede ser buen inicio de agenda revisar su seguimiento:</p>
+<ul>${pendingCommitments.map((c) => `<li>${escHtml(c.description)} — responsable: ${escHtml(c.assignedToName)}${c.dueDate ? `, vencía el ${escHtml(c.dueDate)}` : ''}</li>`).join('')}</ul>
+<p>— OrganizaSion</p>`,
+    });
+    console.log(`[notificaciones] recordatorio de preparación de consejo enviado a ${toEmail}`);
+  } catch (err) {
+    console.error(`[notificaciones] error enviando recordatorio de preparación de consejo a ${toEmail}:`, err.message);
+  }
+}
+
 // Resumen diario para el Obispado (y el Administrador): un solo correo cada
 // mañana con lo que corresponde hoy — así no hace falta entrar a la app
 // todos los días solo para confirmar que no se olvida nada. Reutiliza la

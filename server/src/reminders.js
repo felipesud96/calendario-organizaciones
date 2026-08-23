@@ -8,9 +8,10 @@
 
 import { load, withDb } from './db.js';
 import { isEmailConfigured } from './email.js';
-import { sendReminderEmail, sendCommitmentDueSoonEmail, sendDailyDigestEmail } from './notifications.js';
+import { sendReminderEmail, sendCommitmentDueSoonEmail, sendDailyDigestEmail, sendCouncilPrepEmail } from './notifications.js';
 import { isObispadoLeader } from './routes/stake.js';
 import { computeBishopricOverview } from './routes/dashboard.js';
+import { previousMeetingOfType } from './routes/meetings.js';
 
 const CHECK_EVERY_MS = 15 * 60 * 1000; // revisa cada 15 minutos
 const TARGET_MS = 24 * 60 * 60 * 1000; // recordatorio 24 horas antes
@@ -78,6 +79,52 @@ async function checkCommitmentReminders() {
   }
 }
 
+// Punto 18 (idea de UX basada en el Manual General): unos días antes de la
+// próxima reunión de un consejo (Consejo de Barrio / Coordinación de
+// Ministración) ya agendada, avisa a quien prepara la agenda (el Secretario
+// de Barrio y el Obispado) qué compromisos del consejo anterior del mismo
+// tipo siguen sin resolver. Solo mira reuniones que YA tienen fecha
+// registrada (el acta puede nacer como agenda antes de la reunión, ver
+// Punto 7), y se dispara una sola vez por acta (councilPrepReminderSent).
+const COUNCIL_TYPES = [
+  { type: 'consejo_barrio', label: 'Consejo de Barrio' },
+  { type: 'coordinacion_ministracion', label: 'Coordinación de Ministración' },
+];
+const COUNCIL_PREP_LEAD_DAYS = 2;
+
+async function checkCouncilPrepReminders() {
+  if (!isEmailConfigured()) return;
+  const data = load();
+  const target = addDaysISO(COUNCIL_PREP_LEAD_DAYS);
+  for (const { type } of COUNCIL_TYPES) {
+    const upcoming = data.meetings.filter((m) => m.type === type && m.status === 'active' && m.date === target && !m.councilPrepReminderSent);
+    for (const m of upcoming) {
+      const previous = previousMeetingOfType(data, type, m.date);
+      const pending = previous
+        ? (previous.commitments || []).filter((c) => c.status === 'pending' || c.status === 'not_fulfilled')
+        : [];
+      const pendingInfo = pending.map((c) => ({
+        description: c.description,
+        dueDate: c.dueDate,
+        assignedToName: data.users.find((u) => u.id === Number(c.assignedToUserId))?.name || '(usuario eliminado)',
+      }));
+      if (pendingInfo.length) {
+        const recipients = data.users.filter((u) => u.email && (u.role === 'ward_clerk' || isObispadoLeader(u, data)));
+        const seen = new Set();
+        for (const u of recipients) {
+          if (seen.has(u.email)) continue;
+          seen.add(u.email);
+          await sendCouncilPrepEmail(u.email, u.name, m, pendingInfo);
+        }
+      }
+      await withDb((d) => {
+        const target2 = d.meetings.find((x) => x.id === m.id);
+        if (target2) target2.councilPrepReminderSent = true;
+      });
+    }
+  }
+}
+
 // Resumen diario para cada líder de Obispado y el Administrador — como
 // mucho una vez por día de calendario (lastDigestDate en memoria; si el
 // servidor se reinicia justo ese día, en el peor de los casos se manda una
@@ -121,10 +168,11 @@ export function startReminderScheduler() {
     console.log('[recordatorios] desactivados: falta GMAIL_USER o GMAIL_APP_PASSWORD en las variables de entorno.');
     return;
   }
-  console.log('[recordatorios] activados vía Gmail — revisando cada 15 minutos (entrevistas 24h antes, compromisos que vencen mañana, y resumen diario para el Obispado).');
+  console.log('[recordatorios] activados vía Gmail — revisando cada 15 minutos (entrevistas 24h antes, compromisos que vencen mañana, preparación de consejos, y resumen diario para el Obispado).');
   const runAll = () => Promise.all([
     checkAndSendReminders(),
     checkCommitmentReminders(),
+    checkCouncilPrepReminders(),
     checkDailyDigest(),
   ]);
   runAll().catch((err) => console.error('[recordatorios] error inicial:', err));

@@ -13,6 +13,16 @@ function isObispadoLeader(user, data) {
   return !!org && org.name === 'Obispado';
 }
 
+// Punto 30 (idea de UX basada en el Manual General): el Secretario de
+// Finanzas tiene, SOLO dentro de este módulo, la misma mayordomía que el
+// líder de Obispado (ver todas las categorías, asignar presupuesto,
+// aprobar/rechazar solicitudes de gasto, crear categorías) — sin ser él
+// mismo un líder de Obispado, así que no hereda ningún otro permiso
+// (entrevistas, actas, paneles) fuera de Presupuesto.
+function hasFullBudgetAccess(user, data) {
+  return isObispadoLeader(user, data) || user.role === 'financial_clerk';
+}
+
 // Una "categoría" de presupuesto es o bien una organización del barrio, o
 // bien una categoría personalizada creada por Obispado (ej. "Actividades de
 // Barrio", para gastos que no pertenecen a una sola organización).
@@ -37,6 +47,7 @@ export function allCategoryRefs(data) {
 // en la organización de otro líder.
 function canOperateOnCategory(user, data, ref) {
   if (user.role === 'admin') return true;
+  if (user.role === 'financial_clerk') return true;
   if (user.role !== 'leader') return false;
   if (ref.categoryType === 'organization') return Number(ref.organizationId) === Number(user.organizationId);
   return isObispadoLeader(user, data);
@@ -109,7 +120,7 @@ function parseAmount(raw) {
 export function registerBudgetRoutes(router) {
   // Trimestres con algún dato (asignación o gasto), más el actual siempre
   // incluido — para poblar el selector de trimestre en el cliente.
-  router.get('/api/budget/quarters', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/budget/quarters', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res) => {
     const data = load();
     const set = new Set([currentQuarter()]);
     data.budgetAllocations.forEach((a) => set.add(a.quarter));
@@ -117,7 +128,7 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, { quarters: [...set].sort().reverse(), currentQuarter: currentQuarter() });
   }));
 
-  router.get('/api/budget/categories', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/budget/categories', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res) => {
     const data = load();
     sendJson(res, 200, {
       organizations: data.organizations.map((o) => ({ id: o.id, name: o.name, color: o.color })),
@@ -125,9 +136,9 @@ export function registerBudgetRoutes(router) {
     });
   }));
 
-  router.post('/api/budget/categories', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/budget/categories', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const data0 = load();
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Solo el líder de Obispado puede crear categorías de presupuesto' });
     }
     const name = String(body?.name || '').trim();
@@ -143,9 +154,9 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 201, cat);
   }));
 
-  router.delete('/api/budget/categories/:id', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.delete('/api/budget/categories/:id', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params) => {
     const data0 = load();
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Solo el líder de Obispado puede eliminar categorías de presupuesto' });
     }
     const id = Number(params.id);
@@ -162,10 +173,10 @@ export function registerBudgetRoutes(router) {
   // las categorías (cada organización + las personalizadas) con su
   // asignación/gastos/saldo del trimestre pedido. Para cualquier otro
   // líder: solo la categoría de su propia organización.
-  router.get('/api/budget', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/budget', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res) => {
     const data = load();
     const quarter = isValidQuarter(req.query.quarter) ? req.query.quarter : currentQuarter();
-    const isObispado = isObispadoLeader(req.user, data);
+    const isObispado = hasFullBudgetAccess(req.user, data);
     const refs = isObispado
       ? allCategoryRefs(data)
       : [{ categoryType: 'organization', organizationId: req.user.organizationId, budgetCategoryId: null }];
@@ -177,9 +188,9 @@ export function registerBudgetRoutes(router) {
     });
   }));
 
-  router.put('/api/budget/allocations', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/budget/allocations', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const data0 = load();
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Solo el líder de Obispado puede asignar presupuesto' });
     }
     const quarter = body?.quarter;
@@ -217,7 +228,7 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, summaryFor(data, quarter, ref));
   }));
 
-  router.post('/api/budget/expenses', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/budget/expenses', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const data0 = load();
     const ref = { categoryType: body?.categoryType, organizationId: body?.organizationId ?? null, budgetCategoryId: body?.budgetCategoryId ?? null };
     if (!canOperateOnCategory(req.user, data0, ref)) {
@@ -228,7 +239,7 @@ export function registerBudgetRoutes(router) {
     // apruebe (ver más abajo). Este endpoint directo queda solo para el
     // Obispado/Admin, que también son quienes aprobarían — pedirse
     // aprobación a sí mismos no aportaría nada.
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Los gastos requieren aprobación previa del Obispado — usa "Solicitar aprobación de gasto" en vez de registrar el gasto directo' });
     }
     const description = String(body?.description || '').trim();
@@ -270,7 +281,7 @@ export function registerBudgetRoutes(router) {
   // líder común pasa primero por acá (antes de gastar, como pide el Manual
   // General 20.2.6), en vez de registrarse directo. El Obispado/Admin la
   // aprueba o la rechaza más abajo.
-  router.post('/api/budget/expense-requests', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/budget/expense-requests', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const data0 = load();
     const ref = { categoryType: body?.categoryType, organizationId: body?.organizationId ?? null, budgetCategoryId: body?.budgetCategoryId ?? null };
     if (!canOperateOnCategory(req.user, data0, ref)) {
@@ -312,9 +323,9 @@ export function registerBudgetRoutes(router) {
   // Listado: el Obispado/Admin ve todas (para su bandeja de aprobación);
   // cualquier otro líder ve solo las que él mismo solicitó, para hacerle
   // seguimiento a su propio estado (pendiente/aprobado/rechazado).
-  router.get('/api/budget/expense-requests', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/budget/expense-requests', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res) => {
     const data = load();
-    let items = isObispadoLeader(req.user, data)
+    let items = hasFullBudgetAccess(req.user, data)
       ? data.budgetExpenseRequests
       : data.budgetExpenseRequests.filter((r) => Number(r.requestedBy) === Number(req.user.id));
     if (req.query.status) items = items.filter((r) => r.status === req.query.status);
@@ -322,10 +333,10 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, items);
   }));
 
-  router.put('/api/budget/expense-requests/:id/approve', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/budget/expense-requests/:id/approve', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Solo el Obispado o el Administrador pueden aprobar solicitudes de gasto' });
     }
     const reqItem = data0.budgetExpenseRequests.find((r) => r.id === id);
@@ -354,10 +365,10 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, { expense: withExpenseInfo(expense, data), request: withExpenseRequestInfo(data.budgetExpenseRequests.find((r) => r.id === id), data) });
   }));
 
-  router.put('/api/budget/expense-requests/:id/reject', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/budget/expense-requests/:id/reject', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
-    if (!isObispadoLeader(req.user, data0)) {
+    if (!hasFullBudgetAccess(req.user, data0)) {
       return sendJson(res, 403, { error: 'Solo el Obispado o el Administrador pueden rechazar solicitudes de gasto' });
     }
     const reqItem = data0.budgetExpenseRequests.find((r) => r.id === id);
@@ -374,7 +385,7 @@ export function registerBudgetRoutes(router) {
 
   // Retirar una solicitud propia mientras siga pendiente (ej. si se
   // equivocó en el monto y prefiere volver a pedirla).
-  router.delete('/api/budget/expense-requests/:id', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.delete('/api/budget/expense-requests/:id', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params) => {
     const id = Number(params.id);
     const data0 = load();
     const reqItem = data0.budgetExpenseRequests.find((r) => r.id === id);
@@ -387,7 +398,7 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, { ok: true });
   }));
 
-  router.put('/api/budget/expenses/:id', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/budget/expenses/:id', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const existing = data0.budgetExpenses.find((e) => e.id === id);
@@ -424,7 +435,7 @@ export function registerBudgetRoutes(router) {
     sendJson(res, 200, withExpenseInfo(updated, data));
   }));
 
-  router.delete('/api/budget/expenses/:id', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.delete('/api/budget/expenses/:id', requireRole(['admin', 'leader', 'financial_clerk'], async (req, res, params) => {
     const id = Number(params.id);
     const data0 = load();
     const existing = data0.budgetExpenses.find((e) => e.id === id);

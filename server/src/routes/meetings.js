@@ -21,6 +21,17 @@ export function lastMeetingDateOfType(data, type) {
   return dates.length ? dates[dates.length - 1] : null;
 }
 
+// Punto 18 (idea de UX basada en el Manual General): el acta del consejo
+// inmediatamente ANTERIOR a una fecha dada, del mismo tipo — usado por
+// reminders.js para avisar, unos días antes de la próxima reunión ya
+// agendada como agenda (ver Punto 7 más abajo), qué compromisos de la
+// reunión pasada siguen sin resolverse.
+export function previousMeetingOfType(data, type, beforeDate) {
+  const candidates = data.meetings.filter((m) => m.type === type && m.date < beforeDate);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.date.localeCompare(a.date))[0];
+}
+
 // Módulo "Reuniones y Consejos": un acta (reunión) agrupa uno o más
 // "compromisos" (tareas con responsable y fecha límite). El compromiso vive
 // anidado dentro de su acta, pero se le da un id GLOBAL (nextId
@@ -60,10 +71,20 @@ export function allMeetingCreatorsWithStats(data, range) {
 // un líder común solo puede asignar a líderes de su misma organización (en
 // la práctica, generalmente a sí mismo, salvo que existan varios líderes en
 // esa organización).
+// Los tres llamamientos de apoyo al Obispado (Punto 28/29/30) también
+// pueden recibir un compromiso directo desde un acta (ej. "el Secretario de
+// Barrio actualiza el directorio") — no son "líder", pero sí asisten a las
+// reuniones del Obispado y son una mayordomía válida a la que asignar algo.
+const STAFF_ROLES = ['executive_secretary', 'ward_clerk', 'financial_clerk'];
+
 export function assignableUsersFor(user, data) {
-  const privileged = isObispadoLeader(user, data);
+  // El Secretario de Barrio arma las actas de Consejo de Barrio, donde
+  // participan TODAS las organizaciones (no solo Obispado) — así que, igual
+  // que un líder de Obispado, debe poder repartir compromisos entre
+  // cualquier presidencia del Barrio, no solo entre el propio Obispado.
+  const privileged = isObispadoLeader(user, data) || user.role === 'ward_clerk';
   const pool = privileged
-    ? data.users.filter((u) => u.role === 'leader' || u.role === 'admin')
+    ? data.users.filter((u) => u.role === 'leader' || u.role === 'admin' || STAFF_ROLES.includes(u.role))
     : data.users.filter((u) => u.role === 'leader' && Number(u.organizationId) === Number(user.organizationId));
   return pool
     .map((u) => ({ id: u.id, name: u.name, role: u.role, organizationId: u.organizationId }))
@@ -121,7 +142,7 @@ function withMeetingInfo(m, data, viewer) {
     ...m,
     organizationName: org?.name || (m.organizationId ? '' : 'Administración'),
     createdByName: userName(data, m.createdBy),
-    agendaItems: (m.agendaItems || []).map((a) => (fullAccess ? a : { id: a.id, topic: '(Tema confidencial)', presenter: '', notes: '' })),
+    agendaItems: (m.agendaItems || []).map((a) => (fullAccess ? a : { id: a.id, topic: '(Tema confidencial)', presenter: '', ...EMPTY_AGENDA_ITEM_NOTES })),
     commitments: (m.commitments || []).map((c) => withCommitmentInfo(c, data, m, viewer)),
     contentRedacted: !fullAccess,
   };
@@ -148,6 +169,15 @@ export function canSeeMeetingRecord(user, meeting, data) {
   return Number(meeting.organizationId) === Number(user.organizationId);
 }
 
+// Punto 16 (idea de UX basada en el Manual General): un tema de agenda de
+// Consejo de Barrio (o Coordinación de Ministración) no se completa con una
+// sola nota libre — sigue el patrón de consejo del Manual (18.2 y 4.3):
+// necesidad detectada → análisis → acuerdo tomado → seguimiento asignado.
+// `notes` se mantiene para actas de tipo "general" que no siguen este
+// patrón; los 4 campos nuevos son adicionales y, como `notes`, empiezan
+// vacíos y solo se completan después (PUT), nunca al crear el tema.
+const EMPTY_AGENDA_ITEM_NOTES = { notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '' };
+
 function validCommitmentInput(raw, assignableIds) {
   const description = String(raw?.description || '').trim();
   const dueDate = String(raw?.dueDate || '').trim();
@@ -164,7 +194,7 @@ export function registerMeetingRoutes(router) {
   // Quién puede asignarse un compromiso al armar (o completar) un acta —
   // depende de si quien pregunta es líder de Obispado/Administrador o un
   // líder común. El cliente arma el selector "Responsable" con esta lista.
-  router.get('/api/meetings/assignable-users', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/meetings/assignable-users', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res) => {
     const data = load();
     sendJson(res, 200, assignableUsersFor(req.user, data));
   }));
@@ -174,7 +204,7 @@ export function registerMeetingRoutes(router) {
   // todas las organizaciones. Igual que en Entrevistas, es el servidor el
   // que aplica el filtro, no algo solo visual. Quien la ve puede no poder
   // editarla — eso lo decide canEditMeeting (solo quien la creó, o Admin).
-  router.get('/api/meetings', requireRole(['admin', 'leader'], async (req, res) => {
+  router.get('/api/meetings', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res) => {
     const data = load();
     const status = req.query.status;
     let items = isObispadoLeader(req.user, data)
@@ -185,7 +215,7 @@ export function registerMeetingRoutes(router) {
     sendJson(res, 200, items);
   }));
 
-  router.get('/api/meetings/:id', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.get('/api/meetings/:id', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params) => {
     const id = Number(params.id);
     const data = load();
     const meeting = data.meetings.find((m) => m.id === id);
@@ -200,7 +230,7 @@ export function registerMeetingRoutes(router) {
   // quién los presenta, antes de que la reunión ocurra) y, opcionalmente,
   // sus primeros compromisos "al vuelo" (se pueden seguir agregando después
   // mientras el acta esté activa, igual que antes).
-  router.post('/api/meetings', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/meetings', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const title = String(body?.title || '').trim();
     const date = String(body?.date || '').trim();
     if (!title) return sendJson(res, 400, { error: 'Falta el título del acta (ej: Consejo de Barrio)' });
@@ -208,8 +238,11 @@ export function registerMeetingRoutes(router) {
 
     const data0 = load();
     const requestedType = MEETING_TYPES.includes(body?.type) ? body.type : 'general';
-    if (OBISPADO_ONLY_TYPES.includes(requestedType) && !isObispadoLeader(req.user, data0)) {
-      return sendJson(res, 403, { error: 'Solo el Obispado puede registrar un Consejo de Barrio o una Coordinación de Ministración' });
+    // Punto 29: el Secretario de Barrio SÍ puede registrar estos dos tipos —
+    // es justamente su mayordomía — aunque no sea él mismo un líder de
+    // Obispado.
+    if (OBISPADO_ONLY_TYPES.includes(requestedType) && !isObispadoLeader(req.user, data0) && req.user.role !== 'ward_clerk') {
+      return sendJson(res, 403, { error: 'Solo el Obispado (o el Secretario de Barrio) puede registrar un Consejo de Barrio o una Coordinación de Ministración' });
     }
     const assignableIds = new Set(assignableUsersFor(req.user, data0).map((u) => u.id));
     const rawCommitments = Array.isArray(body?.commitments) ? body.commitments : [];
@@ -224,7 +257,7 @@ export function registerMeetingRoutes(router) {
     for (const raw of rawAgendaItems) {
       const topic = String(raw?.topic || '').trim();
       if (!topic) return sendJson(res, 400, { error: 'Cada tema de la agenda necesita un título' });
-      agendaItemsInput.push({ topic, presenter: String(raw?.presenter || '').trim(), notes: '' });
+      agendaItemsInput.push({ topic, presenter: String(raw?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES });
     }
 
     const now = new Date().toISOString();
@@ -251,6 +284,9 @@ export function registerMeetingRoutes(router) {
         archivedAt: null,
         agendaItems,
         commitments,
+        // Punto 18: para no reenviar el mismo recordatorio de compromisos
+        // pendientes en cada ciclo de 15 minutos de reminders.js.
+        councilPrepReminderSent: false,
       };
       data.meetings.push(m);
       return m;
@@ -260,7 +296,7 @@ export function registerMeetingRoutes(router) {
   }));
 
   // Agrega un compromiso más a un acta ya creada, mientras siga activa.
-  router.post('/api/meetings/:id/commitments', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/meetings/:id/commitments', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const meeting = data0.meetings.find((m) => m.id === id);
@@ -282,7 +318,7 @@ export function registerMeetingRoutes(router) {
   // Punto 7 — agenda previa: agregar un tema más (antes o durante la
   // reunión), y luego completar sus notas/decisión una vez tratado. Mismo
   // permiso que agregar compromisos: quien creó el acta, o Administrador.
-  router.post('/api/meetings/:id/agenda-items', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.post('/api/meetings/:id/agenda-items', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const meeting = data0.meetings.find((m) => m.id === id);
@@ -294,7 +330,7 @@ export function registerMeetingRoutes(router) {
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
       m.agendaItems = m.agendaItems || [];
-      m.agendaItems.push({ id: nextId(data, 'agendaItems'), topic, presenter: String(body?.presenter || '').trim(), notes: '' });
+      m.agendaItems.push({ id: nextId(data, 'agendaItems'), topic, presenter: String(body?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES });
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -302,7 +338,7 @@ export function registerMeetingRoutes(router) {
 
   // Completar (o editar) un tema de agenda con lo que se decidió — se usa
   // durante o después de la reunión, sobre la misma agenda armada antes.
-  router.put('/api/meetings/:id/agenda-items/:itemId', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/meetings/:id/agenda-items/:itemId', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const itemId = Number(params.itemId);
     const data0 = load();
@@ -318,13 +354,20 @@ export function registerMeetingRoutes(router) {
         topic: body?.topic !== undefined ? String(body.topic).trim() || it.topic : it.topic,
         presenter: body?.presenter !== undefined ? String(body.presenter).trim() : it.presenter,
         notes: body?.notes !== undefined ? String(body.notes).trim() : it.notes,
+        // Punto 16: patrón de consejo del Manual General para Consejo de
+        // Barrio / Coordinación de Ministración (necesidad → análisis →
+        // acuerdo → seguimiento); igual que `notes`, se completan después.
+        necesidad: body?.necesidad !== undefined ? String(body.necesidad).trim() : it.necesidad,
+        analisis: body?.analisis !== undefined ? String(body.analisis).trim() : it.analisis,
+        acuerdo: body?.acuerdo !== undefined ? String(body.acuerdo).trim() : it.acuerdo,
+        seguimiento: body?.seguimiento !== undefined ? String(body.seguimiento).trim() : it.seguimiento,
       });
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
   }));
 
-  router.delete('/api/meetings/:id/agenda-items/:itemId', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.delete('/api/meetings/:id/agenda-items/:itemId', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params) => {
     const id = Number(params.id);
     const itemId = Number(params.itemId);
     const data0 = load();
@@ -342,7 +385,7 @@ export function registerMeetingRoutes(router) {
 
   // Marcar (o desmarcar) un acta o un compromiso puntual como confidencial —
   // Punto 9. Mismo permiso que editar el acta.
-  router.put('/api/meetings/:id/confidential', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/meetings/:id/confidential', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const meeting = data0.meetings.find((m) => m.id === id);
@@ -355,7 +398,7 @@ export function registerMeetingRoutes(router) {
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
   }));
 
-  router.put('/api/commitments/:id/confidential', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/commitments/:id/confidential', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const found = findMeetingWithCommitment(data0, id);
@@ -372,7 +415,7 @@ export function registerMeetingRoutes(router) {
   // El responsable marca su propio compromiso como completado, dejando un
   // comentario breve — no lo puede completar otra persona en su nombre
   // (ni siquiera quien armó el acta), para que el comentario sea confiable.
-  router.put('/api/commitments/:id/complete', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/commitments/:id/complete', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const found = findMeetingWithCommitment(data0, id);
@@ -400,7 +443,7 @@ export function registerMeetingRoutes(router) {
   // quedado pendiente pasa a "no cumplida" — desaparece de "Mis
   // Asignaciones" de quien lo tenía (que ya solo pide compromisos con
   // status 'pending') y queda documentado en el acta histórica.
-  router.put('/api/meetings/:id/archive', requireRole(['admin', 'leader'], async (req, res, params) => {
+  router.put('/api/meetings/:id/archive', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params) => {
     const id = Number(params.id);
     const data0 = load();
     const meeting = data0.meetings.find((m) => m.id === id);

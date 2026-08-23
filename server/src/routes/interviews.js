@@ -44,6 +44,14 @@ function checkGroupEligibility(data, organizationId, members) {
 function canScheduleOrg(user, organizationId) {
   if (user.role === 'admin') return true;
   if (user.role === 'leader' && Number(user.organizationId) === Number(organizationId)) return true;
+  // Punto 28 (idea de UX basada en el Manual General): el Secretario
+  // Ejecutivo agenda y administra la agenda de entrevistas del Obispado por
+  // encargo del Obispo, sin ser él mismo un líder de Obispado — así que
+  // tiene esta misma capacidad, pero SOLO para la organización a la que
+  // pertenece (que siempre es Obispado, ver validateStaffOrg en users.js), y
+  // nada más: no hereda `orgSeesAllInterviews` (no ve las de Cuórum de
+  // Élderes/Sociedad de Socorro) ni ningún otro permiso de Obispado.
+  if (user.role === 'executive_secretary' && Number(user.organizationId) === Number(organizationId)) return true;
   return false;
 }
 
@@ -231,7 +239,12 @@ export function registerInterviewRoutes(router) {
       if (query.status === 'history') return items.filter((i) => i.status && i.status !== 'scheduled');
       return items;
     };
-    if (user.role === 'member') {
+    // El Secretario de Barrio y el Secretario de Finanzas (Punto 29/30) no
+    // administran entrevistas — esa es la mayordomía del Secretario
+    // Ejecutivo — así que ven exactamente lo mismo que un Miembro acá: solo
+    // la suya propia, nunca las de todo el Obispado por el solo hecho de
+    // pertenecer a esa organización.
+    if (['member', 'ward_clerk', 'financial_clerk'].includes(user.role)) {
       // Las entrevistas son privadas: el perfil Miembro no ve las de los
       // demás, pero sí debe ver la suya propia (cuando el líder la agendó
       // eligiéndolo de la lista de usuarios registrados) para que le

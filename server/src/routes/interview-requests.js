@@ -60,6 +60,11 @@ function isObispadoLeader(user, data) {
 // Obispado (que puede decidir la de cualquier organización).
 function canDecideFor(user, data, organizationId) {
   if (user.role === 'admin') return true;
+  // Punto 28: el Secretario Ejecutivo decide las solicitudes de entrevista
+  // del Obispado (su propia organización) por encargo del Obispo, igual que
+  // agenda su agenda a mano — pero nada más que eso, no las de otras
+  // organizaciones.
+  if (user.role === 'executive_secretary') return Number(user.organizationId) === Number(organizationId);
   if (user.role !== 'leader') return false;
   if (Number(user.organizationId) === Number(organizationId)) return true;
   return isObispadoLeader(user, data);
@@ -210,7 +215,10 @@ export function registerInterviewRequestRoutes(router) {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       return sendJson(res, 200, items);
     }
-    if (req.user.role === 'member') return sendJson(res, 200, []);
+    // El Secretario de Barrio y el Secretario de Finanzas no administran
+    // entrevistas (esa es la mayordomía del Secretario Ejecutivo) — ver
+    // misma exclusión en interviews.js.
+    if (['member', 'ward_clerk', 'financial_clerk'].includes(req.user.role)) return sendJson(res, 200, []);
     let items = isObispadoLeader(req.user, data)
       ? data.interviewRequests
       : data.interviewRequests.filter((r) => Number(r.organizationId) === Number(req.user.organizationId));
@@ -219,7 +227,7 @@ export function registerInterviewRequestRoutes(router) {
     sendJson(res, 200, items);
   }));
 
-  router.put('/api/interview-requests/:id/confirm', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/interview-requests/:id/confirm', requireRole(['admin', 'leader', 'executive_secretary'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const reqItem = data0.interviewRequests.find((r) => r.id === id);
@@ -280,7 +288,7 @@ export function registerInterviewRequestRoutes(router) {
     });
   }));
 
-  router.put('/api/interview-requests/:id/reject', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+  router.put('/api/interview-requests/:id/reject', requireRole(['admin', 'leader', 'executive_secretary'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const reqItem = data0.interviewRequests.find((r) => r.id === id);
