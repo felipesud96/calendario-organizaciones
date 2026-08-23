@@ -26,7 +26,6 @@ const state = {
   interviews: [],
   stakeEvents: [],
   stakeCalendar: null,
-  interviewOrgFilter: 'all',
   interviewsSubtab: 'pending', // Entrevistas: 'pending' (agenda) o 'requests' (solicitudes por confirmar)
   adminSubtab: 'users',
   adminUsers: [],
@@ -635,6 +634,7 @@ function setToken(token) {
 
 async function boot() {
   wireOfflineBanner();
+  wireSwipeNavigation();
   if (!state.token) { renderLogin(); return; }
   try {
     state.user = await api('/auth/me');
@@ -646,6 +646,101 @@ async function boot() {
     setToken(null);
     renderLogin();
   }
+}
+
+// Deslizar el dedo hacia la izquierda o la derecha en cualquier parte de la
+// pantalla cambia de módulo (pestaña) — como en una app nativa. Se ata una
+// sola vez a `document` (no a #view-root, que se vuelve a crear en cada
+// login) para que funcione en toda la pantalla, incluida la barra superior.
+// Se ignora el gesto si: hay un modal abierto, no hay sesión iniciada, el
+// desplazamiento no fue predominantemente horizontal (para no interferir
+// con el scroll normal de una lista larga), o empezó dentro de un elemento
+// que ya se desplaza horizontalmente por sí mismo — la grilla del
+// calendario en celular (.cal-grid-wrap), el carrusel del Panel de
+// Obispado (.bp-scroll-row), una tabla con scroll propio (.table-scroll),
+// o la fila de pestañas si no entran todas (.tabs) — para no competir con
+// ese scroll nativo.
+let swipeNavigationWired = false;
+function wireSwipeNavigation() {
+  // `boot()` se llama tanto al cargar la página como después de cada login
+  // exitoso (para recargar los datos del usuario) — sin este guard, cada
+  // login volvería a atar un par de listeners nuevos a `document` (que
+  // nunca se sueltan), y un solo gesto terminaría avanzando varios módulos
+  // de una vez porque cada listener duplicado vuelve a leer y actualizar
+  // `state.view` uno después del otro.
+  if (swipeNavigationWired) return;
+  swipeNavigationWired = true;
+  const SWIPE_MIN_DISTANCE = 60; // px — evita que un tap o un scroll corto dispare el cambio
+  const SWIPE_INTENT_THRESHOLD = 10; // px — cuánto hay que moverse antes de decidir si el gesto es horizontal o vertical
+  const SWIPE_MAX_OFF_AXIS_RATIO = 0.6; // |dy| no puede pasar de esta fracción de |dx|
+  const HORIZONTAL_SCROLL_CLASSES = ['cal-grid-wrap', 'bp-scroll-row', 'table-scroll', 'tabs'];
+  let touchStartX = null;
+  let touchStartY = null;
+  let swipeIntent = null; // null = aún no decidido; 'horizontal' | 'vertical' una vez que el gesto se define
+
+  const startsInsideHorizontalScroller = (el) => {
+    let node = el;
+    while (node && node !== document.body) {
+      if (node.classList) {
+        for (const cls of HORIZONTAL_SCROLL_CLASSES) {
+          if (node.classList.contains(cls)) return true;
+        }
+      }
+      // Cualquier otro elemento que en la práctica ya se desplace
+      // horizontalmente (más ancho por dentro que por fuera) también cuenta,
+      // aunque no tenga ninguna de las clases de arriba.
+      if (node.scrollWidth > node.clientWidth + 2) return true;
+      node = node.parentElement;
+    }
+    return false;
+  };
+
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || !state.user) { touchStartX = null; return; }
+    const modalRoot = document.getElementById('modal-root');
+    if (modalRoot && modalRoot.innerHTML.trim()) { touchStartX = null; return; }
+    if (startsInsideHorizontalScroller(e.touches[0].target)) { touchStartX = null; return; }
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    swipeIntent = null;
+  }, { passive: true });
+
+  // Una vez que el gesto se reconoce como predominantemente horizontal, hay
+  // que llamar preventDefault() en touchmove — si no, el navegador (Chrome
+  // en Android en particular) puede interpretar el mismo arrastre como su
+  // propio gesto nativo de "volver atrás/adelante" e irse de la página,
+  // compitiendo con nuestro cambio de módulo. Si el gesto resulta vertical
+  // (un scroll normal) nunca se llama preventDefault, así que el scroll
+  // nativo de la lista sigue funcionando exactamente igual que siempre.
+  document.addEventListener('touchmove', (e) => {
+    if (touchStartX === null || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - touchStartX;
+    const dy = e.touches[0].clientY - touchStartY;
+    if (swipeIntent === null && (Math.abs(dx) >= SWIPE_INTENT_THRESHOLD || Math.abs(dy) >= SWIPE_INTENT_THRESHOLD)) {
+      swipeIntent = Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO ? 'vertical' : 'horizontal';
+    }
+    if (swipeIntent === 'horizontal' && e.cancelable) e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+    touchStartX = null;
+    if (Math.abs(dx) < SWIPE_MIN_DISTANCE) return;
+    if (Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO) return;
+    const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+    const idx = order.indexOf(state.view);
+    if (idx === -1) return;
+    // Deslizar hacia la izquierda (dx negativo) avanza al siguiente módulo;
+    // hacia la derecha (dx positivo) retrocede — misma convención que
+    // cualquier carrusel o galería de páginas.
+    const nextIdx = dx < 0 ? idx + 1 : idx - 1;
+    if (nextIdx < 0 || nextIdx >= order.length) return;
+    state.view = order[nextIdx];
+    renderCurrentView();
+  }, { passive: true });
 }
 
 // Banner discreto que avisa cuando el navegador pierde la conexión (por
@@ -2980,13 +3075,11 @@ function openEventModal(existing = null) {
 // atrasada que nadie marcó siga apareciendo hasta que alguien la revise
 // (antes desaparecía sola a los 120 días sin dejar rastro).
 async function loadInterviewsPending() {
-  const params = state.interviewOrgFilter !== 'all' ? `&organizationId=${state.interviewOrgFilter}` : '';
-  return api(`/interviews?status=scheduled${params}`);
+  return api('/interviews?status=scheduled');
 }
 // Historial: las ya marcadas ✅ Se hizo / ❌ No se hizo, más recientes primero.
 async function loadInterviewsHistory() {
-  const params = state.interviewOrgFilter !== 'all' ? `&organizationId=${state.interviewOrgFilter}` : '';
-  return api(`/interviews?status=history${params}`);
+  return api('/interviews?status=history');
 }
 
 function interviewStatusPillHtml(status) {
@@ -3014,6 +3107,39 @@ function interviewStatsLine(iv) {
   }).join(' · ');
 }
 
+// Una entrevista pendiente de verificar — factorizada para reutilizarla
+// tanto en la lista simple como dentro de cada sección por organización
+// (ver renderInterviewsView).
+function interviewPendingCardHtml(iv) {
+  return `
+    <div class="list-card">
+      <span class="org-dot" style="background:${iv.organizationColor}"></span>
+      <div class="lc-main">
+        <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
+        <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+        <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
+      </div>
+      <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
+      ${canScheduleInterviewsFor(iv.organizationId) ? `
+      <div class="lc-actions">
+        <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="done" title="Se hizo">✅</button>
+        <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="not_done" title="No se hizo">❌</button>
+        <button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button>
+      </div>` : ''}
+    </div>`;
+}
+// Agrupa una lista de entrevistas pendientes por día (encabezado de fecha +
+// sus tarjetas) — reutilizado tanto para la lista simple como para cada
+// sección por organización.
+function interviewPendingDateGroupsHtml(items) {
+  const grouped = {};
+  for (const iv of items) { (grouped[iv.date] ||= []).push(iv); }
+  return Object.keys(grouped).sort().map((d) => `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}</div>
+      ${grouped[d].map(interviewPendingCardHtml).join('')}
+    </div>`).join('');
+}
 async function renderInterviewsView() {
   const container = document.getElementById('view-root');
   const seesAll = canViewAllInterviews();
@@ -3082,9 +3208,26 @@ async function renderInterviewsView() {
   let history = [];
   try { history = await loadInterviewsHistory(); } catch (e) { history = []; }
 
-  const grouped = {};
-  for (const iv of list) { (grouped[iv.date] ||= []).push(iv); }
-  const dates = Object.keys(grouped).sort();
+  // Quien ve entrevistas de más de una organización a la vez (Obispado o
+  // Administrador) las ve divididas en una sección por organización — cada
+  // una con su propio encabezado — en vez de una sola lista larga
+  // mezclando las tres. Un líder que solo ve la suya sigue viendo una
+  // lista simple, sin secciones (interviewOrgs.length===1 en ese caso).
+  const sectioned = interviewOrgs.length > 1;
+  const pendingSectionsHtml = !list.length
+    ? emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)
+    : sectioned
+      ? interviewOrgs.map((o) => {
+          const items = list.filter((iv) => Number(iv.organizationId) === Number(o.id));
+          return `
+            <div class="iv-org-section-heading" style="display:flex; align-items:center; gap:8px; margin:18px 0 8px;">
+              <span class="org-dot" style="background:${o.color}"></span>
+              <h3 style="font-size:14px; margin:0; color:var(--celeste-darker);">${esc(o.name)}</h3>
+              <span style="font-size:12px; color:var(--ink-soft);">${items.length ? `(${items.length})` : '— sin pendientes'}</span>
+            </div>
+            ${items.length ? interviewPendingDateGroupsHtml(items) : ''}`;
+        }).join('')
+      : interviewPendingDateGroupsHtml(list);
 
   container.innerHTML = `
     <div class="section-header">
@@ -3102,40 +3245,28 @@ async function renderInterviewsView() {
       <button class="subtab-btn active" data-tab="pending">🗓️ Agenda</button>
       <button class="subtab-btn" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
     </div>` : ''}
-    ${interviewOrgs.length > 1 ? `
-    <div class="subtabs">
-      <button class="subtab-btn ${state.interviewOrgFilter === 'all' ? 'active' : ''}" data-org="all">Todas</button>
-      ${interviewOrgs.map((o) => `<button class="subtab-btn ${String(state.interviewOrgFilter) === String(o.id) ? 'active' : ''}" data-org="${o.id}">${esc(o.name)}</button>`).join('')}
-    </div>` : ''}
-    ${dates.length ? `<div class="hint-box" style="margin-top:0;">Cuando la entrevista ya se realizó (o no se pudo hacer), márcala con ✅ o ❌ — puedes agregar un comentario opcional. Pasa automáticamente al historial y ya no queda pendiente acá.</div>` : ''}
+    ${list.length ? `<div class="hint-box" style="margin-top:0;">Cuando la entrevista ya se realizó (o no se pudo hacer), márcala con ✅ o ❌ — puedes agregar un comentario opcional. Pasa automáticamente al historial y ya no queda pendiente acá.</div>` : ''}
     <div class="card-list">
-      ${dates.length ? dates.map((d) => `
-        <div style="margin-bottom:6px;">
-          <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}</div>
-          ${grouped[d].map((iv) => `
-            <div class="list-card">
-              <span class="org-dot" style="background:${iv.organizationColor}"></span>
-              <div class="lc-main">
-                <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
-                <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
-                <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
-              </div>
-              <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
-              ${canScheduleInterviewsFor(iv.organizationId) ? `
-              <div class="lc-actions">
-                <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="done" title="Se hizo">✅</button>
-                <button type="button" class="btn btn-ghost btn-sm iv-mark" data-id="${iv.id}" data-status="not_done" title="No se hizo">❌</button>
-                <button class="btn btn-secondary btn-sm" data-edit-iv="${iv.id}">Editar</button>
-              </div>` : ''}
-            </div>`).join('')}
-        </div>`).join('') : emptyStateHtml('No hay entrevistas pendientes de agendar o verificar', canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null)}
+      ${pendingSectionsHtml}
     </div>
     ${history.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="iv-history-toggle" style="margin-top:16px;">
         ${state.interviewsHistoryOpen ? '▲ Ocultar historial' : `📜 Ver historial (${history.length} entrevista${history.length === 1 ? '' : 's'} verificada${history.length === 1 ? '' : 's'})`}
       </button>
       <div class="card-list" style="margin-top:10px;">
-        ${state.interviewsHistoryOpen ? history.map((iv) => interviewHistoryCardHtml(iv)).join('') : ''}
+        ${state.interviewsHistoryOpen ? (sectioned
+          ? interviewOrgs.map((o) => {
+              const items = history.filter((iv) => Number(iv.organizationId) === Number(o.id));
+              if (!items.length) return '';
+              return `
+                <div class="iv-org-section-heading" style="display:flex; align-items:center; gap:8px; margin:14px 0 8px;">
+                  <span class="org-dot" style="background:${o.color}"></span>
+                  <h3 style="font-size:14px; margin:0; color:var(--celeste-darker);">${esc(o.name)}</h3>
+                </div>
+                ${items.map((iv) => interviewHistoryCardHtml(iv)).join('')}`;
+            }).join('')
+          : history.map((iv) => interviewHistoryCardHtml(iv)).join('')
+        ) : ''}
       </div>` : ''}
   `;
 
@@ -3145,7 +3276,6 @@ async function renderInterviewsView() {
   if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
   wireEmptyStateCta('iv-empty-new', () => openInterviewModal());
   container.querySelectorAll('.subtabs .subtab-btn[data-tab]').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
-  container.querySelectorAll('.subtabs .subtab-btn[data-org]').forEach((b) => b.addEventListener('click', () => { state.interviewOrgFilter = b.dataset.org === 'all' ? 'all' : Number(b.dataset.org); renderInterviewsView(); }));
   container.querySelectorAll('[data-edit-iv]').forEach((b) => b.addEventListener('click', () => {
     const iv = list.find((i) => i.id === Number(b.dataset.editIv));
     openInterviewModal(iv);
