@@ -1679,6 +1679,7 @@ function render() {
     <main class="view" id="view-root"></main>
     <div id="modal-root"></div>
     <div id="confirm-root"></div>
+    <div id="ocr-root"></div>
   `;
   document.getElementById('logout-btn').addEventListener('click', logout);
   document.getElementById('my-profile-btn').addEventListener('click', () => openProfileModal());
@@ -5190,6 +5191,168 @@ function commitmentStatusPillHtml(c) {
   return `<span class="status-pill ${cls}">${label}</span>`;
 }
 
+// ---------------- "Leer pizarra" (compromisos por foto, OCR gratis) ----------------
+// Al crear una acta, en vez de escribir cada compromiso a mano, se le puede
+// sacar una foto a la pizarra donde quedaron anotados durante la reunión y
+// dejar que el navegador (no el servidor) intente leerla con Tesseract.js —
+// una librería gratuita de reconocimiento de texto que corre 100% en el
+// celular/computador de la persona (la foto nunca se sube a ningún lado ni
+// pasa por nuestro servidor).
+//
+// Como el reconocimiento de LETRA MANUSCRITA es poco confiable incluso para
+// una IA paga (y todavía más para esta librería gratuita), el flujo NUNCA
+// crea compromisos directo: primero muestra el texto reconocido en un
+// cuadro editable para que la persona lo revise/corrija, y recién con el
+// botón "Agregar estos compromisos" se transforma en filas del formulario
+// — cada fila igual exige elegir manualmente el responsable (el <select> ya
+// es obligatorio) para no arriesgarse a asignarle un compromiso a la
+// persona equivocada por un error de lectura.
+//
+// Convención esperada, una línea por compromiso: "Nombre: compromiso" (o
+// con " - " / "–" / "—" en vez de ":"). Si una pizarra tiene dos columnas
+// separadas (nombres a la izquierda, compromisos a la derecha) el OCR
+// gratuito casi siempre las va a mezclar — por eso el cuadro de revisión
+// avisa que conviene reescribir con ese formato antes de continuar si el
+// resultado queda muy desordenado.
+
+// Reduce la foto a un tamaño manejable (fotos de celular pueden pesar
+// 4000x3000 y varios MB) sin recortarla a cuadrado como compressImageFile
+// (acá interesa el rectángulo completo de la pizarra, no una miniatura).
+function resizeImageForOcr(file, maxSide = 1800) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Archivo de imagen inválido'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Convierte el texto (ya revisado/corregido por la persona) en candidatos a
+// compromiso: una línea por compromiso, separando "Nombre" de "compromiso"
+// por el primer ":", " - ", "–" o "—" que aparezca. Si una línea no tiene
+// ninguno de esos separadores, se toma completa como descripción y el
+// nombre queda vacío (el responsable se elige a mano, igual que si se
+// hubiera agregado la fila manualmente).
+function parsePizarraText(text, assignable) {
+  const SEPARATORS = [':', ' - ', '–', '—'];
+  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let name = '';
+      let description = line;
+      for (const sep of SEPARATORS) {
+        const idx = line.indexOf(sep);
+        if (idx > 0) {
+          name = line.slice(0, idx).trim();
+          description = line.slice(idx + sep.length).trim();
+          break;
+        }
+      }
+      let assigneeId = null;
+      if (name) {
+        const nameNorm = norm(name);
+        const exact = assignable.find((u) => norm(u.name) === nameNorm);
+        const partial = exact || assignable.find((u) => norm(u.name).includes(nameNorm) || nameNorm.includes(norm(u.name)));
+        if (partial) assigneeId = partial.id;
+      }
+      return { rawName: name, description, assigneeId };
+    })
+    .filter((row) => row.description);
+}
+
+// Panel flotante sobre #ocr-root — ENCIMA del modal de la acta que sigue
+// abierto detrás con lo que la persona ya haya escrito (mismo patrón que
+// confirmModal con #confirm-root, para no perder ese formulario). Hace todo
+// el flujo: lee la foto → muestra progreso → deja revisar/corregir el texto
+// → al aceptar, llama a onAccept(filas) para que quien invocó el panel las
+// agregue como filas de compromiso.
+async function openPizarraOcrPanel(file, assignable, onAccept) {
+  const root = document.getElementById('ocr-root');
+  const close = () => { root.innerHTML = ''; };
+
+  if (typeof Tesseract === 'undefined') {
+    toast('No se pudo cargar el lector de fotos (revisa tu conexión a internet) — puedes seguir escribiendo los compromisos a mano.', 'error');
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="modal-backdrop" id="ocr-backdrop">
+      <div class="modal" style="max-width:520px;">
+        <div class="modal-header"><h3>📷 Leer pizarra</h3><button class="modal-close" id="ocr-close">×</button></div>
+        <div class="modal-body">
+          <div id="ocr-body">
+            <div style="text-align:center; padding:20px 0;">
+              <div class="spinner" style="margin:0 auto 12px;"></div>
+              <div id="ocr-progress">Leyendo la imagen…</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer" id="ocr-footer"></div>
+      </div>
+    </div>`;
+  document.getElementById('ocr-close').addEventListener('click', close);
+  document.getElementById('ocr-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ocr-backdrop') close(); });
+
+  let recognizedText = '';
+  try {
+    const dataUri = await resizeImageForOcr(file);
+    const worker = await Tesseract.createWorker('spa', undefined, {
+      logger: (m) => {
+        const progressEl = document.getElementById('ocr-progress');
+        if (progressEl && m.status === 'recognizing text') {
+          progressEl.textContent = `Leyendo la imagen… ${Math.round((m.progress || 0) * 100)}%`;
+        }
+      },
+    });
+    const { data } = await worker.recognize(dataUri);
+    recognizedText = data.text || '';
+    await worker.terminate();
+  } catch (err) {
+    if (!document.getElementById('ocr-body')) return; // se cerró mientras se leía
+    document.getElementById('ocr-body').innerHTML = `<div class="error-msg">No se pudo leer la imagen: ${esc(err.message)}. Puedes seguir escribiendo los compromisos a mano.</div>`;
+    return;
+  }
+
+  if (!document.getElementById('ocr-backdrop')) return; // se cerró mientras se leía
+
+  document.getElementById('ocr-body').innerHTML = `
+    <div class="hint-box" style="margin-top:0;">Revisa y corrige el texto de abajo antes de continuar — la lectura automática de letra manuscrita se equivoca seguido. Un compromiso por línea, con el formato <strong>Nombre: compromiso</strong> (también sirve con " - "). Si la pizarra tenía columnas separadas de nombres y compromisos, es probable que el orden haya quedado mezclado — corrígelo aquí a mano si hace falta.</div>
+    <textarea id="ocr-text" rows="10" style="width:100%; font-family:monospace; font-size:13px;">${esc(recognizedText.trim())}</textarea>
+    <div class="hint-box" style="margin-top:8px;">Cada responsable igual se debe elegir a mano después de agregarlos, para evitar asignarle un compromiso a la persona equivocada por un error de lectura.</div>`;
+  document.getElementById('ocr-footer').innerHTML = `
+    <div></div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-secondary" id="ocr-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="ocr-accept">Agregar estos compromisos</button>
+    </div>`;
+  document.getElementById('ocr-cancel').addEventListener('click', close);
+  document.getElementById('ocr-accept').addEventListener('click', () => {
+    const text = document.getElementById('ocr-text').value;
+    const rows = parsePizarraText(text, assignable);
+    if (!rows.length) { toast('No se reconoció ningún compromiso en el texto', 'error'); return; }
+    close();
+    onAccept(rows);
+    const withoutMatch = rows.filter((r) => !r.assigneeId).length;
+    toast(`Se agregaron ${rows.length} compromiso${rows.length === 1 ? '' : 's'}${withoutMatch ? ` — ${withoutMatch} sin responsable identificado, elígelo a mano` : ''} — revísalos antes de guardar`);
+  });
+}
+
 async function openMeetingModal(presetType) {
   let assignable;
   try { assignable = await api('/meetings/assignable-users'); }
@@ -5284,7 +5447,11 @@ async function openMeetingModal(presetType) {
             <div class="field">
               <label>Compromisos (opcional — también se pueden agregar después)</label>
               <div id="mt-commitments"></div>
-              <button type="button" class="btn btn-secondary btn-sm" id="mt-add-commitment">+ Agregar compromiso</button>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-add-commitment">+ Agregar compromiso</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-photo-commitments">📷 Leer pizarra (foto)</button>
+              </div>
+              <input type="file" id="mt-photo-input" accept="image/*" capture="environment" style="display:none;" />
             </div>
           </form>
         </div>
@@ -5321,6 +5488,46 @@ async function openMeetingModal(presetType) {
   };
   document.getElementById('mt-add-commitment').addEventListener('click', addRow);
   addRow();
+
+  // "Leer pizarra": abre el selector de foto (capture="environment" prefiere
+  // la cámara trasera en el celular) y, con lo que la persona confirme en el
+  // panel de revisión, agrega una fila de compromiso por cada línea — ver
+  // openPizarraOcrPanel más arriba.
+  document.getElementById('mt-photo-commitments').addEventListener('click', () => {
+    document.getElementById('mt-photo-input').click();
+  });
+  document.getElementById('mt-photo-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = ''; // permite volver a elegir la misma foto de nuevo después
+    if (!file) return;
+    openPizarraOcrPanel(file, assignable, (rows) => {
+      // Al abrir el formulario ya queda una fila de compromiso vacía por
+      // defecto (ver addRow() más abajo) — si nadie la tocó, se quita antes
+      // de agregar las de la pizarra, porque si no sus campos "requeridos"
+      // vacíos bloquean silenciosamente "Crear acta" más adelante.
+      const existingRows = Array.from(commitmentsBox.querySelectorAll('.commitment-row'));
+      if (existingRows.length === 1) {
+        const only = existingRows[0];
+        const isUntouched = !only.querySelector('.cr-desc').value.trim() && !only.querySelector('.cr-assignee').value;
+        if (isUntouched) only.remove();
+      }
+      rows.forEach(({ description, assigneeId }) => {
+        addRow();
+        const row = commitmentsBox.lastElementChild;
+        const descInput = row.querySelector('.cr-desc');
+        descInput.value = description;
+        // Los valores puestos por JS no disparan 'input'/'change' solos —
+        // se avisan a mano para que wireUnsavedChangesGuard note el cambio
+        // (si no, cancelar después de leer la pizarra no preguntaría nada).
+        descInput.dispatchEvent(new Event('input', { bubbles: true }));
+        if (assigneeId) {
+          const select = row.querySelector('.cr-assignee');
+          select.value = String(assigneeId);
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    });
+  });
 
   const mtGuardedClose = wireUnsavedChangesGuard(document.getElementById('mt-form'));
   document.getElementById('mt-modal-close').addEventListener('click', mtGuardedClose);

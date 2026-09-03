@@ -24,6 +24,13 @@
   <div id="app">
     <div class="loading-screen"><div class="spinner"></div></div>
   </div>
+  <!-- Lee fotos de la pizarra para armar compromisos de una acta (ver
+       "📷 Leer pizarra" en Nueva Acta) — corre entera en el navegador de la
+       persona, no se manda ninguna foto a nuestro servidor ni a nadie. Si el
+       celular no tiene internet en ese momento, no llega a cargar y el botón
+       avisa que no está disponible; el resto de la app sigue funcionando
+       normal (los compromisos siempre se pueden escribir a mano). -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
