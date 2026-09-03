@@ -988,6 +988,16 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
               <label>Teléfono (opcional)</label>
               <input type="text" name="phone" value="${esc(u.phone || '')}" placeholder="Ej: +56 9 1234 5678" />
             </div>
+            ${mandatory ? '' : `
+            <div class="field">
+              <label>📲 Notificaciones por WhatsApp (opcional, gratis)</label>
+              <div class="hint-box" style="margin:4px 0 10px;">
+                Para activarlo: (1) agrega el contacto <strong>+34 644 59 71 30</strong> en tu WhatsApp, (2) mándale el mensaje exacto <em>"I allow callmebot to send me messages"</em>, (3) el bot te responde con tu clave — pégala abajo junto a tu teléfono y presiona "Guardar". Servicio gratuito de terceros (CallMeBot), no de OrganizaSion.
+              </div>
+              <input type="text" name="whatsappPhone" value="${esc(u.whatsappPhone || '')}" placeholder="Tu teléfono, ej: 9 1234 5678" style="margin-bottom:8px;" />
+              <input type="text" name="whatsappApiKey" value="${esc(u.whatsappApiKey || '')}" placeholder="Tu clave de CallMeBot" />
+              ${u.whatsappPhone && u.whatsappApiKey ? '<button type="button" class="btn btn-ghost btn-sm" id="prof-whatsapp-test" style="margin-top:8px;">🧪 Mandarme un WhatsApp de prueba</button>' : ''}
+            </div>`}
           </form>
         </div>
         <div class="modal-footer">
@@ -1025,6 +1035,16 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
     const body = { birthDate: fd.get('birthDate'), sex: fd.get('sex'), phone: fd.get('phone') || null, profilePhoto: photoDataUri };
+    // Los campos de WhatsApp solo existen en el DOM cuando !mandatory (ver
+    // arriba) — si se mandaran igual en modo obligatorio, fd.get() devolvería
+    // null y el servidor lo interpretaría como "borrar lo guardado" (distingue
+    // undefined de null), pisando la configuración de WhatsApp de alguien solo
+    // porque le tocó completar su fecha de nacimiento. Por eso se agregan al
+    // body solo cuando el formulario realmente los tiene.
+    if (!mandatory) {
+      body.whatsappPhone = fd.get('whatsappPhone') || null;
+      body.whatsappApiKey = fd.get('whatsappApiKey') || null;
+    }
     try {
       let updated = await api('/auth/me/profile', { method: 'PUT', body });
       if (showCalling && fd.get('calling')) {
@@ -1037,6 +1057,21 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
       if (onDone) onDone();
     } catch (err) {
       document.getElementById('prof-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
+    }
+  });
+  const waTestBtn = document.getElementById('prof-whatsapp-test');
+  if (waTestBtn) waTestBtn.addEventListener('click', async () => {
+    waTestBtn.disabled = true;
+    const originalLabel = waTestBtn.textContent;
+    waTestBtn.textContent = 'Enviando...';
+    try {
+      await api('/auth/me/whatsapp-test', { method: 'POST' });
+      toast('Te mandamos un WhatsApp de prueba — revisa tu teléfono');
+    } catch (err) {
+      toast(err.message || 'No se pudo enviar el WhatsApp de prueba', 'error');
+    } finally {
+      waTestBtn.disabled = false;
+      waTestBtn.textContent = originalLabel;
     }
   });
 }

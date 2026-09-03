@@ -5,6 +5,7 @@
 // le envía si su email está cargado en la entrevista).
 
 import { sendEmail, isEmailConfigured } from './email.js';
+import { sendUserWhatsApp } from './whatsapp.js';
 
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -123,6 +124,48 @@ export async function sendCouncilPrepEmail(toEmail, toName, meeting, pendingComm
   } catch (err) {
     console.error(`[notificaciones] error enviando recordatorio de preparación de consejo a ${toEmail}:`, err.message);
   }
+}
+
+// ------------------------------------------------------------------
+// Notificaciones por WhatsApp (CallMeBot) — ver whatsapp.js.
+//
+// A diferencia del correo (que se manda al email suelto que se haya escrito
+// en la propia entrevista/compromiso, sea o no de una cuenta registrada),
+// el WhatsApp SOLO puede llegarle a una CUENTA de la app que ya activó su
+// clave de CallMeBot en "Mi Perfil" — por eso estas funciones reciben
+// directamente el objeto `user` (o null si esa entrevista/compromiso no
+// está vinculado a ninguna cuenta), y sendUserWhatsApp() ya se encarga de
+// no hacer nada si esa cuenta no tiene WhatsApp configurado.
+//
+// Alcance: por ahora solo al MIEMBRO de la entrevista (memberUserId) y al
+// RESPONSABLE del compromiso (assignedToUserId) — el entrevistador queda
+// afuera porque hoy es un campo de texto libre, sin vincularlo a una cuenta
+// registrada (a diferencia del miembro, que si se busca con el
+// autocompletado sí queda vinculado).
+// ------------------------------------------------------------------
+
+function interviewLine(iv) {
+  return `📅 ${iv.date} a las ${iv.startTime}${iv.endTime ? '-' + iv.endTime : ''}${iv.location ? ' · ' + iv.location : ''}${iv.interviewerName ? ' · con ' + iv.interviewerName : ''}`;
+}
+
+export async function sendInterviewScheduledWhatsApp(iv, memberUser) {
+  await sendUserWhatsApp(memberUser, `✅ Se agendó tu entrevista en OrganizaSion.\n${interviewLine(iv)}`, 'entrevista agendada');
+}
+
+export async function sendInterviewTodayWhatsApp(iv, memberUser) {
+  await sendUserWhatsApp(memberUser, `⏰ Recordatorio: hoy tienes una entrevista en OrganizaSion.\n${interviewLine(iv)}`, 'recordatorio de entrevista hoy');
+}
+
+export async function sendInterviewCancelledWhatsApp(iv, memberUser) {
+  await sendUserWhatsApp(memberUser, `❌ Se canceló tu entrevista en OrganizaSion.\n${interviewLine(iv)}`, 'entrevista cancelada');
+}
+
+export async function sendInterviewRescheduledWhatsApp(iv, memberUser, previous) {
+  await sendUserWhatsApp(memberUser, `🔄 Tu entrevista en OrganizaSion cambió de fecha/hora.\nAntes: ${previous.date} a las ${previous.startTime}\nAhora: ${interviewLine(iv)}`, 'entrevista reprogramada');
+}
+
+export async function sendCommitmentDueTodayWhatsApp(commitment, user, meetingTitle) {
+  await sendUserWhatsApp(user, `🎯 Recordatorio: tu compromiso vence HOY en OrganizaSion.\n"${commitment.description}" (acta: ${meetingTitle})`, 'compromiso vence hoy');
 }
 
 // Resumen diario para el Obispado (y el Administrador): un solo correo cada

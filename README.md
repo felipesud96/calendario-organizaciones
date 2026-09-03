@@ -203,7 +203,7 @@ Ya está implementado, y llega a **los dos participantes** (al líder que realiz
 - **Cambio de fecha/horario**: si se edita el día o la hora de una entrevista ya agendada, se envía de inmediato un correo mostrando el horario anterior y el nuevo. (Si además cambia el email de contacto de alguno de los dos, el recordatorio de 24 horas vuelve a habilitarse para la nueva fecha.)
 - **Preparación de consejo**: 2 días antes de la fecha ya agendada de un Consejo de Barrio o una Coordinación de Ministración, el Secretario de Barrio y el Obispado reciben un correo con los compromisos sin resolver del consejo anterior del mismo tipo (ver "Recordatorio de compromisos pendientes antes del próximo consejo" más arriba). Se envía como máximo una vez por acta.
 
-Se eligió enviar los correos **desde tu propia cuenta de Gmail** (en vez de un servicio externo tipo Resend) porque no requiere tener un dominio propio ni crear cuenta en nada nuevo — solo tu Gmail, gratis, y una "contraseña de aplicación". WhatsApp queda descartado por ahora: requiere verificación de negocio con Meta, un número dedicado y plantillas pre-aprobadas, lo que toma días.
+Se eligió enviar los correos **desde tu propia cuenta de Gmail** (en vez de un servicio externo tipo Resend) porque no requiere tener un dominio propio ni crear cuenta en nada nuevo — solo tu Gmail, gratis, y una "contraseña de aplicación". La opción de WhatsApp con la API oficial de Meta queda descartada: requiere verificación de negocio, un número dedicado y plantillas pre-aprobadas, lo que toma días y no es gratis. En vez de eso, más abajo se explica la opción que sí se implementó (CallMeBot).
 
 **Para activarlo, solo te falta hacer esto (una sola vez):**
 
@@ -216,6 +216,29 @@ Se eligió enviar los correos **desde tu propia cuenta de Gmail** (en vez de un 
 5. Guarda — Render reinicia el servicio solo. Desde ese momento, toda entrevista con el email del líder y/o del miembro cargado va a recibir sus notificaciones automáticamente, enviadas desde esa cuenta de Gmail.
 
 Gmail permite hasta 500 correos por día en una cuenta normal, muy por sobre lo que necesita un barrio. Si no configuras estas variables, la app sigue funcionando normal — simplemente las notificaciones quedan desactivadas (se ve un aviso en los logs del servidor, sin errores para los usuarios).
+
+## Notificaciones automáticas por WhatsApp (gratis, con CallMeBot)
+
+Además del correo, cada persona puede activar por su cuenta que le lleguen avisos por WhatsApp — no requiere ninguna configuración del administrador ni variables de entorno en el servidor, porque usa [CallMeBot](https://www.callmebot.com/), un servicio externo gratuito donde **cada quien activa su propia clave**.
+
+**Qué avisos llegan por WhatsApp** (independientes de los recordatorios por correo, que siguen funcionando igual):
+
+- **Entrevista agendada**: apenas se agenda una entrevista, si el miembro citado tiene su cuenta vinculada a WhatsApp.
+- **El día de tu entrevista**: un aviso la mañana del mismo día de la entrevista (a diferencia del correo, que avisa 24 horas antes).
+- **Entrevista cancelada o reprogramada**: de inmediato, igual que el correo.
+- **Tu compromiso vence hoy**: el día en que vence un compromiso de una Reunión o Consejo (a diferencia del correo, que avisa el día anterior), a quien esté a cargo.
+
+**Por qué solo llega a algunas personas y no a cualquier teléfono escrito en un formulario:** a diferencia del correo (que se manda a cualquier email que se haya escrito, tenga cuenta en la app o no), CallMeBot exige que sea **la propia persona que va a recibir el mensaje** la que active su clave — no hay forma de mandarle un WhatsApp a alguien que no haya hecho ese paso. Por eso estos avisos solo le llegan a quien: (1) tiene una cuenta en la app, (2) esa cuenta está vinculada como el miembro de la entrevista o el responsable del compromiso (no al líder/entrevistador, que hoy se guarda solo como texto libre), y (3) esa persona ya activó su WhatsApp en su perfil, como se explica abajo. Si algo de eso no se cumple, simplemente no se manda nada — no es un error.
+
+**Cómo lo activa cada persona (nadie más puede hacerlo por ella, toma 1 minuto):**
+
+1. Entra a **Mi Perfil** dentro de la app.
+2. Agrega el contacto `+34 644 59 71 30` en tu WhatsApp y mándale exactamente este mensaje: `I allow callmebot to send me messages`.
+3. El bot responde con una clave (apikey) numérica.
+4. Vuelve a **Mi Perfil**, escribe tu teléfono y pega esa clave en los campos de WhatsApp, y presiona **Guardar**.
+5. Puedes apretar "Mandarme un WhatsApp de prueba" para confirmar que quedó bien conectado, sin esperar a que se agende algo de verdad.
+
+CallMeBot es un servicio de terceros, no de OrganizaSion ni de la Iglesia — es gratuito para uso personal (no masivo) y no requiere tarjeta ni cuenta. Si en el futuro CallMeBot deja de estar disponible o cambia sus condiciones, esta función se puede desactivar sin afectar el resto de la app ni los correos.
 
 ## Estructura del proyecto
 
@@ -232,8 +255,9 @@ calendario-ward/
 │   │   ├── quarter.js        # matemática de trimestres (Presupuesto)
 │   │   ├── periods.js        # matemática de mes/trimestre/semestre/año (Rachas y Logros)
 │   │   ├── achievements.js   # cierre automático de períodos y premios (Rachas y Logros)
-│   │   ├── notifications.js  # plantillas de correo (entrevistas, compromisos, resumen diario)
-│   │   ├── reminders.js      # tarea programada: revisa y envía los correos automáticos
+│   │   ├── notifications.js  # plantillas de correo y WhatsApp (entrevistas, compromisos, resumen diario)
+│   │   ├── whatsapp.js       # envío por WhatsApp vía CallMeBot (clave propia de cada persona)
+│   │   ├── reminders.js      # tarea programada: revisa y envía los correos y WhatsApp automáticos
 │   │   └── routes/
 │   │       ├── auth-routes.js
 │   │       ├── organizations.js

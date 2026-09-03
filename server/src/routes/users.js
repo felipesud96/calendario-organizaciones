@@ -89,6 +89,11 @@ export function registerUserRoutes(router) {
         isPresident,
         calling,
         interviewAvailability: [],
+        // Notificaciones por WhatsApp (CallMeBot): cada persona activa su
+        // propia clave gratuita enviándole un mensaje al bot una sola vez —
+        // ver "Mi Perfil" en el cliente y whatsapp.js en el servidor.
+        whatsappPhone: null,
+        whatsappApiKey: null,
         createdAt: new Date().toISOString(),
       };
       if (isPresident) unmarkOtherPresidents(d, u.organizationId, u.id);

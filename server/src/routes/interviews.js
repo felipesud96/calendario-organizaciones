@@ -1,7 +1,15 @@
 import { sendJson } from '../router.js';
 import { load, withDb, nextId, interviewEligibility } from '../db.js';
 import { requireAuth } from '../guard.js';
-import { sendCancellationEmail, sendRescheduleEmail } from '../notifications.js';
+import { sendCancellationEmail, sendRescheduleEmail, sendInterviewScheduledWhatsApp, sendInterviewCancelledWhatsApp, sendInterviewRescheduledWhatsApp } from '../notifications.js';
+
+// Busca la cuenta registrada vinculada al miembro de una entrevista (si la
+// hay) — el WhatsApp (a diferencia del correo) solo le puede llegar a una
+// cuenta de la app, nunca a un teléfono suelto escrito a mano. Ver
+// notifications.js para el porqué.
+function memberUserOf(iv, data) {
+  return iv.memberUserId ? data.users.find((u) => u.id === Number(iv.memberUserId)) : null;
+}
 
 // Con quién se puede agendar una entrevista, según el Manual General: un
 // hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta
@@ -364,6 +372,9 @@ export function registerInterviewRoutes(router) {
           organizationId: Number(organizationId),
           scheduledBy: req.user.id,
           reminderSent: false,
+          // Recordatorio de "tu entrevista es hoy" por WhatsApp — aparte del
+          // de email (24h antes) — ver reminders.js / whatsapp.js.
+          whatsappTodayReminderSent: false,
           // Pendiente de verificar hasta que alguien marque ✅/❌ — ver
           // PUT /api/interviews/:id/mark más abajo.
           status: 'scheduled',
@@ -379,6 +390,12 @@ export function registerInterviewRoutes(router) {
       return rows;
     });
     const data2 = load();
+    // Punto (WhatsApp): confirmación de "entrevista agendada" — se avisa en
+    // segundo plano, no bloquea la respuesta. Ver notifications.js sobre
+    // por qué esto es nuevo (no existía como email) y por qué solo le llega
+    // al miembro si su nombre quedó vinculado a una cuenta con WhatsApp
+    // configurado.
+    for (const row of createdRows) sendInterviewScheduledWhatsApp(row, memberUserOf(row, data2));
     const [group] = groupInterviews(createdRows, data2.organizations, data2);
     sendJson(res, 201, group);
   }));
@@ -450,6 +467,7 @@ export function registerInterviewRoutes(router) {
             memberPhone: m.memberPhone,
             memberEmail: m.memberEmail,
             reminderSent: (dateOrTimeChanged || interviewerContactChanged || memberContactChanged) ? false : row.reminderSent,
+            whatsappTodayReminderSent: dateOrTimeChanged ? false : row.whatsappTodayReminderSent,
             updatedAt: new Date().toISOString(),
           });
           updated.push(row);
@@ -464,6 +482,7 @@ export function registerInterviewRoutes(router) {
             ...sharedPatch,
             scheduledBy: req.user.id,
             reminderSent: false,
+            whatsappTodayReminderSent: false,
             status: rows[0].status || 'scheduled',
             comment: rows[0].comment || '',
             markedAt: rows[0].markedAt ?? null,
@@ -482,13 +501,19 @@ export function registerInterviewRoutes(router) {
       }
       return { updatedRows: updated, removedRows: removed };
     });
+    const data2 = load();
     if (previousSchedule.date !== updatedRows[0].date || previousSchedule.startTime !== updatedRows[0].startTime) {
-      // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo.
-      for (const row of updatedRows) sendRescheduleEmail(row, previousSchedule);
+      // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo/WhatsApp.
+      for (const row of updatedRows) {
+        sendRescheduleEmail(row, previousSchedule);
+        sendInterviewRescheduledWhatsApp(row, memberUserOf(row, data2), previousSchedule);
+      }
     }
     // a quien se sacó del grupo se le avisa que esa parte quedó cancelada.
-    for (const row of removedRows) sendCancellationEmail(row);
-    const data2 = load();
+    for (const row of removedRows) {
+      sendCancellationEmail(row);
+      sendInterviewCancelledWhatsApp(row, memberUserOf(row, data2));
+    }
     const rows2 = data2.interviews.filter((i) => i.groupId === groupId);
     const [group] = groupInterviews(rows2, data2.organizations, data2);
     sendJson(res, 200, group);
@@ -543,8 +568,11 @@ export function registerInterviewRoutes(router) {
     await withDb((d) => {
       d.interviews = d.interviews.filter((i) => i.groupId !== groupId);
     });
-    // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo.
-    for (const iv of existingRows) sendCancellationEmail(iv);
+    // se avisa en segundo plano; no se bloquea la respuesta por el envío del correo/WhatsApp.
+    for (const iv of existingRows) {
+      sendCancellationEmail(iv);
+      sendInterviewCancelledWhatsApp(iv, memberUserOf(iv, data));
+    }
     sendJson(res, 200, { ok: true });
   }));
 }

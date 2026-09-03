@@ -280,6 +280,7 @@ export function registerMeetingRoutes(router) {
         status: 'pending',
         completedAt: null,
         completionComment: '',
+        whatsappDueTodaySent: false,
       }));
       const agendaItems = agendaItemsInput.map((a) => ({ id: nextId(data, 'agendaItems'), ...a }));
       const m = {
@@ -320,7 +321,7 @@ export function registerMeetingRoutes(router) {
 
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
-      m.commitments.push({ id: nextId(data, 'commitments'), ...check.value, confidential: !!body?.confidential, status: 'pending', completedAt: null, completionComment: '' });
+      m.commitments.push({ id: nextId(data, 'commitments'), ...check.value, confidential: !!body?.confidential, status: 'pending', completedAt: null, completionComment: '', whatsappDueTodaySent: false });
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));

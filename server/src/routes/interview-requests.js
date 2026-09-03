@@ -1,6 +1,7 @@
 import { sendJson } from '../router.js';
 import { load, withDb, nextId, interviewEligibility, interviewAvailabilityMatches, timesOverlap, callingLabel } from '../db.js';
 import { requireAuth, requireRole } from '../guard.js';
+import { sendInterviewScheduledWhatsApp } from '../notifications.js';
 
 // Punto 4 (ampliación) — ventana de 6 semanas hacia adelante en la que se
 // ofrecen fechas disponibles y se buscan choques de horario con entrevistas
@@ -270,6 +271,7 @@ export function registerInterviewRequestRoutes(router) {
         organizationId: r.organizationId,
         scheduledBy: req.user.id,
         reminderSent: false,
+        whatsappTodayReminderSent: false,
         status: 'scheduled',
         comment: '',
         markedAt: null,
@@ -282,6 +284,9 @@ export function registerInterviewRequestRoutes(router) {
       return iv;
     });
     const data = load();
+    // Punto (WhatsApp): quien pidió la entrevista suele ser justamente una
+    // cuenta registrada (la propia solicitante) — se avisa en segundo plano.
+    sendInterviewScheduledWhatsApp(interview, interview.memberUserId ? data.users.find((u) => u.id === Number(interview.memberUserId)) : null);
     sendJson(res, 201, {
       interview: withInterviewOrgInfo(interview, data),
       request: withRequestInfo(data.interviewRequests.find((r) => r.id === id), data),

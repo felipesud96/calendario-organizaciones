@@ -8,7 +8,11 @@
 
 import { load, withDb } from './db.js';
 import { isEmailConfigured } from './email.js';
-import { sendReminderEmail, sendCommitmentDueSoonEmail, sendDailyDigestEmail, sendCouncilPrepEmail } from './notifications.js';
+import { canSendWhatsApp } from './whatsapp.js';
+import {
+  sendReminderEmail, sendCommitmentDueSoonEmail, sendDailyDigestEmail, sendCouncilPrepEmail,
+  sendInterviewTodayWhatsApp, sendCommitmentDueTodayWhatsApp,
+} from './notifications.js';
 import { isObispadoLeader } from './routes/stake.js';
 import { computeBishopricOverview } from './routes/dashboard.js';
 import { previousMeetingOfType } from './routes/meetings.js';
@@ -74,6 +78,54 @@ async function checkCommitmentReminders() {
         const meeting = d.meetings.find((x) => x.id === m.id);
         const target = meeting?.commitments?.find((x) => x.id === c.id);
         if (target) target.commitmentReminderSent = true;
+      });
+    }
+  }
+}
+
+// Recordatorio de "tu entrevista es HOY" por WhatsApp — independiente del
+// recordatorio de email (que avisa 24 horas antes): este es aparte porque
+// el usuario lo pidió explícitamente como notificación de WhatsApp propia,
+// y porque WhatsApp (a diferencia del email) solo puede llegarle a una
+// cuenta de la app que ya vinculó su teléfono+clave de CallMeBot en "Mi
+// Perfil" — ver whatsapp.js. Se dispara una sola vez por entrevista
+// (whatsappTodayReminderSent), en cualquier momento del día de hoy (no hace
+// falta ninguna ventana de horas como el de 24h, porque "hoy" ya alcanza).
+async function checkInterviewTodayWhatsApp() {
+  const data = load();
+  const today = todayISO();
+  const due = data.interviews.filter((iv) =>
+    iv.date === today
+    && (!iv.status || iv.status === 'scheduled')
+    && !iv.whatsappTodayReminderSent
+    && iv.memberUserId
+  );
+  for (const iv of due) {
+    const memberUser = data.users.find((u) => u.id === Number(iv.memberUserId));
+    if (canSendWhatsApp(memberUser)) await sendInterviewTodayWhatsApp(iv, memberUser);
+    await withDb((d) => {
+      const target = d.interviews.find((i) => i.id === iv.id);
+      if (target) target.whatsappTodayReminderSent = true;
+    });
+  }
+}
+
+// Recordatorio de "tu compromiso vence HOY" por WhatsApp — igual espíritu
+// que el de arriba: independiente del recordatorio de email de "vence
+// mañana", y solo le llega a quien ya vinculó su WhatsApp.
+async function checkCommitmentDueTodayWhatsApp() {
+  const data = load();
+  const today = todayISO();
+  for (const m of data.meetings) {
+    if (m.status !== 'active') continue;
+    for (const c of (m.commitments || [])) {
+      if (c.status !== 'pending' || c.dueDate !== today || c.whatsappDueTodaySent) continue;
+      const assignee = data.users.find((u) => u.id === Number(c.assignedToUserId));
+      if (canSendWhatsApp(assignee)) await sendCommitmentDueTodayWhatsApp(c, assignee, m.title);
+      await withDb((d) => {
+        const meeting = d.meetings.find((x) => x.id === m.id);
+        const target = meeting?.commitments?.find((x) => x.id === c.id);
+        if (target) target.whatsappDueTodaySent = true;
       });
     }
   }
@@ -163,17 +215,27 @@ async function checkDailyDigest() {
   lastDigestDate = today;
 }
 
+// A diferencia de antes, este planificador YA NO depende de que el correo
+// (Gmail) esté configurado: las notificaciones por WhatsApp son por cuenta
+// propia de cada persona (su teléfono + su clave de CallMeBot en "Mi
+// Perfil", ver whatsapp.js) y no necesitan ninguna variable de entorno del
+// servidor. Cada función de correo sigue auto-desactivándose sola si falta
+// GMAIL_USER/GMAIL_APP_PASSWORD (isEmailConfigured() adentro de cada una),
+// así que igual conviene arrancar siempre el planificador.
 export function startReminderScheduler() {
-  if (!isEmailConfigured()) {
-    console.log('[recordatorios] desactivados: falta GMAIL_USER o GMAIL_APP_PASSWORD en las variables de entorno.');
-    return;
+  if (isEmailConfigured()) {
+    console.log('[recordatorios] correo (Gmail) activado — entrevistas 24h antes, compromisos que vencen mañana, preparación de consejos, y resumen diario para el Obispado.');
+  } else {
+    console.log('[recordatorios] correo (Gmail) desactivado: falta GMAIL_USER o GMAIL_APP_PASSWORD — los recordatorios por email no se enviarán, pero el WhatsApp (por cuenta propia de cada persona) sigue funcionando igual.');
   }
-  console.log('[recordatorios] activados vía Gmail — revisando cada 15 minutos (entrevistas 24h antes, compromisos que vencen mañana, preparación de consejos, y resumen diario para el Obispado).');
+  console.log('[recordatorios] WhatsApp (CallMeBot) activo por defecto — revisando cada 15 minutos quién tiene entrevista o compromiso que vence hoy y ya vinculó su cuenta.');
   const runAll = () => Promise.all([
     checkAndSendReminders(),
     checkCommitmentReminders(),
     checkCouncilPrepReminders(),
     checkDailyDigest(),
+    checkInterviewTodayWhatsApp(),
+    checkCommitmentDueTodayWhatsApp(),
   ]);
   runAll().catch((err) => console.error('[recordatorios] error inicial:', err));
   setInterval(() => {

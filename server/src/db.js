@@ -198,6 +198,27 @@ export function load() {
   for (const u of data.users) {
     if (u.calling === undefined) { u.calling = null; migrated = true; }
   }
+  // migración: usuarios creados antes de que existieran las notificaciones
+  // por WhatsApp (CallMeBot) — ver whatsapp.js y "Mi Perfil" en el cliente.
+  // Quedan sin configurar (null) hasta que la propia persona active su
+  // clave gratuita y la guarde en su perfil.
+  for (const u of data.users) {
+    if (u.whatsappPhone === undefined) { u.whatsappPhone = null; migrated = true; }
+    if (u.whatsappApiKey === undefined) { u.whatsappApiKey = null; migrated = true; }
+  }
+  // migración: entrevistas creadas antes de que existiera el recordatorio
+  // (independiente del de email) de "tu entrevista es hoy" por WhatsApp.
+  for (const iv of data.interviews) {
+    if (iv.whatsappTodayReminderSent === undefined) { iv.whatsappTodayReminderSent = false; migrated = true; }
+  }
+  // migración: compromisos creados antes de que existiera el recordatorio
+  // por WhatsApp de "tu compromiso vence hoy" (independiente del de email,
+  // que avisa el día anterior).
+  for (const m of data.meetings) {
+    for (const c of (m.commitments || [])) {
+      if (c.whatsappDueTodaySent === undefined) { c.whatsappDueTodaySent = false; migrated = true; }
+    }
+  }
   // migración: solicitudes de entrevista creadas antes de que existiera la
   // opción de pedirla con un líder específico.
   for (const r of data.interviewRequests) {

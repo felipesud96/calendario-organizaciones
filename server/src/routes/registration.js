@@ -150,6 +150,8 @@ export function registerRegistrationRoutes(router) {
         isPresident,
         calling,
         interviewAvailability: [],
+        whatsappPhone: null,
+        whatsappApiKey: null,
         createdAt: new Date().toISOString(),
       };
       if (isPresident) unmarkOtherPresidents(d, u.organizationId, u.id);

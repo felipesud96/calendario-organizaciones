@@ -2,6 +2,7 @@ import { sendJson } from '../router.js';
 import { load, withDb, resolveCallingAndPresident, unmarkOtherPresidents, PRESIDENT_ORGS } from '../db.js';
 import { hashPassword, verifyPassword, createSession, destroySession, publicUser } from '../auth.js';
 import { requireAuth, requireRole } from '../guard.js';
+import { sendWhatsApp, normalizeWhatsAppPhone } from '../whatsapp.js';
 
 export function registerAuthRoutes(router) {
   router.post('/api/auth/login', async (req, res, params, body) => {
@@ -84,11 +85,37 @@ export function registerAuthRoutes(router) {
       if (body?.sex !== undefined) u.sex = body.sex || null;
       if (body?.phone !== undefined) u.phone = body.phone || null;
       if (body?.profilePhoto !== undefined) u.profilePhoto = body.profilePhoto || null;
+      // Notificaciones por WhatsApp (CallMeBot) — cada persona activa y
+      // guarda su propia clave desde acá, ver whatsapp.js.
+      if (body?.whatsappPhone !== undefined) u.whatsappPhone = String(body.whatsappPhone || '').trim() || null;
+      if (body?.whatsappApiKey !== undefined) u.whatsappApiKey = String(body.whatsappApiKey || '').trim() || null;
       return u;
     });
     const data = load();
     const org = updated.organizationId ? data.organizations.find((o) => o.id === updated.organizationId) : null;
     sendJson(res, 200, { ...publicUser(updated), organization: org || null });
+  }));
+
+  // Manda un WhatsApp de prueba con lo que la persona tenga guardado en ese
+  // momento en su perfil — para que sepa de inmediato si su teléfono/clave
+  // de CallMeBot quedaron bien puestos, sin tener que esperar a la próxima
+  // entrevista o compromiso de verdad.
+  router.post('/api/auth/me/whatsapp-test', requireAuth(async (req, res) => {
+    const data = load();
+    const user = data.users.find((u) => u.id === req.user.id);
+    if (!user?.whatsappPhone || !user?.whatsappApiKey) {
+      return sendJson(res, 400, { error: 'Primero guarda tu teléfono y tu clave de CallMeBot' });
+    }
+    try {
+      await sendWhatsApp({
+        phone: normalizeWhatsAppPhone(user.whatsappPhone),
+        apikey: user.whatsappApiKey,
+        text: '✅ ¡Tu WhatsApp quedó conectado a OrganizaSion! Aquí llegarán tus avisos de entrevistas y compromisos.',
+      });
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 400, { error: `No se pudo enviar: ${err.message}` });
+    }
   }));
 
   // Agenda semanal de entrevistas (Punto 4, ampliación): un líder declara en
