@@ -97,6 +97,58 @@ function wireEmptyStateCta(id, fn) {
   if (btn) btn.addEventListener('click', fn);
 }
 
+// Punto 100: dondequiera que se muestre (no se edite) un teléfono de
+// contacto, se agrega un enlace directo a WhatsApp Web (wa.me) para no
+// tener que copiarlo a mano y pegarlo en otra app. wa.me exige el número en
+// formato internacional sin "+" ni espacios — como en esta app los
+// teléfonos casi siempre se escriben al estilo chileno ("+56 9 1234 5678"
+// o, más suelto, "9 1234 5678" / "912345678"), si después de limpiar el
+// número queda un celular de 9 dígitos que empieza con 9 (formato chileno
+// sin código de país), se le antepone el 56 — igual que el placeholder
+// "+56 9 ..." que ya se usa en los formularios de esta misma app. Si el
+// número ya trae otro código de país (más de 9 dígitos), se deja tal cual.
+function waLink(rawPhone) {
+  const digits = String(rawPhone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  const intl = (digits.length === 9 && digits.startsWith('9')) ? `56${digits}` : digits;
+  return `https://wa.me/${intl}`;
+}
+// Envuelve el texto de un teléfono ya mostrado (esc() ya aplicado por quien
+// llama) con un link a WhatsApp — se abre en pestaña nueva para no perder
+// el estado de la app actual.
+function phoneWithWhatsAppHtml(rawPhone, displayHtml) {
+  const link = waLink(rawPhone);
+  if (!link) return displayHtml;
+  return `<a href="${esc(link)}" target="_blank" rel="noopener" class="whatsapp-link" title="Abrir en WhatsApp">${displayHtml} <span aria-hidden="true">💬</span></a>`;
+}
+
+// Punto 76 (idea de UX): reemplaza los emojis más estructurales/repetidos
+// de la interfaz (barra superior, y los botones de acción más comunes:
+// editar/eliminar/candado) por un pequeño set de íconos SVG en línea,
+// estilo "line icons" consistente — se ve más profesional que emoji, que
+// varían de tamaño/estilo según el sistema operativo de quien lo mira. No
+// es un reemplazo exhaustivo de cada emoji de la app (son miles de líneas);
+// se priorizaron los que aparecen en casi todas las pantallas o se repiten
+// muchas veces, que es donde más se nota la inconsistencia visual.
+// `size` en px; hereda color de texto (stroke="currentColor") para que
+// combine con cualquier botón/tema sin tener que declarar un color aparte.
+const ICON_PATHS = {
+  search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  church: '<path d="M12 2v4"/><path d="M9 4h6"/><path d="M12 8 4 14v8h16v-8Z"/><path d="M9 22v-6h6v6"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-3.9"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+};
+function icon(name, size = 16) {
+  const paths = ICON_PATHS[name];
+  if (!paths) return '';
+  return `<svg class="icon-svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
 // "Mostrar más opciones": colapsa los campos menos usados de un formulario
 // (tipo Reunión, actividad de todo el Barrio, otras organizaciones
 // involucradas, repetición) detrás de un toggle, para que el formulario no
@@ -414,7 +466,7 @@ function involvedOrgsBadgesHtml(item) {
 // Prefijo visual para distinguir una Reunión (privada) de una Actividad
 // (pública) en cualquier listado.
 function eventTitlePrefix(item) {
-  return item.isMeeting ? '🔒 ' : '';
+  return item.isMeeting ? icon('lock') + ' ' : '';
 }
 
 // Como eventTitlePrefix, pero también sabe mostrar el prefijo de una
@@ -1458,6 +1510,21 @@ function isObispadoUser() {
 function canSeeBishopricPanelTab() {
   return isObispadoUser();
 }
+// Punto 51: el módulo de Bienestar es el más restringido de toda la app —
+// el usuario pidió explícitamente que solo lo vea el Obispado, el
+// presidente del Cuórum de Élderes y la presidenta de Sociedad de Socorro,
+// ni siquiera los 3 llamamientos de apoyo al Obispado (que sí ven casi todo
+// lo demás vía isObispadoUser). Por eso NO se reutiliza isObispadoUser acá:
+// se exige explícitamente "es el/la titular" (isPresident) de esas dos
+// organizaciones, calcado del mismo criterio que usa el servidor en
+// isWelfareCommitteeMember() (routes/welfare.js).
+const WELFARE_COMMITTEE_ORGS = ['Cuórum de Élderes', 'Sociedad de Socorro'];
+function canSeeWelfareTab() {
+  if (!state.user) return false;
+  if (isObispadoUser()) return true;
+  if (state.user.role !== 'leader' || !state.user.isPresident) return false;
+  return !!(state.user.organization && WELFARE_COMMITTEE_ORGS.includes(state.user.organization.name));
+}
 
 // Definición de cada pestaña posible del menú principal. El orden final
 // para cada perfil lo decide tabOrderFor() más abajo — no hay un único
@@ -1469,6 +1536,7 @@ const TAB_DEFS = {
   myActivities: { label: 'Mis Actividades', visible: canSeeMyActivitiesTab },
   interviews: { label: 'Entrevistas', visible: canSeeInterviewsTab },
   meetings: { label: 'Reuniones y Consejos', visible: canSeeMeetingsTab },
+  welfare: { label: '🤲 Bienestar', visible: canSeeWelfareTab },
   cleaning: { label: 'Asignaciones', visible: canSeeAssignmentsTab },
   budget: { label: 'Presupuesto', visible: canSeeBudgetTab },
   stats: { label: 'Estadísticas', visible: canSeeStatsTab },
@@ -1484,13 +1552,15 @@ function tabOrderFor() {
     // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
     // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
     // semanal) van primero, Estadísticas al final por ser lo más ocasional.
-    return ['calendar', 'meetings', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'admin'];
+    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'admin'];
   }
   if (canSeeInterviewsTab()) {
     // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
     // Sociedad de Socorro): Mis Actividades y Entrevistas primero, por ser
-    // las más accionables día a día.
-    return ['calendar', 'myActivities', 'interviews', 'meetings', 'budget', 'stats'];
+    // las más accionables día a día. Bienestar (Punto 51) va justo después
+    // de Reuniones — solo la presidencia (isPresident) de estas mismas dos
+    // organizaciones llega a verlo de verdad (canSeeWelfareTab lo filtra).
+    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats'];
   }
   // Líder de una organización sin entrevistas, o Miembro (a este último le
   // queda filtrado solo Calendario + Mis Actividades de todas formas).
@@ -1544,10 +1614,10 @@ function render() {
         <div class="topbar-title">${BRAND_WORDMARK_HTML}<small>${esc(u.organization ? u.organization.name : 'Vista general')}</small></div>
       </div>
       <div class="topbar-right">
-        ${canSeeBishopricPanelTab() ? `<button type="button" class="icon-btn topbar-icon-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" id="bishopric-toggle" title="Panel de Obispado">⛪</button>` : ''}
-        <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">🔍</button>
-        <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">🔔<span class="notif-badge" id="notif-badge" hidden></span></button>
-        <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">❓</button>
+        ${canSeeBishopricPanelTab() ? `<button type="button" class="icon-btn topbar-icon-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" id="bishopric-toggle" title="Panel de Obispado">${icon('church')}</button>` : ''}
+        <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">${icon('search')}</button>
+        <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">${icon('bell')}<span class="notif-badge" id="notif-badge" hidden></span></button>
+        <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">${icon('help')}</button>
         <div class="user-chip" id="my-profile-btn" title="Mi Perfil" style="cursor:pointer;">
           ${userAvatarHtml(u)}
           <div>
@@ -1591,6 +1661,7 @@ function renderCurrentView() {
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
   if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
   if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
+  if (state.view === 'welfare' && !canSeeWelfareTab()) state.view = 'calendar';
   if (state.view === 'cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   if (state.view === 'bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
@@ -1603,6 +1674,7 @@ function renderCurrentView() {
   else if (state.view === 'interviews') renderInterviewsView();
   else if (state.view === 'budget') renderBudgetView();
   else if (state.view === 'meetings') renderMeetingsView();
+  else if (state.view === 'welfare') renderWelfareView();
   else if (state.view === 'cleaning') renderAssignmentsView();
   else if (state.view === 'stats') renderStatsView();
   else if (state.view === 'admin') renderAdminView();
@@ -2231,7 +2303,7 @@ function openReadOnlyModal(item, kind) {
           <div class="ro-detail-row">🕐 ${kind === 'stake' && item.allDay ? 'Todo el día' : esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
           ${item.location ? `<div class="ro-detail-row">📍 ${esc(locationDisplay(item))}</div>` : ''}
           ${kind === 'interview' && item.interviewerName ? `<div class="ro-detail-row">🧑‍💼 ${esc(item.interviewerName)}</div>` : ''}
-          ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">📞 ${esc(item.memberPhone)}</div>` : ''}
+          ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">${phoneWithWhatsAppHtml(item.memberPhone, '📞 ' + esc(item.memberPhone))}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
           ${kind === 'event' && item.supervisingAdults && item.supervisingAdults.length ? `<div class="ro-detail-row">🧑‍🤝‍🧑 Adultos supervisores: ${item.supervisingAdults.map(esc).join(', ')}</div>` : ''}
@@ -2497,7 +2569,7 @@ function openLeaderAvailabilityModal() {
             <label>Hasta</label>
             <input type="time" data-field="endTime" data-row="${r.key}" value="${esc(r.endTime || '22:00')}" />
           </div>
-          <button type="button" class="btn btn-ghost btn-sm avail-remove" data-row="${r.key}" title="Quitar" style="align-self:flex-end;">🗑️</button>
+          <button type="button" class="btn btn-ghost btn-sm avail-remove" data-row="${r.key}" title="Quitar" style="align-self:flex-end;">${icon('trash')}</button>
         </div>
       </div>`).join('') : '<div class="hint-box" style="margin-top:0;">Todavía no has declarado ningún día habitual — puedes seguir agendando entrevistas manualmente igual.</div>';
     list.querySelectorAll('select[data-field], input[data-field]').forEach((el) => {
@@ -2843,7 +2915,7 @@ function supervisingAdultRowHtml(name = '') {
   return `
     <div class="commitment-row" style="display:flex; align-items:center; gap:8px; padding:0; border:none; margin-bottom:8px;">
       <input type="text" class="sa-name-input" required placeholder="Nombre del adulto" value="${esc(name)}" style="flex:1;" />
-      <button type="button" class="btn btn-ghost btn-sm sa-remove">🗑️</button>
+      <button type="button" class="btn btn-ghost btn-sm sa-remove">${icon('trash')}</button>
     </div>`;
 }
 
@@ -3148,7 +3220,7 @@ function interviewPendingCardHtml(iv) {
       <span class="org-dot" style="background:${iv.organizationColor}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
-        <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + esc(iv.memberPhone) : ''}</div>
+        <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + phoneWithWhatsAppHtml(iv.memberPhone, esc(iv.memberPhone)) : ''}</div>
         <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
       </div>
       <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
@@ -3379,7 +3451,7 @@ function interviewHistoryCardHtml(iv) {
         <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
       </div>
       <div class="lc-when">${esc(fmtDateHuman(iv.date))}</div>
-      ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm iv-history-delete" data-id="${iv.id}" title="Eliminar del historial">🗑️</button></div>` : ''}
+      ${canScheduleInterviewsFor(iv.organizationId) ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm iv-history-delete" data-id="${iv.id}" title="Eliminar del historial">${icon('trash')}</button></div>` : ''}
     </div>`;
 }
 
@@ -3703,7 +3775,7 @@ async function openInterviewModal(existing = null) {
             <div class="field"><input type="email" class="iv-row-email" placeholder="Email (opcional)" value="${esc(email || '')}" /></div>
           </div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm iv-row-remove" title="Quitar a esta persona">🗑️</button>
+        <button type="button" class="btn btn-ghost btn-sm iv-row-remove" title="Quitar a esta persona">${icon('trash')}</button>
       </div>
     </div>`;
   const wireIvMemberRow = (rowEl, rowId) => {
@@ -4110,7 +4182,7 @@ function budgetExpenseRowHtml(e, canEdit) {
       </div>
       <div style="display:flex; align-items:center; gap:10px;">
         <strong>${fmtMoney(e.amount)}</strong>
-        ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm budget-edit-expense" title="Editar">✏️</button><button type="button" class="btn btn-ghost btn-sm budget-delete-expense" title="Eliminar">🗑️</button>` : ''}
+        ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm budget-edit-expense" title="Editar">${icon('edit')}</button><button type="button" class="btn btn-ghost btn-sm budget-delete-expense" title="Eliminar">${icon('trash')}</button>` : ''}
       </div>
     </div>`;
 }
@@ -4275,7 +4347,7 @@ function expenseRequestRowHtml(r, opts = {}) {
         <textarea class="exp-req-reject-comment" placeholder="Motivo del rechazo (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
         <button type="button" class="btn btn-danger btn-sm exp-req-reject-save" data-id="${r.id}">Confirmar rechazo</button>
       </div>` : ''}
-      ${showWithdraw ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm exp-req-withdraw" data-id="${r.id}">🗑️ Retirar solicitud</button></div>` : ''}
+      ${showWithdraw ? `<div class="lc-actions"><button type="button" class="btn btn-ghost btn-sm exp-req-withdraw" data-id="${r.id}">${icon('trash')} Retirar solicitud</button></div>` : ''}
     </div>`;
 }
 
@@ -5057,7 +5129,7 @@ function meetingCardHtml(m) {
   return `
     <div class="list-card meeting-card" data-id="${m.id}" style="cursor:pointer;">
       <div class="lc-main">
-        <div class="lc-title">${m.confidential ? '🔒 ' : ''}${esc(m.title)}${typeLabel ? ` <span class="status-pill status-gray">${typeLabel}</span>` : ''}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
+        <div class="lc-title">${m.confidential ? icon('lock') + ' ' : ''}${esc(m.title)}${typeLabel ? ` <span class="status-pill status-gray">${typeLabel}</span>` : ''}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
         <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
       </div>
     </div>`;
@@ -5108,7 +5180,7 @@ async function openMeetingModal(presetType) {
           <input type="date" class="cr-due" required />
         </div>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm cr-remove">🗑️ Quitar compromiso</button>
+      <button type="button" class="btn btn-ghost btn-sm cr-remove">${icon('trash')} Quitar compromiso</button>
     </div>`;
 
   // Punto 7: un tema de agenda es solo un título + quién lo presenta — las
@@ -5126,7 +5198,7 @@ async function openMeetingModal(presetType) {
           <input type="text" class="ar-presenter" placeholder="Ej: Roberto Fuentes" />
         </div>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm ar-remove">🗑️ Quitar tema</button>
+      <button type="button" class="btn btn-ghost btn-sm ar-remove">${icon('trash')} Quitar tema</button>
     </div>`;
 
   // Punto 8: "Consejo de Barrio" y "Coordinación de Ministración" son tipos
@@ -5261,17 +5333,31 @@ async function openMeetingModal(presetType) {
 const MEETING_TYPE_LABELS = { general: '', consejo_barrio: '⛪ Consejo de Barrio', coordinacion_ministracion: '🤝 Coordinación de Ministración' };
 
 // Punto 16 (idea de UX basada en el Manual General): en vez de una nota
-// libre, un tema de Consejo de Barrio / Coordinación de Ministración sigue
-// el patrón de consejo del Manual (18.2 y 4.3) — necesidad detectada →
-// análisis → acuerdo tomado → seguimiento asignado.
+// libre, un tema de Consejo de Barrio sigue el patrón de consejo del
+// Manual (18.2 y 4.3) — necesidad detectada → análisis → acuerdo tomado →
+// seguimiento asignado.
+//
+// Punto 64: Coordinación de Ministración usa su PROPIO patrón de 3 campos
+// (Manual General 21.2, más operativo) — ¿quién necesita ayuda? → ¿qué se
+// hará? → ¿quién lo hará? — en vez del patrón de 4 campos de Consejo de
+// Barrio. `agendaPatternFor` devuelve cuál de los dos patrones (o ninguno,
+// para actas "general") aplica a un tipo de acta.
+function agendaPatternFor(type) {
+  if (type === 'consejo_barrio') return 'consejo';
+  if (type === 'coordinacion_ministracion') return 'ministracion';
+  return null;
+}
+
+// Se mantiene por compatibilidad con cualquier otro lugar que solo
+// necesite saber "¿esto sigue algún patrón de consejo especial?".
 function isCouncilMeetingType(type) {
-  return type === 'consejo_barrio' || type === 'coordinacion_ministracion';
+  return agendaPatternFor(type) !== null;
 }
 
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
-  const councilPattern = isCouncilMeetingType(m.type);
+  const agendaPattern = agendaPatternFor(m.type);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
@@ -5284,7 +5370,7 @@ async function openMeetingDetailModal(m) {
             ${m.agendaItems && m.agendaItems.length ? `
               <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin-bottom:6px;">📋 Agenda</div>
               ${m.agendaItems.map((a) => {
-                if (councilPattern) {
+                if (agendaPattern === 'consejo') {
                   const councilFields = [
                     ['🧩 Necesidad', a.necesidad],
                     ['🔎 Análisis', a.analisis],
@@ -5296,6 +5382,22 @@ async function openMeetingDetailModal(m) {
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
                   ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
                   ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button>` : ''}
+                </div>`;
+                }
+                if (agendaPattern === 'ministracion') {
+                  // Punto 64: patrón propio de Coordinación de Ministración
+                  // (Manual General 21.2) — más operativo que el de Consejo
+                  // de Barrio: quién necesita ayuda, qué se hará, quién lo hará.
+                  const ministeringFields = [
+                    ['🙋 Quién necesita ayuda', a.quienNecesita],
+                    ['🛠️ Qué se hará', a.queSeHara],
+                    ['🤝 Quién lo hará', a.quienLoHara],
+                  ].filter(([, v]) => v);
+                  return `
+                <div class="commitment-detail-row" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                  ${ministeringFields.length ? ministeringFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin quién/qué/quién todavía</div>` : '')}
+                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button>` : ''}
                 </div>`;
                 }
                 return `
@@ -5313,7 +5415,7 @@ async function openMeetingDetailModal(m) {
               <div class="commitment-detail-row">
                 <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
                   <div style="min-width:0;">
-                    <div style="font-weight:600; font-size:13.5px;">${c.redacted ? '🔒 ' : ''}${esc(c.description)}</div>
+                    <div style="font-weight:600; font-size:13.5px;">${c.redacted ? icon('lock') + ' ' : ''}${esc(c.description)}</div>
                     <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Responsable: ${esc(c.assignedToName)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
                     ${c.status === 'completed' && c.completionComment ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">💬 "${esc(c.completionComment)}"</div>` : ''}
                   </div>
@@ -5327,7 +5429,7 @@ async function openMeetingDetailModal(m) {
         <div class="modal-footer">
           <div style="display:flex; gap:8px;">
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
-            ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? '🔓 Quitar confidencialidad' : '🔒 Marcar confidencial'}</button>` : ''}
+            ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
           </div>
           <div><button class="btn btn-secondary" id="md-close">Cerrar</button></div>
         </div>
@@ -5412,18 +5514,25 @@ function openAddAgendaItemModal(m) {
 }
 
 function openEditAgendaNotesModal(m, item) {
-  const councilPattern = isCouncilMeetingType(m.type);
+  const agendaPattern = agendaPatternFor(m.type);
   const modalRoot = document.getElementById('modal-root');
-  // Punto 16: en Consejo de Barrio / Coordinación de Ministración se pide
-  // el patrón de consejo del Manual General en vez de una nota libre —
-  // necesidad → análisis → acuerdo → seguimiento — cada campo opcional para
-  // no obligar a llenarlo todo de una sola vez durante la reunión.
-  const bodyHtml = councilPattern ? `
+  // Punto 16: en Consejo de Barrio se pide el patrón de consejo del Manual
+  // General en vez de una nota libre — necesidad → análisis → acuerdo →
+  // seguimiento. Punto 64: Coordinación de Ministración pide su propio
+  // patrón de 3 campos — quién necesita ayuda → qué se hará → quién lo
+  // hará. En ambos casos cada campo es opcional, para no obligar a llenarlo
+  // todo de una sola vez durante la reunión.
+  const bodyHtml = agendaPattern === 'consejo' ? `
             <div class="hint-box" style="margin-top:0;">Patrón de consejo del Manual General: qué necesidad se detectó, qué se analizó, qué se acordó, y cómo se le hará seguimiento.</div>
             <div class="field"><label>🧩 Necesidad</label><textarea name="necesidad" rows="2">${esc(item.necesidad || '')}</textarea></div>
             <div class="field"><label>🔎 Análisis</label><textarea name="analisis" rows="2">${esc(item.analisis || '')}</textarea></div>
             <div class="field"><label>✅ Acuerdo</label><textarea name="acuerdo" rows="2">${esc(item.acuerdo || '')}</textarea></div>
             <div class="field"><label>👣 Seguimiento</label><textarea name="seguimiento" rows="2">${esc(item.seguimiento || '')}</textarea></div>
+  ` : agendaPattern === 'ministracion' ? `
+            <div class="hint-box" style="margin-top:0;">Patrón de Coordinación de Ministración: quién necesita ayuda, qué se hará, y quién lo hará.</div>
+            <div class="field"><label>🙋 Quién necesita ayuda</label><textarea name="quienNecesita" rows="2">${esc(item.quienNecesita || '')}</textarea></div>
+            <div class="field"><label>🛠️ Qué se hará</label><textarea name="queSeHara" rows="2">${esc(item.queSeHara || '')}</textarea></div>
+            <div class="field"><label>🤝 Quién lo hará</label><textarea name="quienLoHara" rows="2">${esc(item.quienLoHara || '')}</textarea></div>
   ` : `
             <div class="field"><label>Qué se decidió / notas</label><textarea name="notes" rows="4">${esc(item.notes || '')}</textarea></div>
   `;
@@ -5452,8 +5561,10 @@ function openEditAgendaNotesModal(m, item) {
   document.getElementById('an-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'an-modal-backdrop') anGuardedClose(); });
   document.getElementById('an-save').addEventListener('click', async () => {
     const fd = new FormData(document.getElementById('an-form'));
-    const body = councilPattern
+    const body = agendaPattern === 'consejo'
       ? { necesidad: fd.get('necesidad'), analisis: fd.get('analisis'), acuerdo: fd.get('acuerdo'), seguimiento: fd.get('seguimiento') }
+      : agendaPattern === 'ministracion'
+      ? { quienNecesita: fd.get('quienNecesita'), queSeHara: fd.get('queSeHara'), quienLoHara: fd.get('quienLoHara') }
       : { notes: fd.get('notes') };
     try {
       const updated = await api(`/meetings/${m.id}/agenda-items/${item.id}`, { method: 'PUT', body });
@@ -5514,6 +5625,182 @@ async function openAddCommitmentModal(m) {
     } catch (e) {
       document.getElementById('ac-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
+  });
+}
+
+// ==================================================================
+// ---------------- Bienestar (Punto 51) ----------------
+// ==================================================================
+// El módulo más confidencial de la app: casos de ayuda temporal
+// (alimento/vivienda/empleo/otro) con un log de seguimiento fechado. El
+// servidor ya rechaza con 403 a cualquiera que no sea del comité
+// (isWelfareCommitteeMember en routes/welfare.js) — canSeeWelfareTab()
+// replica el mismo criterio del lado del cliente solo para no mostrar la
+// pestaña, nunca como la verdadera barrera de seguridad.
+
+const WELFARE_CATEGORY_LABELS = { alimento: '🍞 Alimento', vivienda: '🏠 Vivienda', empleo: '💼 Empleo', otro: '📋 Otro' };
+const WELFARE_STATUS_LABELS = { abierto: 'Abierto', en_seguimiento: 'En seguimiento', cerrado: 'Cerrado' };
+const WELFARE_STATUS_PILL = { abierto: 'status-amber', en_seguimiento: 'status-blue', cerrado: 'status-gray' };
+
+async function renderWelfareView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header"><div><h2>🤲 Bienestar</h2><p>Casos de ayuda temporal y su seguimiento — visible solo para el Obispado, el presidente de Cuórum de Élderes y la presidenta de Sociedad de Socorro</p></div></div>
+    <div class="subtabs">
+      <button class="subtab-btn ${(state.welfareSubtab || 'abiertos') === 'abiertos' ? 'active' : ''}" data-tab="abiertos">Abiertos</button>
+      <button class="subtab-btn ${state.welfareSubtab === 'cerrados' ? 'active' : ''}" data-tab="cerrados">Cerrados</button>
+      <button class="subtab-btn ${state.welfareSubtab === 'todos' ? 'active' : ''}" data-tab="todos">Todos</button>
+    </div>
+    <div id="welfare-content">${skeletonCardsHtml(3)}</div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.welfareSubtab = b.dataset.tab; renderWelfareView(); }));
+  const content = document.getElementById('welfare-content');
+  let cases;
+  try { cases = await api('/welfare-cases'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const subtab = state.welfareSubtab || 'abiertos';
+  const items = subtab === 'todos'
+    ? cases
+    : subtab === 'cerrados'
+    ? cases.filter((c) => c.status === 'cerrado')
+    : cases.filter((c) => c.status !== 'cerrado');
+  content.innerHTML = `
+    <div class="section-header" style="margin-top:0;"><div></div><button class="btn btn-primary" id="wf-new">+ Nuevo caso</button></div>
+    <div class="card-list">
+      ${items.length ? items.map(welfareCaseCardHtml).join('') : emptyStateHtml('Sin casos registrados en esta vista', { id: 'wf-empty-new', label: '+ Agregar el primero' })}
+    </div>
+  `;
+  document.getElementById('wf-new').addEventListener('click', () => openWelfareCaseModal());
+  wireEmptyStateCta('wf-empty-new', () => openWelfareCaseModal());
+  content.querySelectorAll('.welfare-case-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const c = cases.find((x) => x.id === Number(card.dataset.id));
+      if (c) openWelfareCaseDetailModal(c);
+    });
+  });
+}
+
+function welfareCaseCardHtml(c) {
+  const lastAction = c.actions.length ? c.actions[c.actions.length - 1] : null;
+  return `
+    <div class="list-card welfare-case-card" data-id="${c.id}" style="cursor:pointer;">
+      <div class="lc-main">
+        <div class="lc-title">${esc(c.memberName)} <span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">— ${WELFARE_CATEGORY_LABELS[c.category] || esc(c.category)}</span></div>
+        <div class="lc-sub">${c.description ? esc(c.description).slice(0, 90) + (c.description.length > 90 ? '…' : '') : '<span style="font-style:italic;">Sin descripción</span>'}</div>
+        ${lastAction ? `<div class="lc-sub" style="margin-top:2px;">👣 Última acción: ${esc(fmtDateHuman(lastAction.date))} — ${esc(lastAction.note).slice(0, 70)}${lastAction.note.length > 70 ? '…' : ''}</div>` : ''}
+      </div>
+      <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span>
+    </div>`;
+}
+
+function openWelfareCaseModal(existing) {
+  const isEdit = !!existing;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wf-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isEdit ? 'Editar caso' : 'Nuevo caso de Bienestar'}</h3><button class="modal-close" id="wf-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="wf-error"></div>
+          <div class="hint-box" style="margin-top:0;">🔒 Este registro es confidencial — solo lo ve el comité de Bienestar (Obispado, presidente de Cuórum de Élderes, presidenta de Sociedad de Socorro).</div>
+          <form id="wf-form">
+            <div class="field"><label>Persona o familia</label><input type="text" name="memberName" required value="${esc(existing?.memberName || '')}" /></div>
+            <div class="field"><label>Categoría</label>
+              <select name="category">
+                ${Object.entries(WELFARE_CATEGORY_LABELS).map(([v, l]) => `<option value="${v}" ${existing?.category === v ? 'selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field"><label>Descripción de la necesidad</label><textarea name="description" rows="3">${esc(existing?.description || '')}</textarea></div>
+            ${isEdit ? `
+            <div class="field"><label>Estado</label>
+              <select name="status">
+                ${Object.entries(WELFARE_STATUS_LABELS).map(([v, l]) => `<option value="${v}" ${existing?.status === v ? 'selected' : ''}>${l}</option>`).join('')}
+              </select>
+            </div>` : ''}
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${isEdit ? `<button class="btn btn-danger" id="wf-delete">${icon('trash')} Eliminar</button>` : '<div></div>'}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="wf-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="wf-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const wfGuardedClose = wireUnsavedChangesGuard(document.getElementById('wf-form'));
+  document.getElementById('wf-modal-close').addEventListener('click', wfGuardedClose);
+  document.getElementById('wf-cancel').addEventListener('click', wfGuardedClose);
+  document.getElementById('wf-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wf-modal-backdrop') wfGuardedClose(); });
+  const deleteBtn = document.getElementById('wf-delete');
+  if (deleteBtn) deleteBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('¿Eliminar este caso de Bienestar? Se perderá todo su historial de seguimiento.', { title: 'Eliminar caso', confirmText: 'Eliminar', danger: true }))) return;
+    try {
+      await api(`/welfare-cases/${existing.id}`, { method: 'DELETE' });
+      closeModal();
+      toast('Caso eliminado');
+      renderWelfareView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('wf-save').addEventListener('click', async () => {
+    const form = document.getElementById('wf-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = Object.fromEntries(fd.entries());
+    try {
+      if (isEdit) await api(`/welfare-cases/${existing.id}`, { method: 'PUT', body });
+      else await api('/welfare-cases', { method: 'POST', body });
+      closeModal();
+      toast(isEdit ? 'Caso actualizado' : 'Caso creado');
+      renderWelfareView();
+    } catch (e) {
+      document.getElementById('wf-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+function openWelfareCaseDetailModal(c) {
+  const modalRoot = document.getElementById('modal-root');
+  const sortedActions = [...c.actions].sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wfd-modal-backdrop">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h3>${esc(c.memberName)}</h3><button class="modal-close" id="wfd-modal-close">×</button></div>
+        <div class="modal-body">
+          <div class="hint-box" style="margin-top:0;">${WELFARE_CATEGORY_LABELS[c.category] || esc(c.category)} · <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span></div>
+          ${c.description ? `<p style="font-size:13.5px; margin:10px 0;">${esc(c.description)}</p>` : ''}
+          <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin:14px 0 6px;">👣 Seguimiento</div>
+          <div id="wfd-actions">
+            ${sortedActions.length ? sortedActions.map((a) => `
+              <div class="commitment-detail-row">
+                <div style="font-weight:600; font-size:12.5px;">${esc(fmtDateHuman(a.date))}</div>
+                <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">${esc(a.note)}</div>
+              </div>`).join('') : emptyStateHtml('Sin acciones de seguimiento todavía', null)}
+          </div>
+          <form id="wfd-action-form" style="margin-top:12px;">
+            <div class="field"><label>Fecha</label><input type="date" name="date" value="${toISODate(new Date())}" /></div>
+            <div class="field"><label>Qué se hizo / acordó</label><textarea name="note" rows="2" required placeholder="Ej: se entregó canasta de alimentos, se coordinó con el líder de Cuórum..."></textarea></div>
+            <button type="submit" class="btn btn-secondary btn-sm">+ Agregar acción de seguimiento</button>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div><button class="btn btn-ghost" id="wfd-edit">${icon('edit')} Editar caso</button></div>
+          <div><button class="btn btn-secondary" id="wfd-close">Cerrar</button></div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('wfd-modal-close').addEventListener('click', closeModal);
+  document.getElementById('wfd-close').addEventListener('click', closeModal);
+  document.getElementById('wfd-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wfd-modal-backdrop') closeModal(); });
+  document.getElementById('wfd-edit').addEventListener('click', () => openWelfareCaseModal(c));
+  document.getElementById('wfd-action-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const updated = await api(`/welfare-cases/${c.id}/actions`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+      toast('Acción registrada');
+      openWelfareCaseDetailModal(updated);
+    } catch (err) { toast(err.message, 'error'); }
   });
 }
 
@@ -5612,7 +5899,7 @@ function cleaningFamilyRowHtml(s) {
       <div class="cfr-actions">
         <button type="button" class="btn btn-ghost btn-sm cs-mark" data-status="done" title="Sí fue">✅</button>
         <button type="button" class="btn btn-ghost btn-sm cs-mark" data-status="not_done" title="No fue">❌</button>
-        <button type="button" class="btn btn-ghost btn-sm cs-remove" title="Quitar del turno">🗑️</button>
+        <button type="button" class="btn btn-ghost btn-sm cs-remove" title="Quitar del turno">${icon('trash')}</button>
       </div>
     </div>`;
 }
@@ -5708,7 +5995,7 @@ async function openCleaningShiftModal(presetDate) {
           <input type="text" class="fr-name" required autocomplete="off" placeholder="Ej: Familia Pino" />
           <div class="fr-results" style="display:none; position:absolute; left:0; right:0; z-index:30; background:#fff; border:1px solid var(--border); border-radius:8px; margin-top:2px; max-height:200px; overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.12);"></div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm fr-remove" title="Quitar esta familia">🗑️</button>
+        <button type="button" class="btn btn-ghost btn-sm fr-remove" title="Quitar esta familia">${icon('trash')}</button>
       </div>
       <div class="fr-stats hint-box" style="margin-top:6px; display:none;"></div>
     </div>`;
@@ -5831,8 +6118,8 @@ async function renderTalksView() {
 }
 
 // editable=false (histórico) oculta "+ Agregar discursante" y los botones
-// ✏️/🗑️ de cada fila — queda de solo lectura, pero el nombre del
-// discursante se puede seguir apretando para ver su historial completo.
+// de editar/eliminar de cada fila — queda de solo lectura, pero el nombre
+// del discursante se puede seguir apretando para ver su historial completo.
 function talkDateCardHtml(date, entries, editable) {
   return `
     <div class="list-card cleaning-date-card">
@@ -5858,8 +6145,8 @@ function talkEntryRowHtml(t, editable) {
       </div>
       ${editable ? `
         <div class="cfr-actions">
-          <button type="button" class="btn btn-ghost btn-sm tk-edit" title="Editar">✏️</button>
-          <button type="button" class="btn btn-ghost btn-sm tk-remove" title="Eliminar">🗑️</button>
+          <button type="button" class="btn btn-ghost btn-sm tk-edit" title="Editar">${icon('edit')}</button>
+          <button type="button" class="btn btn-ghost btn-sm tk-remove" title="Eliminar">${icon('trash')}</button>
         </div>` : ''}
     </div>`;
 }
@@ -5978,7 +6265,7 @@ async function openTalkModal(presetDate) {
             <input type="text" class="tk-topic" placeholder="Tema del discurso (opcional)" />
           </div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm tk-row-remove" title="Quitar este discursante">🗑️</button>
+        <button type="button" class="btn btn-ghost btn-sm tk-row-remove" title="Quitar este discursante">${icon('trash')}</button>
       </div>
       <div class="tk-row-stats hint-box" style="margin-top:6px; display:none;"></div>
     </div>`;

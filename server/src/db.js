@@ -59,6 +59,16 @@ const EMPTY_DB = {
   // Obispado y el Administrador aprueban o rechazan; al aprobar se crea el
   // gasto real en `budgetExpenses`. Ver routes/budget.js.
   budgetExpenseRequests: [],
+  // Módulo "Bienestar" (Punto 51): registro confidencial de casos de ayuda
+  // temporal (alimento/vivienda/empleo/otro) con un log de seguimiento
+  // (acciones fechadas). Es el módulo más restringido de toda la app: ni
+  // siquiera los tres llamamientos de apoyo al Obispado (Secretario
+  // Ejecutivo, Secretario de Barrio, Secretario de Finanzas) lo pueden ver
+  // — está reservado explícitamente al Obispado y a las presidencias del
+  // Comité de Bienestar de Barrio (presidente de Cuórum de Élderes y
+  // presidenta de Sociedad de Socorro, Manual General 22). Ver
+  // routes/welfare.js.
+  welfareCases: [],
   // Configuración editable por el Obispado: cada cuántos días se espera un
   // Consejo de Barrio, para avisar en el Panel de Obispado si se atrasó. Ver
   // routes/ward-settings.js.
@@ -88,7 +98,7 @@ const EMPTY_DB = {
     budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1, stakeEvents: 1,
     meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1, talks: 1,
     achievementAwards: 1, achievementClosures: 1, interviewRequests: 1, budgetExpenseRequests: 1,
-    agendaItems: 1,
+    agendaItems: 1, welfareCases: 1, welfareActions: 1,
   },
 };
 

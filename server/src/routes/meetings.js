@@ -170,13 +170,24 @@ export function canSeeMeetingRecord(user, meeting, data) {
 }
 
 // Punto 16 (idea de UX basada en el Manual General): un tema de agenda de
-// Consejo de Barrio (o Coordinación de Ministración) no se completa con una
-// sola nota libre — sigue el patrón de consejo del Manual (18.2 y 4.3):
-// necesidad detectada → análisis → acuerdo tomado → seguimiento asignado.
-// `notes` se mantiene para actas de tipo "general" que no siguen este
-// patrón; los 4 campos nuevos son adicionales y, como `notes`, empiezan
-// vacíos y solo se completan después (PUT), nunca al crear el tema.
-const EMPTY_AGENDA_ITEM_NOTES = { notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '' };
+// Consejo de Barrio no se completa con una sola nota libre — sigue el
+// patrón de consejo del Manual (18.2 y 4.3): necesidad detectada → análisis
+// → acuerdo tomado → seguimiento asignado. `notes` se mantiene para actas
+// de tipo "general" que no siguen ningún patrón especial.
+//
+// Punto 64: Coordinación de Ministración NO usa el mismo patrón de 4 campos
+// que Consejo de Barrio — es una reunión más operativa (Manual General
+// 21.2), así que sigue su propio patrón de 3 campos: ¿quién necesita
+// ayuda? → ¿qué se hará? → ¿quién lo hará?. Todos los campos (de ambos
+// patrones) viven en el mismo objeto — el servidor los acepta y los guarda
+// sin distinguir por tipo de acta; es el CLIENTE el que decide, según
+// `meeting.type`, cuál subconjunto mostrar/editar (ver isCouncilMeetingType
+// / meetingAgendaFields en app.js). Todos empiezan vacíos y solo se
+// completan después (PUT), nunca al crear el tema.
+const EMPTY_AGENDA_ITEM_NOTES = {
+  notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '',
+  quienNecesita: '', queSeHara: '', quienLoHara: '',
+};
 
 function validCommitmentInput(raw, assignableIds) {
   const description = String(raw?.description || '').trim();
@@ -361,6 +372,10 @@ export function registerMeetingRoutes(router) {
         analisis: body?.analisis !== undefined ? String(body.analisis).trim() : it.analisis,
         acuerdo: body?.acuerdo !== undefined ? String(body.acuerdo).trim() : it.acuerdo,
         seguimiento: body?.seguimiento !== undefined ? String(body.seguimiento).trim() : it.seguimiento,
+        // Punto 64: patrón propio de Coordinación de Ministración.
+        quienNecesita: body?.quienNecesita !== undefined ? String(body.quienNecesita).trim() : it.quienNecesita,
+        queSeHara: body?.queSeHara !== undefined ? String(body.queSeHara).trim() : it.queSeHara,
+        quienLoHara: body?.quienLoHara !== undefined ? String(body.quienLoHara).trim() : it.quienLoHara,
       });
     });
     const data = load();

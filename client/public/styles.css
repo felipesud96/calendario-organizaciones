@@ -663,6 +663,9 @@ table.data-table tr:last-child td { border-bottom: none; }
 .status-red { background: var(--danger-light); color: var(--danger); }
 .status-green { background: #dcfce7; color: #15803d; }
 .status-gray { background: #f1f5f9; color: #64748b; }
+/* Punto 51: "en seguimiento" de un caso de Bienestar — ni verde (todavía
+   no está resuelto) ni ámbar (ya se está actuando, no es "sin empezar"). */
+.status-blue { background: #dbeafe; color: #1d4ed8; }
 
 .commitment-row {
   border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px;
@@ -691,6 +694,13 @@ table.data-table tr:last-child td { border-bottom: none; }
 /* Nombre clicable (ej. discursante, ganador de un logro) que abre un detalle */
 .clickable-name { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .clickable-name:hover { color: var(--celeste-dark); }
+/* Punto 100: teléfono mostrado como enlace directo a WhatsApp Web */
+.whatsapp-link { color: inherit; text-decoration: none; }
+.whatsapp-link:hover { text-decoration: underline; color: #15803d; }
+
+/* Punto 76: set de íconos SVG en línea (barra superior, editar/eliminar/candado) */
+.icon-svg { vertical-align: -3px; flex-shrink: 0; }
+.topbar-icon-btn .icon-svg { vertical-align: -1px; }
 
 /* ---------- Estadísticas ---------- */
 .stats-cards { display: flex; gap: 12px; flex-wrap: wrap; }
