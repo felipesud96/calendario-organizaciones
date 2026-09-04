@@ -1,0 +1,134 @@
+import { sendJson } from '../router.js';
+import { load, withDb } from '../db.js';
+import { requireAuth } from '../guard.js';
+import { STAKE_COLOR, syncStakeCalendar, isBlockingStakeEvent, findStakeConflicts } from '../stakeCalendar.js';
+
+// Igual que en budget.js: "líder de Obispado" es quien puede disparar una
+// sincronización manual, cambiar la configuración, o autorizar ("dar el OK")
+// una actividad que choca con una de Estaca — además del Administrador (los
+// demás líderes y los miembros solo pueden consultar).
+export function isObispadoLeader(user, data) {
+  if (user.role === 'admin') return true;
+  if (user.role !== 'leader') return false;
+  const org = data.organizations.find((o) => o.id === Number(user.organizationId));
+  return !!org && org.name === 'Obispado';
+}
+
+// Punto 8: identifica, por nombre de organización, a la persona marcada
+// como presidente/titular (ver isPresident en users.js) — usado para dirigir
+// el aviso de la reunión trimestral de Coordinación de Ministración
+// exactamente al Obispo, al presidente de Cuórum de Élderes y a la
+// presidenta de Sociedad de Socorro, no a "un líder" cualquiera de esas
+// organizaciones. Si nadie fue marcado todavía, devuelve null para esa
+// organización (el cliente muestra "sin definir" en vez de un nombre).
+export function presidentOf(data, orgName) {
+  const org = data.organizations.find((o) => o.name === orgName);
+  if (!org) return null;
+  const user = data.users.find((u) => u.role === 'leader' && Number(u.organizationId) === org.id && u.isPresident);
+  return user ? { id: user.id, name: user.name } : null;
+}
+
+export function keyLeadersForMinistering(data) {
+  return {
+    bishop: presidentOf(data, 'Obispado'),
+    eldersQuorumPresident: presidentOf(data, 'Cuórum de Élderes'),
+    reliefSocietyPresident: presidentOf(data, 'Sociedad de Socorro'),
+  };
+}
+
+function withStakeDisplay(ev, data) {
+  return {
+    ...ev,
+    organizationName: data.stakeCalendar?.displayName || 'Estaca',
+    organizationColor: STAKE_COLOR,
+    blocking: isBlockingStakeEvent(ev, data.stakeCalendar?.nonBlockingKeywords),
+  };
+}
+
+export function registerStakeRoutes(router) {
+  // Cualquier usuario autenticado puede ver las actividades de Estaca — son
+  // públicas dentro del barrio y afectan a cualquiera que quiera agendar algo.
+  // Si el Administrador (o el líder de Obispado) desactivó
+  // "showNonBlockingEvents", las informativas (las que no influyen a la
+  // membresía del barrio) directamente no se devuelven acá — solo quedan
+  // las que sí tienen prioridad. Esto es solo de visualización: el bloqueo
+  // (ver /api/stake-conflicts y routes/events.js) nunca dependió de las
+  // informativas, así que no cambia en nada.
+  router.get('/api/stake-events', requireAuth(async (req, res) => {
+    const data = load();
+    const query = req.query;
+    let items = data.stakeEvents || [];
+    if (query.from) items = items.filter((e) => e.date >= query.from);
+    if (query.to) items = items.filter((e) => e.date <= query.to);
+    items = items.map((e) => withStakeDisplay(e, data));
+    if (data.stakeCalendar?.showNonBlockingEvents === false) items = items.filter((e) => e.blocking);
+    items = items.sort((a, b) => (a.date + (a.startTime || '00:00')).localeCompare(b.date + (b.startTime || '00:00')));
+    sendJson(res, 200, items);
+  }));
+
+  // Estado de la sincronización — visible para cualquiera (no es información
+  // sensible, es lo mismo que muestra el calendario público de la Estaca).
+  router.get('/api/stake-calendar', requireAuth(async (req, res) => {
+    const data = load();
+    sendJson(res, 200, data.stakeCalendar);
+  }));
+
+  // Revisa si una actividad/reunión (o entrevista) que se está por agendar
+  // choca con alguna actividad de Estaca de las que SÍ bloquean (no las
+  // informativas). Centraliza acá la misma lógica que usa routes/events.js
+  // al guardar, para que el cliente pueda avisar de inmediato sin
+  // duplicarla. `canOverride` indica si quien pregunta es el líder de
+  // Obispado (o Administrador) — el único que puede autorizar igual.
+  router.post('/api/stake-conflicts', requireAuth(async (req, res, params, body) => {
+    const data = load();
+    const conflicts = findStakeConflicts(data, body || {}).map((c) => withStakeDisplay(c, data));
+    sendJson(res, 200, { conflicts, canOverride: isObispadoLeader(req.user, data) });
+  }));
+
+  // Cambiar el enlace, el nombre a mostrar, las palabras clave "no
+  // restrictivas", o si se muestran las actividades informativas:
+  // Administrador o líder de Obispado.
+  router.put('/api/stake-calendar', requireAuth(async (req, res, params, body) => {
+    const data0 = load();
+    if (!isObispadoLeader(req.user, data0)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden configurar el calendario de Estaca' });
+    }
+    const { url, displayName, nonBlockingKeywords, showNonBlockingEvents } = body || {};
+    if (!url || !/^https?:\/\//i.test(String(url).trim())) {
+      return sendJson(res, 400, { error: 'El enlace debe ser una URL válida (http o https)' });
+    }
+    const cleanUrl = String(url).trim();
+    const urlChanged = cleanUrl !== data0.stakeCalendar.url;
+    const cleanKeywords = Array.isArray(nonBlockingKeywords)
+      ? [...new Set(nonBlockingKeywords.map((k) => String(k).trim()).filter(Boolean))]
+      : data0.stakeCalendar.nonBlockingKeywords;
+    await withDb((data) => {
+      data.stakeCalendar = {
+        ...data.stakeCalendar,
+        url: cleanUrl,
+        displayName: displayName ? String(displayName).trim() : (data.stakeCalendar.displayName || 'Estaca'),
+        nonBlockingKeywords: cleanKeywords,
+        showNonBlockingEvents: typeof showNonBlockingEvents === 'boolean' ? showNonBlockingEvents : data.stakeCalendar.showNonBlockingEvents,
+      };
+    });
+    // Solo se vuelve a descargar el feed si el ENLACE cambió — el nombre a
+    // mostrar, las palabras clave y el interruptor de "mostrar informativas"
+    // son configuración puramente local, no hace falta (ni tiene sentido)
+    // pegarle a la red cada vez que se guarda algo de eso. Esto además evita
+    // que una falla de red pasajera (o un 304 mal interpretado, ya
+    // corregido) se vea como si el guardado hubiera fallado cuando lo único
+    // que se quería era, por ejemplo, ocultar las actividades informativas.
+    const meta = urlChanged ? await syncStakeCalendar() : load().stakeCalendar;
+    sendJson(res, 200, { ...meta, resynced: urlChanged });
+  }));
+
+  // Sincronizar ahora: Administrador o líder de Obispado.
+  router.post('/api/stake-calendar/sync', requireAuth(async (req, res) => {
+    const data = load();
+    if (!isObispadoLeader(req.user, data)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden sincronizar el calendario de Estaca' });
+    }
+    const meta = await syncStakeCalendar();
+    sendJson(res, 200, meta);
+  }));
+}
