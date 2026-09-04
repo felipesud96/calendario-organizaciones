@@ -27,6 +27,7 @@ import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
 import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
+import { registerAdminBackupRoutes } from './routes/adminBackup.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 import { startAchievementsScheduler } from './achievements.js';
@@ -57,6 +58,7 @@ registerInterviewRequestRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
+registerAdminBackupRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

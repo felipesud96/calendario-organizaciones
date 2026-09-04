@@ -1,0 +1,39 @@
+import fs from 'fs';
+import { DB_PATH } from '../db.js';
+
+// Ruta temporal de migración: sirve para copiar la base de datos completa
+// (server/data/db.json) de un servicio de Render a otro, por ejemplo al
+// pasar de un servicio "Node nativo" a uno "Docker" (con OCR habilitado)
+// sin perder los datos reales ya cargados (usuarios, eventos, entrevistas,
+// etc.).
+//
+// Está protegida por una variable de entorno MIGRATION_SECRET en vez de
+// por sesión de usuario, para poder llamarla con un solo comando curl
+// desde la Shell de Render (que no tiene una sesión de navegador). Si esa
+// variable de entorno no está configurada en este servicio, la ruta
+// responde 404 como si no existiera — hay que agregarla a propósito en
+// Render → Environment antes de usarla, y se recomienda borrarla de nuevo
+// apenas termine la migración.
+export function registerAdminBackupRoutes(router) {
+  router.get('/api/admin/backup-export', async (req, res) => {
+    const secret = process.env.MIGRATION_SECRET;
+    if (!secret || req.headers['x-migration-secret'] !== secret) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No encontrado' }));
+      return;
+    }
+    let raw;
+    try {
+      raw = fs.readFileSync(DB_PATH, 'utf8');
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No se pudo leer la base de datos: ' + err.message }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Content-Disposition': 'attachment; filename="db-export.json"',
+    });
+    res.end(raw);
+  });
+}
