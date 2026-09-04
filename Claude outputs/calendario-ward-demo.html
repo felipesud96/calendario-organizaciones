@@ -25,6 +25,7 @@
   --danger: #ef4444; --danger-light: #fef2f2; --success: #16a34a;
   --shadow: 0 1px 3px rgba(14,165,233,.12),0 1px 2px rgba(14,165,233,.08);
   --shadow-lg: 0 10px 30px rgba(3,105,161,.18); --radius: 12px;
+  color-scheme: light dark;
 }
 * { box-sizing: border-box; }
 html, body { margin:0; padding:0; height:100%; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; background:var(--white); color:var(--ink); }
@@ -47,6 +48,10 @@ button { font-family:inherit; cursor:pointer; }
 .field label { display:block; font-size:13px; font-weight:600; color:var(--celeste-darker); margin-bottom:6px; }
 .field input, .field select, .field textarea { width:100%; padding:10px 12px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; background:var(--white); color:var(--ink); }
 .field input:focus, .field select:focus, .field textarea:focus { outline:none; border-color:var(--celeste); box-shadow:0 0 0 3px var(--celeste-light); }
+.font-scale-picker { display:flex; gap:8px; margin-top:6px; }
+.font-scale-btn { flex:1; padding:10px 0; border:1.5px solid var(--border); border-radius:10px; background:var(--white); color:var(--ink-soft); font-weight:700; line-height:1; cursor:pointer; transition:border-color .15s ease, color .15s ease, background-color .15s ease; }
+.font-scale-btn:hover { border-color:var(--celeste); }
+.font-scale-btn.active { border-color:var(--celeste); color:var(--celeste-dark); background:var(--celeste-lighter); }
 .field textarea { resize:vertical; min-height:64px; }
 .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:10px 18px; border-radius:10px; border:none; font-size:14px; font-weight:600; }
 .btn:active { transform:translateY(1px); }
@@ -78,7 +83,26 @@ button { font-family:inherit; cursor:pointer; }
 .tabs { display:flex; gap:4px; padding:8px 20px 0; background:var(--white); border-bottom:1px solid var(--border); overflow-x:auto; }
 .tab-btn { background:none; border:none; padding:9px 16px; font-size:13.5px; font-weight:600; color:var(--ink-soft); border-bottom:2.5px solid transparent; white-space:nowrap; }
 .tab-btn.active { color:var(--celeste-darker); border-bottom-color:var(--celeste); }
+.bottom-nav { display:none; position:fixed; left:0; right:0; bottom:0; z-index:90; background:var(--white); border-top:1px solid var(--border); padding:6px 4px calc(6px + env(safe-area-inset-bottom)); box-shadow:var(--shadow-lg); }
+.bottom-nav-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; background:none; border:none; padding:6px 2px; color:var(--ink-soft); font-size:10.5px; font-weight:600; border-radius:10px; cursor:pointer; }
+.bottom-nav-icon { font-size:20px; line-height:1; }
+.bottom-nav-label { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bottom-nav-btn.active { color:var(--celeste-dark); }
+.mobile-fab { display:none; position:fixed; right:16px; z-index:91; width:56px; height:56px; border-radius:50%; border:none; background:var(--celeste); color:#fff; font-size:28px; line-height:1; align-items:center; justify-content:center; box-shadow:var(--shadow-lg); cursor:pointer; }
+.mobile-fab:active { background:var(--celeste-dark); }
+.bottom-sheet-backdrop { align-items:flex-end; }
+.bottom-sheet { background:var(--white); border-radius:18px 18px 0 0; width:100%; max-width:480px; padding:10px 10px calc(14px + env(safe-area-inset-bottom)); box-shadow:var(--shadow-lg); max-height:70vh; overflow-y:auto; animation:bottom-sheet-in 0.2s ease-out; }
+.bottom-sheet-handle { width:36px; height:4px; background:var(--border); border-radius:999px; margin:4px auto 12px; }
+.bottom-sheet-list { display:flex; flex-direction:column; gap:2px; }
+.bottom-sheet-item { display:flex; align-items:center; gap:12px; width:100%; padding:12px 10px; border:none; background:none; border-radius:10px; text-align:left; font-size:14.5px; font-weight:600; color:var(--ink); cursor:pointer; }
+.bottom-sheet-item:active { background:var(--celeste-lighter); }
+.bottom-sheet-item.active { color:var(--celeste-dark); }
+@keyframes bottom-sheet-in { from { transform:translateY(100%); } to { transform:translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .bottom-sheet { animation:none; } }
 main.view { padding:20px; max-width:1180px; margin:0 auto; width:100%; }
+main.view.view-fade-in { animation:view-fade-in .28s ease-out; }
+@keyframes view-fade-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@media (prefers-reduced-motion: reduce) { main.view.view-fade-in { animation:none; } }
 .cal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px; }
 .cal-nav { display:flex; align-items:center; gap:8px; }
 .cal-month-label { font-size:18px; font-weight:700; color:var(--celeste-darker); min-width:190px; text-align:center; text-transform:capitalize; }
@@ -127,6 +151,8 @@ main.view { padding:20px; max-width:1180px; margin:0 auto; width:100%; }
 .list-card .lc-sub { font-size:12.5px; color:var(--ink-soft); margin-top:2px; }
 .list-card .lc-when { font-size:12.5px; font-weight:700; color:var(--celeste-dark); white-space:nowrap; text-align:right; }
 .list-card .lc-actions { display:flex; gap:6px; }
+.assignment-card-content { display:flex; flex-direction:column; gap:8px; padding:12px 14px; background:var(--white); position:relative; z-index:1; }
+.assignment-swipe-action { position:absolute; top:0; right:0; bottom:0; width:92px; z-index:0; background:#16a34a; color:#fff; border:none; cursor:pointer; font-size:12px; font-weight:700; line-height:1.3; text-align:center; }
 /* Panel de Obispado: "Compromisos atrasados" y "Turnos de aseo sin
    confirmar" pueden crecer mucho a medida que se suman organizaciones — en
    vez de estirar la página hacia abajo, esas dos cajas se scrollean de
@@ -141,7 +167,12 @@ main.view { padding:20px; max-width:1180px; margin:0 auto; width:100%; }
 .bp-scroll-dots { display:flex; gap:6px; margin-top:8px; padding-left:2px; }
 .bp-scroll-dot { width:7px; height:7px; border-radius:50%; border:none; padding:0; background:var(--border); cursor:pointer; flex:0 0 auto; transition:background-color .15s ease; }
 .bp-scroll-dot.active { background:var(--celeste-dark); }
-.empty-state { text-align:center; color:var(--ink-soft); font-size:13.5px; padding:40px 10px; border:1.5px dashed var(--border); border-radius:var(--radius); }
+.empty-state { text-align:center; color:var(--ink-soft); font-size:13.5px; padding:32px 10px 36px; border:1.5px dashed var(--border); border-radius:var(--radius); animation:empty-state-in .35s ease-out; }
+.empty-state-icon { font-size:34px; line-height:1; margin-bottom:10px; opacity:.9; }
+.empty-state.compact { padding:16px 8px; }
+.empty-state.compact .empty-state-icon { font-size:21px; margin-bottom:4px; }
+@keyframes empty-state-in { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .empty-state { animation:none; } }
 .budget-card { border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; background:var(--white); margin-bottom:12px; }
 .budget-card-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
 .budget-card-name { display:flex; align-items:center; gap:8px; }
@@ -162,7 +193,7 @@ table.data-table tr:last-child td { border-bottom:none; }
 .subtab-btn { background:var(--white); border:1.5px solid var(--border); padding:6px 14px; border-radius:999px; font-size:12.5px; font-weight:600; color:var(--ink-soft); }
 .subtab-btn.active { background:var(--celeste); border-color:var(--celeste); color:white; }
 .modal-backdrop { position:fixed; inset:0; background:rgba(3,105,161,.25); display:flex; align-items:center; justify-content:center; padding:16px; z-index:100; }
-.modal { background:white; border-radius:18px; max-width:460px; width:100%; box-shadow:var(--shadow-lg); max-height:90vh; overflow-y:auto; }
+.modal { background:var(--white); border-radius:18px; max-width:460px; width:100%; box-shadow:var(--shadow-lg); max-height:90vh; overflow-y:auto; }
 .modal-header { display:flex; align-items:center; justify-content:space-between; padding:18px 20px 4px; }
 .modal-header h3 { margin:0; font-size:16px; color:var(--celeste-darker); }
 .modal-close { background:none; border:none; font-size:20px; color:var(--ink-soft); line-height:1; }
@@ -177,11 +208,15 @@ table.data-table tr:last-child td { border-bottom:none; }
 .confirm-modal-backdrop { z-index:150; }
 .confirm-modal { max-width:400px; }
 .confirm-modal-message { margin:0; font-size:14px; color:var(--ink); line-height:1.55; white-space:pre-line; }
-.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--ink); color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:200; box-shadow:var(--shadow-lg); }
+.toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#1e293b; color:white; padding:10px 18px; border-radius:10px; font-size:13px; z-index:200; box-shadow:var(--shadow-lg); }
 .toast.error { background:var(--danger); }
 .toast.success { background:var(--success); }
 @media (max-width:640px) {
-  .cal-cell { min-height:78px; } .cal-month-label { min-width:0; font-size:15px; } main.view { padding:12px; } .topbar-title small { display:none; } .bp-grid { grid-template-columns:1fr !important; }
+  .cal-cell { min-height:78px; } .cal-month-label { min-width:0; font-size:15px; } .topbar-title small { display:none; } .bp-grid { grid-template-columns:1fr !important; }
+  .tabs { display:none; }
+  .bottom-nav { display:flex; }
+  .mobile-fab { display:flex; bottom:calc(64px + 16px + env(safe-area-inset-bottom)); }
+  main.view { padding:12px 12px calc(64px + 16px + env(safe-area-inset-bottom)); }
   .topbar { padding:8px 12px; gap:6px; flex-wrap:wrap; }
   .topbar-right { gap:6px; flex:1 1 100%; justify-content:flex-end; }
   .topbar-icon-btn { width:30px; height:30px; font-size:13.5px; }
@@ -269,6 +304,26 @@ table.data-table tr:last-child td { border-bottom:none; }
 
 /* ---------- Aseo del Edificio ---------- */
 .ac-item:hover { background:#f0f4f8; }
+
+/* Autocompletar nombres ya usados (Grupo 3) */
+.ac-results {
+  display:none; position:absolute; left:0; right:0; top:100%; z-index:30; margin-top:2px;
+  background:var(--white); border:1px solid var(--border); border-radius:8px;
+  max-height:200px; overflow-y:auto; box-shadow:var(--shadow-lg);
+}
+.ac-results .ac-item { padding:8px 10px; cursor:pointer; font-size:13.5px; }
+
+/* Dictado por voz (Grupo 3) */
+.dictation-btn {
+  position:absolute; top:6px; right:6px; z-index:5;
+  width:26px; height:26px; border-radius:50%;
+  border:1px solid var(--border); background:var(--white); color:var(--ink-soft);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0;
+}
+.dictation-btn:hover { background:var(--celeste-lighter); color:var(--celeste-dark); }
+.dictation-btn.listening { background:#dc2626; border-color:#dc2626; color:#fff; animation:dictation-pulse 1.2s ease-in-out infinite; }
+@keyframes dictation-pulse { 0%,100% { box-shadow:0 0 0 0 rgba(220,38,38,.45); } 50% { box-shadow:0 0 0 6px rgba(220,38,38,0); } }
+@media (prefers-reduced-motion: reduce) { .dictation-btn.listening { animation:none; } }
 .family-row { border:1px solid var(--border); border-radius:10px; padding:10px; margin-bottom:8px; }
 .cleaning-date-card { flex-direction:column; align-items:stretch; }
 .cleaning-family-rows { margin-top:8px; }
@@ -332,9 +387,44 @@ table.data-table tr:last-child td { border-bottom:none; }
   .print-area, .print-area * { visibility:visible; }
   #diploma-print-area, .print-area { position:absolute; top:0; left:0; width:100%; }
   .modal-backdrop { position:static !important; background:none !important; }
+  .print-report, .print-report * { color:#0f172a !important; background:#ffffff !important; }
+  .print-report h2, .print-report th { color:#075985 !important; }
+  .print-report th, .print-report td { border-color:#dbeafe !important; }
 }
 
 @media (max-width:640px) { .ranking-grid { grid-template-columns:1fr; } }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --celeste: #38bdf8; --celeste-dark: #7dd3fc; --celeste-darker: #bae6fd;
+    --celeste-light: #1e3a4f; --celeste-lighter: #16283a; --white: #16212c;
+    --ink: #e7eef4; --ink-soft: #9db0c2; --border: #2a3f52;
+    --danger: #f87171; --danger-light: #3a1414; --success: #4ade80;
+    --shadow: 0 1px 3px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.3);
+    --shadow-lg: 0 10px 30px rgba(0,0,0,.5);
+  }
+  .modal-backdrop { background: rgba(0,0,0,.6); }
+  .cal-cell.other-month { background: #101a24; }
+  .cal-cell.other-month .cal-daynum { color: #4c6178; }
+  .mini-cal-cell.other-month { color: #3a5166; }
+  .role-member { background: #263141; color: #b6c2cf; }
+  .status-gray { background: #263141; color: #b6c2cf; }
+  .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+  .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+  .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
+  .ranking-top { background: #122a1c; border-color: #1f4a30; }
+  .ac-item:hover { background: #1c2b38; }
+  .btn-danger { border-color: #5c2323; }
+  .btn-danger:hover { background: #4a1c1c; }
+  .error-msg { border-color: #5c2323; }
+  .ranking-bottom { border-color: #5c2323; }
+  .diploma-border { background: #fffdf7; border-color: #0369a1; }
+  .diploma-eyebrow, .diploma-sub, .diploma-footer { color: #475569; }
+  .diploma-title { color: #075985; }
+  .diploma-body-text, .diploma-winner { color: #0f172a; }
+  .diploma-winner { border-bottom-color: #0ea5e9; }
+  .diploma-value { color: #0369a1; }
+}
 </style>
 </head>
 <body>
@@ -362,6 +452,13 @@ const PURPOSE_OPTIONS = ['Espiritual', 'Físico', 'Académico', 'Social', 'Servi
 
 function pad2(n){ return String(n).padStart(2,'0'); }
 function toISODate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+// Usada para precargar la fecha al "Duplicar actividad" (Grupo 3).
+function addDaysToISO(iso, days){
+  const [y,m,d] = iso.split('-').map(Number);
+  const date = new Date(y, m-1, d, 12);
+  date.setDate(date.getDate()+days);
+  return toISODate(date);
+}
 function todayISO(offsetDays){ const d = new Date(); d.setDate(d.getDate()+(offsetDays||0)); return toISODate(d); }
 
 const ORG_DEFS = [
@@ -968,15 +1065,15 @@ function canSeeBishopricPanelTab(){ return isObispadoLeader(currentUser); }
 // primero como ancla común a todos los perfiles; el resto se ordena por
 // cadencia de uso, ver tabOrderFor).
 const TAB_DEFS = {
-  calendar: { label: 'Calendario', visible: () => true },
-  myActivities: { label: 'Mis Actividades', visible: canSeeMyActivitiesTab },
-  interviews: { label: 'Entrevistas', visible: canSeeInterviewsTab },
-  meetings: { label: 'Reuniones y Consejos', visible: canSeeMeetingsTab },
-  welfare: { label: '🤲 Bienestar', visible: canSeeWelfareTab },
-  cleaning: { label: 'Asignaciones', visible: canSeeAssignmentsTab },
-  budget: { label: 'Presupuesto', visible: canSeeBudgetTab },
-  stats: { label: 'Estadísticas', visible: canSeeStatsTab },
-  admin: { label: 'Administración', visible: () => !!currentUser && currentUser.role==='admin' },
+  calendar: { label: 'Calendario', icon: '📅', visible: () => true },
+  myActivities: { label: 'Mis Actividades', icon: '📌', visible: canSeeMyActivitiesTab },
+  interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
+  meetings: { label: 'Reuniones y Consejos', icon: '📋', navLabel: 'Reuniones', visible: canSeeMeetingsTab },
+  welfare: { label: '🤲 Bienestar', icon: '🤲', navLabel: 'Bienestar', visible: canSeeWelfareTab },
+  cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
+  budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
+  stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
+  admin: { label: 'Administración', icon: '⚙️', navLabel: 'Admin', visible: () => !!currentUser && currentUser.role==='admin' },
 };
 function tabOrderFor(){
   if(isObispadoLeader(currentUser)){
@@ -1056,8 +1153,9 @@ function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace
 // que la persona tenga que ir a buscar el botón correspondiente en otra parte
 // de la pantalla. `cta` es opcional: { id, label }. Después de insertar el
 // HTML hay que llamar wireEmptyStateCta(id, fn) para conectar el clic.
-function emptyStateHtml(message, cta){
-  return `<div class="empty-state">
+function emptyStateHtml(message, cta, icon, compact){
+  return `<div class="empty-state${compact ? ' compact' : ''}">
+    <div class="empty-state-icon" aria-hidden="true">${esc(icon || '📭')}</div>
     <div>${esc(message)}</div>
     ${cta ? `<button type="button" class="btn btn-primary btn-sm" id="${cta.id}" style="margin-top:12px;">${esc(cta.label)}</button>` : ''}
   </div>`;
@@ -1066,6 +1164,18 @@ function wireEmptyStateCta(id, fn){
   const btn = document.getElementById(id);
   if(btn) btn.addEventListener('click', fn);
 }
+
+// Punto 96: tamaño de letra ajustable — preferencia de este dispositivo
+// (localStorage), no de la cuenta.
+const FONT_SCALE_KEY = 'organizasion_font_scale';
+const FONT_SCALE_OPTIONS = [
+  { value:'1', title:'Normal' },
+  { value:'1.15', title:'Grande' },
+  { value:'1.3', title:'Muy grande' },
+];
+function getFontScale(){ return localStorage.getItem(FONT_SCALE_KEY) || '1'; }
+function applyFontScale(scale){ document.body.style.zoom = scale; }
+function setFontScale(scale){ localStorage.setItem(FONT_SCALE_KEY, scale); applyFontScale(scale); }
 
 // Punto 100: dondequiera que se muestre (no se edite) un teléfono de
 // contacto, se agrega un enlace directo a WhatsApp Web (wa.me). Si el
@@ -1099,6 +1209,8 @@ const ICON_PATHS = {
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-3.9"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
+  mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 };
 function icon(name, size=16){
   const paths = ICON_PATHS[name];
@@ -1235,6 +1347,13 @@ function openProfileModal({ mandatory = false, onDone } = {}){
         </div>
         <div class="modal-body">
           <div id="prof-error"></div>
+          <div class="field" style="margin-bottom:16px;">
+            <label>🔤 Tamaño de letra de la app (en este celular/computador)</label>
+            <div class="font-scale-picker" id="prof-font-scale-picker">
+              ${FONT_SCALE_OPTIONS.map((opt) => `<button type="button" class="font-scale-btn ${getFontScale() === opt.value ? 'active' : ''}" data-scale="${opt.value}" style="font-size:${14 + Number(opt.value) * 6}px;" title="${esc(opt.title)}">A</button>`).join('')}
+            </div>
+            <div class="hint-box" style="margin-top:8px;">Se aplica al toque, sin necesidad de guardar — es solo para este dispositivo, no cambia nada para el resto de la organización.</div>
+          </div>
           ${mandatory ? `<div class="hint-box" style="margin-top:0;">Antes de seguir, nos falta ${(!u.birthDate || !u.sex) ? 'tu fecha de nacimiento y tu sexo' : ''}${(!u.birthDate || !u.sex) && showCalling && !u.calling ? ' y ' : ''}${showCalling && !u.calling ? 'tu llamamiento' : ''} — se usan para saber con quién puedes agendar una entrevista (por ejemplo, un hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta con Sociedad de Socorro o con el Obispado; un joven o una joven solo con el Obispado)${showCalling ? ', y quién de la presidencia realiza entrevistas' : ''}.</div>` : ''}
           <form id="prof-form">
             <div class="field" style="text-align:center;">
@@ -1293,6 +1412,12 @@ function openProfileModal({ mandatory = false, onDone } = {}){
         </div>
       </div>
     </div>`;
+  document.querySelectorAll('.font-scale-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setFontScale(btn.dataset.scale);
+      document.querySelectorAll('.font-scale-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
   if(!mandatory){
     const guardedClose = wireUnsavedChangesGuard(document.getElementById('prof-form'));
     document.getElementById('prof-modal-close').addEventListener('click', guardedClose);
@@ -2001,14 +2126,100 @@ function render(){
     <main class="view" id="view-root"></main>
     <div id="modal-root"></div>
     <div id="confirm-root"></div>
-    <div id="ocr-root"></div>`;
+    <div id="ocr-root"></div>
+    ${bottomNavHtml()}
+    <button type="button" class="mobile-fab" id="mobile-fab" title="Agregar" hidden>+</button>`;
   document.getElementById('logout-btn').addEventListener('click', logout);
   document.getElementById('my-profile-btn').addEventListener('click', () => openProfileModal());
   root.querySelectorAll('.tab-btn').forEach((btn) => btn.addEventListener('click', () => { state.view = btn.dataset.view; renderCurrentView(); }));
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if(bishopricBtn) bishopricBtn.addEventListener('click', () => { state.view = 'bishopricPanel'; renderCurrentView(); });
   wireTopbarUtilities();
+  wireBottomNav();
+  wireMobileFab();
   renderCurrentView();
+}
+
+const BOTTOM_NAV_MAX_PRIMARY = 4;
+function bottomNavHtml(){
+  const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+  if(!order.length) return '';
+  const primary = order.slice(0, BOTTOM_NAV_MAX_PRIMARY);
+  const overflow = order.slice(BOTTOM_NAV_MAX_PRIMARY);
+  const itemHtml = (k) => `
+    <button type="button" class="bottom-nav-btn ${state.view===k?'active':''}" data-view="${k}">
+      <span class="bottom-nav-icon">${TAB_DEFS[k].icon}</span>
+      <span class="bottom-nav-label">${esc(TAB_DEFS[k].navLabel || TAB_DEFS[k].label)}</span>
+    </button>`;
+  return `
+    <nav class="bottom-nav" id="bottom-nav">
+      ${primary.map(itemHtml).join('')}
+      ${overflow.length ? `
+        <button type="button" class="bottom-nav-btn ${overflow.includes(state.view)?'active':''}" id="bottom-nav-more">
+          <span class="bottom-nav-icon">☰</span>
+          <span class="bottom-nav-label">Más</span>
+        </button>` : ''}
+    </nav>`;
+}
+function wireBottomNav(){
+  const nav = document.getElementById('bottom-nav');
+  if(!nav) return;
+  nav.querySelectorAll('.bottom-nav-btn[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => { state.view = btn.dataset.view; renderCurrentView(); });
+  });
+  const moreBtn = document.getElementById('bottom-nav-more');
+  if(moreBtn){
+    moreBtn.addEventListener('click', () => {
+      const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+      openBottomNavMoreSheet(order.slice(BOTTOM_NAV_MAX_PRIMARY));
+    });
+  }
+}
+function openBottomNavMoreSheet(overflowKeys){
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop bottom-sheet-backdrop" id="bnav-sheet-backdrop">
+      <div class="bottom-sheet">
+        <div class="bottom-sheet-handle"></div>
+        <div class="bottom-sheet-list">
+          ${overflowKeys.map((k) => `
+            <button type="button" class="bottom-sheet-item ${state.view===k?'active':''}" data-view="${k}">
+              <span class="bottom-nav-icon">${TAB_DEFS[k].icon}</span>
+              <span>${esc(TAB_DEFS[k].navLabel || TAB_DEFS[k].label)}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('bnav-sheet-backdrop').addEventListener('click', (e) => { if(e.target.id==='bnav-sheet-backdrop') close(); });
+  modalRoot.querySelectorAll('.bottom-sheet-item').forEach((btn) => {
+    btn.addEventListener('click', () => { state.view = btn.dataset.view; close(); renderCurrentView(); });
+  });
+}
+
+const FAB_TARGET_CANDIDATES = ['cal-new-event', 'my-act-new', 'iv-new', 'meeting-new', 'wf-new', 'cs-new', 'tk-new', 'budget-new-category', 'user-new'];
+let mobileFabObserver = null;
+function wireMobileFab(){
+  const fab = document.getElementById('mobile-fab');
+  if(!fab) return;
+  fab.addEventListener('click', () => {
+    const target = fab.dataset.targetId && document.getElementById(fab.dataset.targetId);
+    if(target) target.click();
+  });
+  const update = () => {
+    const targetId = FAB_TARGET_CANDIDATES.find((id) => document.getElementById(id));
+    if(targetId){ fab.hidden = false; fab.dataset.targetId = targetId; }
+    else { fab.hidden = true; delete fab.dataset.targetId; }
+  };
+  update();
+  if(mobileFabObserver) mobileFabObserver.disconnect();
+  let scheduled = false;
+  mobileFabObserver = new MutationObserver(() => {
+    if(scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => { scheduled = false; update(); });
+  });
+  mobileFabObserver.observe(document.getElementById('view-root'), { childList: true, subtree: true });
 }
 
 // ---------------- Búsqueda global (barra superior) ----------------
@@ -2269,6 +2480,14 @@ function renderCurrentView(){
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if(bishopricBtn) bishopricBtn.classList.toggle('active', state.view === 'bishopricPanel');
+  root.querySelectorAll('.bottom-nav-btn[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
+  const bottomNavMoreBtn = document.getElementById('bottom-nav-more');
+  if(bottomNavMoreBtn){
+    const overflow = tabOrderFor().filter((k) => TAB_DEFS[k].visible()).slice(BOTTOM_NAV_MAX_PRIMARY);
+    bottomNavMoreBtn.classList.toggle('active', overflow.includes(state.view));
+  }
+  const viewRoot = document.getElementById('view-root');
+  if(viewRoot){ viewRoot.classList.remove('view-fade-in'); void viewRoot.offsetWidth; viewRoot.classList.add('view-fade-in'); }
   if(state.view==='calendar') renderCalendarView();
   else if(state.view==='bishopricPanel') renderBishopricPanelView();
   else if(state.view==='myActivities') renderMyActivitiesView();
@@ -2382,7 +2601,7 @@ function renderCalendarView(){
           <div class="lc-when">${it.kind==='stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime?' - '+esc(fmtTime(it.endTime)):''}</div>
         </div>`).join('')}
       </div>
-    </div>`).join('') : emptyStateHtml('Sin actividades este mes' + (state.activeOrgIds ? ' con los filtros de organización activos' : ''));
+    </div>`).join('') : emptyStateHtml('Mes libre, sin actividades' + (state.activeOrgIds ? ' con los filtros de organización activos' : ''), null, '🌤️');
   container.innerHTML = `
     <div class="cal-header">
       <div class="cal-nav">
@@ -2589,7 +2808,7 @@ function openDayModal(iso){
         <span class="org-dot" style="background:${it.organizationColor}"></span>
         <div class="lc-main"><div class="lc-title">${it.kind==='interview'?'👤 ':it.kind==='stake'?'🏛️ ':eventTitlePrefix(it)}${esc(it.title)}</div><div class="lc-sub">${esc(it.organizationName)}${it.location?` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>`:''}${it.kind==='interview' && it.interviewerName?` · 🧑‍💼 ${esc(it.interviewerName)}`:''}${it.kind==='event'?involvedOrgsBadgesHtml(it):''}</div></div>
         <div class="lc-when">${it.kind==='stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime?' - '+esc(fmtTime(it.endTime)):''}</div>
-      </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
+      </div>`).join('') : emptyStateHtml('Sin actividades este día', null, '📆')}
     </div></div></div></div>`;
   document.getElementById('day-modal-close').addEventListener('click', closeModal);
   document.getElementById('day-modal-backdrop').addEventListener('click',(e)=>{ if(e.target.id==='day-modal-backdrop') closeModal(); });
@@ -3187,7 +3406,7 @@ function renderMyActivitiesLeaderView(){
             <div class="lc-main"><div class="lc-title">${it.kind==='interview'?'👤 ':eventTitlePrefix(it)}${esc(it.title)}</div><div class="lc-sub">${myActLeaderSubHtml(it, myOrgId)}</div></div>
             <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime?' - '+esc(fmtTime(it.endTime)):''}</div>
           </div>`).join('')}
-        </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id:'my-act-empty-new', label:'+ Agregar la primera' })}
+        </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id:'my-act-empty-new', label:'+ Agregar la primera' }, '🗓️')}
     </div>
     ${myInterviewRequestsSectionHtml(myInterviewRequests(currentUser))}`;
   document.getElementById('my-act-new').addEventListener('click', ()=>openEventModal());
@@ -3253,7 +3472,7 @@ function renderMyActivitiesMemberView(){
             <div class="lc-main"><div class="lc-title">${it.kind==='interview'?'👤 ':eventTitlePrefix(it)}${esc(it.title)}</div><div class="lc-sub">${esc(it.organizationName)}${it.location?` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>`:''}${it.kind==='interview' && it.interviewerName?` · con ${esc(it.interviewerName)}`:''}${it.kind==='event' && it.description?' · '+esc(it.description):''}${it.kind==='event'?involvedOrgsBadgesHtml(it):''}</div></div>
             <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime?' - '+esc(fmtTime(it.endTime)):''}</div>
           </div>`).join('')}
-        </div>`).join('') : `<div class="empty-state">${followedIds.length?'No hay actividades próximas de las organizaciones que elegiste':'Elige qué organizaciones te interesan para ver sus actividades acá'}</div>`}
+        </div>`).join('') : emptyStateHtml(followedIds.length ? 'No hay actividades próximas de las organizaciones que elegiste' : 'Elige qué organizaciones te interesan para ver sus actividades acá', null, followedIds.length ? '🌤️' : '👋')}
     </div>
     ${myInterviewRequestsSectionHtml(myInterviewRequests(currentUser))}`;
   document.getElementById('my-act-export').addEventListener('click', ()=>downloadMyActivitiesIcs(list, currentUser.name));
@@ -3316,9 +3535,13 @@ function supervisingAdultsFieldHtml(existingAdults){
 function wireSupervisingAdultsRows(){
   const rows = document.getElementById('ev-sa-rows');
   if(!rows) return;
-  const wireRow = (row) => row.querySelector('.sa-remove').addEventListener('click', () => {
-    if(rows.children.length > 2) row.remove();
-  });
+  getNameSuggestions();
+  const wireRow = (row) => {
+    wireNameAutocomplete(row.querySelector('.sa-name-input'), () => nameSuggestionsCache?.supervisingAdults);
+    row.querySelector('.sa-remove').addEventListener('click', () => {
+      if(rows.children.length > 2) row.remove();
+    });
+  };
   Array.from(rows.children).forEach(wireRow);
   const addBtn = document.getElementById('ev-sa-add');
   if(addBtn) addBtn.addEventListener('click', () => {
@@ -3337,15 +3560,19 @@ function updateSupervisingAdultsSection(orgId, existingAdults){
   }
 }
 
-function openEventModal(existing=null){
+// `duplicate:true` precarga el formulario con los datos de `existing` pero
+// funciona como si fuera una actividad nueva (se agrega a DB.events, no se
+// edita) — la fecha se adelanta 7 días como punto de partida, editable.
+function openEventModal(existing=null, { duplicate=false }={}){
   const options = editableOrgOptions('event');
   if(!existing && options.length===0){ toast('No tienes una organización asignada para crear actividades','error'); return; }
-  const isEdit = !!existing;
+  const isEdit = !!existing && !duplicate;
+  const prefillDate = duplicate && existing?.date ? addDaysToISO(existing.date, 7) : (existing?.date || '');
   const involvedIds = existing?.involvedOrganizationIds || (existing?.involvedOrganizations||[]).map((o)=>o.id);
   const hasAdvancedData = !!existing?.isMeeting || !!existing?.isWardActivity || (involvedIds && involvedIds.length>0);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `<div class="modal-backdrop" id="ev-modal-backdrop"><div class="modal">
-    <div class="modal-header"><h3>${isEdit?'Editar actividad':'Nueva actividad'}</h3><button class="modal-close" id="ev-modal-close">×</button></div>
+    <div class="modal-header"><h3>${isEdit?'Editar actividad':(duplicate?'Duplicar actividad':'Nueva actividad')}</h3><button class="modal-close" id="ev-modal-close">×</button></div>
     <div class="modal-body"><div id="ev-error"></div>
       <form id="ev-form">
         <div class="field"><label>Organización</label><select id="ev-org-select" name="${options.length===1?'':'organizationId'}" ${options.length===1?'disabled':''} required>
@@ -3368,7 +3595,7 @@ function openEventModal(existing=null){
         ${locationFieldHtml('ev', existing?.location, existing?.sala)}
         <div id="ev-conflict-warning"></div>
         <div class="field"><label>Notas adicionales (opcional)</label><textarea name="description">${esc(existing?.description||'')}</textarea></div>
-        <div class="field"><label>Día</label><input type="date" name="date" required value="${existing?.date||''}" /></div>
+        <div class="field"><label>Día</label><input type="date" name="date" required value="${prefillDate}" /></div>
         <div class="two-col">
           <div class="field"><label>Hora de inicio</label><input type="time" name="startTime" required value="${existing?.startTime||''}" /></div>
           <div class="field"><label>Hora de término (opcional)</label><input type="time" name="endTime" value="${existing?.endTime||''}" /></div>
@@ -3377,13 +3604,31 @@ function openEventModal(existing=null){
       </form>
     </div>
     <div class="modal-footer">
-      <div>${isEdit?`<button class="btn btn-danger" id="ev-delete">Eliminar</button>`:''}</div>
-      <div style="display:flex; gap:8px;"><button class="btn btn-secondary" id="ev-cancel">Cancelar</button><button class="btn btn-primary" id="ev-save">${isEdit?'Guardar cambios':'Crear actividad'}</button></div>
+      <div style="display:flex; gap:8px;">
+        ${isEdit?`<button class="btn btn-danger" id="ev-delete">Eliminar</button>`:''}
+        ${isEdit?`<button type="button" class="btn btn-secondary" id="ev-duplicate">${icon('copy')} Duplicar</button>`:''}
+      </div>
+      <div style="display:flex; gap:8px;"><button class="btn btn-secondary" id="ev-cancel">Cancelar</button><button class="btn btn-primary" id="ev-save">${isEdit?'Guardar cambios':(duplicate?'Crear copia':'Crear actividad')}</button></div>
     </div></div></div>`;
   const evGuardedClose = wireUnsavedChangesGuard(document.getElementById('ev-form'));
   document.getElementById('ev-modal-close').addEventListener('click', evGuardedClose);
   document.getElementById('ev-cancel').addEventListener('click', evGuardedClose);
   document.getElementById('ev-modal-backdrop').addEventListener('click',(e)=>{ if(e.target.id==='ev-modal-backdrop') evGuardedClose(); });
+  // "Duplicar": precarga los datos ORIGINALES de la actividad en un modal
+  // nuevo en modo creación — si hay cambios sin guardar en este formulario,
+  // se avisa igual que al cerrar con la X, para no perderlos sin querer.
+  let evFormDirtyForDuplicate = false;
+  document.getElementById('ev-form').addEventListener('input', ()=>{ evFormDirtyForDuplicate = true; });
+  document.getElementById('ev-form').addEventListener('change', ()=>{ evFormDirtyForDuplicate = true; });
+  const duplicateBtn = document.getElementById('ev-duplicate');
+  if(duplicateBtn) duplicateBtn.addEventListener('click', async ()=>{
+    if(evFormDirtyForDuplicate){
+      const ok = await confirmModal('Tienes cambios sin guardar en este formulario. ¿Duplicar de todas formas? Se va a usar la actividad original tal como está guardada, sin esos cambios.', { title:'Cambios sin guardar', confirmText:'Duplicar igual', danger:true });
+      if(!ok) return;
+    }
+    closeModal();
+    openEventModal(existing, { duplicate: true });
+  });
   if(isEdit) document.getElementById('ev-delete').addEventListener('click', async ()=>{
     if(!(await confirmModal('¿Eliminar esta actividad?', { title:'Eliminar actividad', confirmText:'Eliminar', danger:true }))) return;
     DB.events = DB.events.filter((e)=>e.id!==existing.id);
@@ -3468,7 +3713,7 @@ function openEventModal(existing=null){
     }
 
     if(!conflictsChecked){
-      const conflicts = findConflictingActivities(body, existing?.id);
+      const conflicts = findConflictingActivities(body, isEdit ? existing?.id : undefined);
       if(conflicts.length){
         document.getElementById('ev-conflict-warning').innerHTML = conflictWarningHtml(conflicts);
         conflictsChecked = true;
@@ -3583,7 +3828,7 @@ function renderInterviewsView(){
         <button class="subtab-btn active" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
       </div>
       <div class="card-list">
-        ${pendingRequests.length ? pendingRequests.map((r)=>interviewRequestRowHtml(r)).join('') : emptyStateHtml('No hay solicitudes de entrevista pendientes')}
+        ${pendingRequests.length ? pendingRequests.map((r)=>interviewRequestRowHtml(r)).join('') : emptyStateHtml('No hay solicitudes de entrevista pendientes', null, '📥')}
       </div>
       ${decidedRequests.length ? `
         <button type="button" class="btn btn-secondary btn-sm" id="ivreq-history-toggle" style="margin-top:16px;">
@@ -3646,7 +3891,8 @@ function renderInterviewsView(){
   const pendingListHtml = !visiblePending.length
     ? emptyStateHtml(
         sectioned ? `${activeOrg.name} no tiene entrevistas pendientes de agendar o verificar` : 'No hay entrevistas pendientes de agendar o verificar',
-        canManage ? { id:'iv-empty-new', label:'+ Agendar la primera' } : null
+        canManage ? { id:'iv-empty-new', label:'+ Agendar la primera' } : null,
+        '👤'
       )
     : interviewPendingDateGroupsHtml(visiblePending);
 
@@ -3676,7 +3922,7 @@ function renderInterviewsView(){
         ${state.interviewsHistoryOpen ? (
           visibleHistory.length
             ? visibleHistory.map((iv)=>interviewHistoryCardHtml(iv)).join('')
-            : emptyStateHtml(sectioned ? `${activeOrg.name} no tiene entrevistas verificadas todavía` : 'No hay entrevistas verificadas todavía')
+            : emptyStateHtml(sectioned ? `${activeOrg.name} no tiene entrevistas verificadas todavía` : 'No hay entrevistas verificadas todavía', null, '📜')
         ) : ''}
       </div>` : ''}
   `;
@@ -3760,6 +4006,8 @@ function openConfirmRequestModal(r){
   document.getElementById('ivc-modal-close').addEventListener('click', ivcGuardedClose);
   document.getElementById('ivc-cancel').addEventListener('click', ivcGuardedClose);
   document.getElementById('ivc-modal-backdrop').addEventListener('click', (e)=>{ if(e.target.id==='ivc-modal-backdrop') ivcGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#ivc-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
   document.getElementById('ivc-save').addEventListener('click', ()=>{
     const form = document.getElementById('ivc-form');
     if(!form.reportValidity()) return;
@@ -4022,6 +4270,127 @@ function wireMemberPicker(idPrefix, directory, onChange){
     if(onChange) onChange();
   });
 }
+
+// ---------------- Autocompletar nombres ya usados (Grupo 3) ----------------
+// En la app real esto sale de un endpoint (/api/names/suggestions) que
+// junta nombres ya usados en eventos/actas/casos de Bienestar/entrevistas.
+// Acá, como no hay backend, se recalcula directo desde DB en memoria (que
+// ya está toda cargada) — mismo resultado, sin necesidad de cachear por
+// tiempo como hace la app real.
+function computeNameSuggestions(){
+  const dedup = (rawNames) => {
+    const seen = new Map();
+    for(const raw of rawNames){
+      const name = String(raw||'').trim();
+      if(!name) continue;
+      const norm = normalizeSearchText(name);
+      if(!seen.has(norm)) seen.set(norm, { name, count: 0 });
+      seen.get(norm).count += 1;
+    }
+    return [...seen.values()].sort((a,b) => b.count-a.count || a.name.localeCompare(b.name,'es')).map((x) => x.name);
+  };
+  return {
+    supervisingAdults: dedup(DB.events.flatMap((e) => e.supervisingAdults||[])),
+    presenters: dedup(DB.meetings.flatMap((m) => (m.agendaItems||[]).map((a) => a.presenter))),
+    welfareMembers: dedup(DB.welfareCases.map((c) => c.memberName)),
+    interviewers: dedup(DB.interviews.map((iv) => iv.interviewerName)),
+  };
+}
+let nameSuggestionsCache = null;
+function getNameSuggestions(){
+  nameSuggestionsCache = computeNameSuggestions();
+  return Promise.resolve(nameSuggestionsCache);
+}
+// `getNames` es una función (no un arreglo fijo) por consistencia con la
+// app real, aunque acá la data siempre está disponible al toque.
+function wireNameAutocomplete(inputEl, getNames){
+  if(!inputEl || inputEl.dataset.acWired) return;
+  inputEl.dataset.acWired = '1';
+  const holder = document.createElement('div');
+  holder.style.position = 'relative';
+  inputEl.parentNode.insertBefore(holder, inputEl);
+  holder.appendChild(inputEl);
+  const box = document.createElement('div');
+  box.className = 'ac-results';
+  holder.appendChild(box);
+  const hide = () => { box.style.display = 'none'; };
+  inputEl.addEventListener('input', () => {
+    const q = normalizeSearchText(inputEl.value);
+    if(!q) return hide();
+    const names = getNames() || [];
+    const matches = names.filter((n) => normalizeSearchText(n).includes(q) && normalizeSearchText(n) !== q).slice(0, 6);
+    if(!matches.length) return hide();
+    box.innerHTML = matches.map((n) => `<div class="ac-item">${esc(n)}</div>`).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('.ac-item').forEach((el, i) => {
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); inputEl.value = matches[i]; hide(); });
+    });
+  });
+  inputEl.addEventListener('blur', () => setTimeout(hide, 150));
+}
+
+// ---------------- Dictado por voz en campos largos (Grupo 3) ----------------
+function speechRecognitionSupported(){
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+function wireDictation(textareaEl){
+  if(!textareaEl || textareaEl.dataset.dictationWired) return;
+  textareaEl.dataset.dictationWired = '1';
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const holder = document.createElement('div');
+  holder.style.position = 'relative';
+  textareaEl.parentNode.insertBefore(holder, textareaEl);
+  holder.appendChild(textareaEl);
+  textareaEl.style.paddingRight = '34px';
+  const micBtn = document.createElement('button');
+  micBtn.type = 'button';
+  micBtn.className = 'dictation-btn';
+  micBtn.title = 'Dictar por voz';
+  micBtn.innerHTML = icon('mic', 14);
+  holder.appendChild(micBtn);
+
+  let recognition = null;
+  let listening = false;
+  let baseValue = '';
+  const stopListening = () => { listening = false; micBtn.classList.remove('listening'); };
+  micBtn.addEventListener('click', () => {
+    if(listening){ recognition?.stop(); return; }
+    baseValue = textareaEl.value;
+    recognition = new SpeechRecognitionCtor();
+    recognition.lang = 'es-CL';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onstart = () => { listening = true; micBtn.classList.add('listening'); };
+    recognition.onerror = stopListening;
+    recognition.onend = stopListening;
+    recognition.onresult = (e) => {
+      let finalText = '';
+      let interimText = '';
+      for(let i = e.resultIndex; i < e.results.length; i++){
+        const t = e.results[i][0].transcript;
+        if(e.results[i].isFinal) finalText += t;
+        else interimText += t;
+      }
+      if(finalText) baseValue = `${baseValue ? baseValue.trim()+' ' : ''}${finalText.trim()}`;
+      textareaEl.value = `${baseValue}${interimText ? ' '+interimText : ''}`.trim();
+    };
+    try { recognition.start(); } catch(e) { stopListening(); }
+  });
+}
+let dictationScanScheduled = false;
+function scheduleDictationScan(){
+  if(dictationScanScheduled) return;
+  dictationScanScheduled = true;
+  requestAnimationFrame(() => {
+    dictationScanScheduled = false;
+    root.querySelectorAll('textarea:not([data-dictation-wired])').forEach((ta) => wireDictation(ta));
+  });
+}
+if(speechRecognitionSupported()){
+  new MutationObserver(scheduleDictationScan).observe(root, { childList: true, subtree: true });
+  scheduleDictationScan();
+}
+
 function openInterviewModal(existing=null){
   const options = editableOrgOptions('interview');
   if(!existing && options.length===0){ toast('No tienes permiso para agendar entrevistas','error'); return; }
@@ -4064,6 +4433,8 @@ function openInterviewModal(existing=null){
   document.getElementById('iv-modal-close').addEventListener('click', ivGuardedClose);
   document.getElementById('iv-cancel').addEventListener('click', ivGuardedClose);
   document.getElementById('iv-modal-backdrop').addEventListener('click',(e)=>{ if(e.target.id==='iv-modal-backdrop') ivGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#iv-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
   // Esto borra la entrevista sin dejar registro histórico (a TODAS las
   // personas del grupo — matrimonio, compañerismo de ministración) —
   // pensado para corregir un error al agendar (ej. quedó duplicada). Si la
@@ -4607,13 +4978,13 @@ function renderBudgetView(){
     </div>
     ${!isCurrentQuarter ? `<div class="hint-box">Estás viendo un trimestre anterior, a modo de historial de consulta — no se puede editar. Para agregar asignaciones o gastos, vuelve al trimestre actual con el selector de arriba.</div>` : ''}
     <div class="card-list" id="budget-cats">
-      ${categories.length ? categories.map((cat)=>budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id:'budget-empty-new', label:'+ Crear la primera' } : null)}
+      ${categories.length ? categories.map((cat)=>budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id:'budget-empty-new', label:'+ Crear la primera' } : null, '💰')}
     </div>
     ${isObispado ? `
       <div style="margin:24px 0 8px;">
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📋 Solicitudes de gasto pendientes de aprobación${pendingRequests.length ? ` (${pendingRequests.length})` : ''}</h3>
         <div class="card-list">
-          ${pendingRequests.length ? pendingRequests.map((r)=>expenseRequestRowHtml(r, { showActions:true })).join('') : '<div class="empty-state">No hay solicitudes pendientes</div>'}
+          ${pendingRequests.length ? pendingRequests.map((r)=>expenseRequestRowHtml(r, { showActions:true })).join('') : emptyStateHtml('No hay solicitudes pendientes', null, '✅')}
         </div>
         ${decidedRequests.length ? `
         <button type="button" class="btn btn-secondary btn-sm" id="exp-req-history-toggle" style="margin-top:10px;">
@@ -4679,7 +5050,7 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado){
           : `<button type="button" class="btn btn-primary btn-sm budget-request-expense">📋 Solicitar aprobación de gasto</button>`) : ''}
       </div>
       <div class="budget-expenses-list" style="display:none;">
-        ${cat.expenses.length ? cat.expenses.map((e)=>budgetExpenseRowHtml(e, canExpense)).join('') : '<div class="empty-state" style="padding:8px;">Sin gastos registrados</div>'}
+        ${cat.expenses.length ? cat.expenses.map((e)=>budgetExpenseRowHtml(e, canExpense)).join('') : emptyStateHtml('Sin gastos registrados', null, '🧾', true)}
       </div>
     </div>`;
 }
@@ -4992,7 +5363,7 @@ function renderAdminRequests(){
         <td style="text-align:right; white-space:nowrap;">
           <button class="btn btn-primary btn-sm" data-approve="${r.id}">Aprobar</button>
           <button class="btn btn-danger btn-sm" data-reject="${r.id}">Rechazar</button>
-        </td></tr>`; }).join('') : `<tr><td colspan="6"><div class="empty-state">No hay solicitudes pendientes</div></td></tr>`}
+        </td></tr>`; }).join('') : `<tr><td colspan="6">${emptyStateHtml('No hay solicitudes pendientes', null, '✅')}</td></tr>`}
     </tbody></table></div>`;
   content.querySelectorAll('[data-approve]').forEach((b)=>b.addEventListener('click', ()=>openApproveModal(items.find((r)=>r.id===Number(b.dataset.approve)))));
   content.querySelectorAll('[data-reject]').forEach((b)=>b.addEventListener('click', async ()=>{
@@ -5348,6 +5719,7 @@ function renderMeetingsView(){
 }
 
 function renderMyAssignments(){
+  openSwipeCard = null;
   const content = document.getElementById('meetings-content');
   const items = myAssignments(currentUser);
   content.innerHTML = items.length
@@ -5358,28 +5730,31 @@ function renderMyAssignments(){
         <button type="button" class="btn btn-ghost btn-sm" id="assign-bulk-clear">Cancelar</button>
       </div>
       <div class="card-list">${items.map(assignmentCardHtml).join('')}</div>`
-    : '<div class="empty-state">No tienes compromisos pendientes 🎉</div>';
+    : emptyStateHtml('No tienes compromisos pendientes — al día con todo', null, '🎉');
   wireAssignmentCards();
 }
 
 function assignmentCardHtml(c){
   const isOverdue = c.displayStatus==='overdue';
   return `
-    <div class="list-card assignment-card" data-id="${c.id}" style="align-items:flex-start; flex-direction:column; gap:8px;">
-      <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
-        <div style="display:flex; gap:10px; align-items:flex-start; min-width:0; flex:1;">
-          <input type="checkbox" class="assignment-select-cb" title="Seleccionar" style="margin-top:4px; flex-shrink:0; width:16px; height:16px;" />
-          <div class="lc-main">
-            <div class="lc-title">${esc(c.description)}</div>
-            <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+    <div class="list-card assignment-card swipeable-row" data-id="${c.id}" style="display:block; padding:0; overflow:hidden; position:relative;">
+      <button type="button" class="assignment-swipe-action" aria-hidden="true" tabindex="-1">✅<br>Completar</button>
+      <div class="assignment-card-content" style="align-items:flex-start; flex-direction:column; gap:8px;">
+        <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
+          <div style="display:flex; gap:10px; align-items:flex-start; min-width:0; flex:1;">
+            <input type="checkbox" class="assignment-select-cb" title="Seleccionar" style="margin-top:4px; flex-shrink:0; width:16px; height:16px;" />
+            <div class="lc-main">
+              <div class="lc-title">${esc(c.description)}</div>
+              <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+            </div>
           </div>
+          <span class="status-pill ${isOverdue?'status-red':'status-amber'}">${isOverdue?'Atrasado':'Pendiente'}</span>
         </div>
-        <span class="status-pill ${isOverdue?'status-red':'status-amber'}">${isOverdue?'Atrasado':'Pendiente'}</span>
-      </div>
-      <div><button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button></div>
-      <div class="assignment-complete-form" style="display:none; width:100%;">
-        <textarea class="assignment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
-        <button type="button" class="btn btn-primary btn-sm assignment-complete-save">Guardar</button>
+        <div><button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button></div>
+        <div class="assignment-complete-form" style="display:none; width:100%;">
+          <textarea class="assignment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
+          <button type="button" class="btn btn-primary btn-sm assignment-complete-save">Guardar</button>
+        </div>
       </div>
     </div>`;
 }
@@ -5430,6 +5805,67 @@ function wireAssignmentCards(){
       toast('Compromiso completado');
       renderMyAssignments();
     });
+    wireCommitmentSwipe(card);
+  });
+}
+
+let openSwipeCard = null;
+function closeSwipeCard(otherCard, animate){
+  if(!otherCard) return;
+  const otherContent = otherCard.querySelector('.assignment-card-content');
+  if(otherContent){
+    otherContent.style.transition = animate ? 'transform .18s ease-out' : 'none';
+    otherContent.style.transform = 'translateX(0)';
+  }
+  otherCard.dataset.swipeOpen = '0';
+}
+function wireCommitmentSwipe(card){
+  const contentEl = card.querySelector('.assignment-card-content');
+  const actionEl = card.querySelector('.assignment-swipe-action');
+  if(!contentEl || !actionEl) return;
+  const REVEAL_WIDTH = 92;
+  const OPEN_THRESHOLD = 40;
+  const SWIPE_INTENT_THRESHOLD = 10;
+  const SWIPE_MAX_OFF_AXIS_RATIO = 0.6;
+  let startX = null, startY = null, dx = 0, dragging = false, intent = null;
+  const setX = (x, animate) => {
+    contentEl.style.transition = animate ? 'transform .18s ease-out' : 'none';
+    contentEl.style.transform = `translateX(${x}px)`;
+  };
+  const closeCard = (animate) => { card.dataset.swipeOpen = '0'; setX(0, animate); };
+  card.addEventListener('touchstart', (e) => {
+    if(e.touches.length !== 1) return;
+    if(openSwipeCard && openSwipeCard !== card){ closeSwipeCard(openSwipeCard, true); openSwipeCard = null; }
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    dx = 0; intent = null; dragging = true;
+  }, { passive: true });
+  card.addEventListener('touchmove', (e) => {
+    if(!dragging || e.touches.length !== 1) return;
+    dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if(intent === null && (Math.abs(dx) >= SWIPE_INTENT_THRESHOLD || Math.abs(dy) >= SWIPE_INTENT_THRESHOLD)){
+      intent = Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO ? 'vertical' : 'horizontal';
+    }
+    if(intent !== 'horizontal') return;
+    if(e.cancelable) e.preventDefault();
+    const base = card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0;
+    setX(Math.max(-REVEAL_WIDTH, Math.min(0, base + dx)), false);
+  }, { passive: false });
+  card.addEventListener('touchend', () => {
+    if(!dragging) return;
+    dragging = false;
+    if(intent !== 'horizontal'){ setX(card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0, true); return; }
+    const base = card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0;
+    const finalX = Math.max(-REVEAL_WIDTH, Math.min(0, base + dx));
+    const shouldOpen = finalX < -OPEN_THRESHOLD;
+    card.dataset.swipeOpen = shouldOpen ? '1' : '0';
+    openSwipeCard = shouldOpen ? card : (openSwipeCard === card ? null : openSwipeCard);
+    setX(shouldOpen ? -REVEAL_WIDTH : 0, true);
+  });
+  actionEl.addEventListener('click', () => {
+    closeCard(true);
+    openSwipeCard = null;
+    card.querySelector('.assignment-complete-toggle').click();
   });
 }
 
@@ -5613,6 +6049,7 @@ async function openPizarraOcrPanel(file, assignable, onAccept){
 function openMeetingModal(){
   const assignable = assignableUsersFor(currentUser);
   if(!assignable.length){ toast('No hay líderes disponibles para asignar compromisos todavía', 'error'); return; }
+  getNameSuggestions();
   const commitmentRowHtml = () => `
     <div class="commitment-row">
       <div class="field" style="margin-bottom:8px;"><label>Compromiso</label><input type="text" class="cr-desc" required placeholder="Ej: Coordinar transporte" /></div>
@@ -5662,7 +6099,10 @@ function openMeetingModal(){
         </div>
         <div class="field"><label>Agenda — temas a tratar (opcional, se puede armar antes de la reunión)</label>
           <div id="mt-agenda"></div>
-          <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="mt-use-template" style="display:none;">${icon('copy')} Usar plantilla de temas</button>
+          </div>
         </div>
         <div class="field"><label>Compromisos (opcional — también se pueden agregar después)</label>
           <div id="mt-commitments"></div>
@@ -5679,9 +6119,33 @@ function openMeetingModal(){
   const agendaBox = document.getElementById('mt-agenda');
   const addAgendaRow = () => {
     agendaBox.insertAdjacentHTML('beforeend', agendaRowHtml());
-    agendaBox.lastElementChild.querySelector('.ar-remove').addEventListener('click', (e)=>e.target.closest('.commitment-row').remove());
+    const row = agendaBox.lastElementChild;
+    wireNameAutocomplete(row.querySelector('.ar-presenter'), () => nameSuggestionsCache?.presenters);
+    row.querySelector('.ar-remove').addEventListener('click', (e)=>e.target.closest('.commitment-row').remove());
   };
   document.getElementById('mt-add-agenda').addEventListener('click', addAgendaRow);
+  // Grupo 3: "Usar plantilla de temas" — solo para los tipos que ya tienen
+  // una estructura estándar (ver AGENDA_TEMPLATES). Agrega al final, sin
+  // borrar lo que ya haya.
+  const typeSelForTemplate = document.getElementById('mt-type');
+  const templateBtn = document.getElementById('mt-use-template');
+  const updateTemplateBtnVisibility = () => {
+    if(!templateBtn) return;
+    templateBtn.style.display = AGENDA_TEMPLATES[typeSelForTemplate?.value] ? '' : 'none';
+  };
+  if(typeSelForTemplate){ typeSelForTemplate.addEventListener('change', updateTemplateBtnVisibility); updateTemplateBtnVisibility(); }
+  if(templateBtn) templateBtn.addEventListener('click', async () => {
+    const tpl = AGENDA_TEMPLATES[typeSelForTemplate.value] || [];
+    if(!tpl.length) return;
+    const tipoLabel = typeSelForTemplate.options[typeSelForTemplate.selectedIndex].text;
+    const yaHayTemas = agendaBox.children.length > 0;
+    if(yaHayTemas && !(await confirmModal(`Esto agrega ${tpl.length} temas estándar de ${tipoLabel} al final de la lista (no borra los que ya escribiste). ¿Continuar?`, { title: 'Usar plantilla de temas', confirmText: 'Agregar temas' }))) return;
+    tpl.forEach((topic) => {
+      addAgendaRow();
+      agendaBox.lastElementChild.querySelector('.ar-topic').value = topic;
+    });
+    toast(`${tpl.length} temas agregados desde la plantilla`);
+  });
   const commitmentsBox = document.getElementById('mt-commitments');
   const addRow = () => {
     commitmentsBox.insertAdjacentHTML('beforeend', commitmentRowHtml());
@@ -5769,6 +6233,26 @@ function agendaPatternFor(type){
   return null;
 }
 function isCouncilMeetingType(type){ return agendaPatternFor(type)!==null; }
+// Grupo 3 — "Plantillas de acta por tipo de reunión": mismo criterio que
+// agendaPatternFor de arriba.
+const AGENDA_TEMPLATES = {
+  consejo_barrio: [
+    'Bienvenida y oración',
+    'Seguimiento de compromisos del consejo anterior',
+    'Nuevos convertidos y su integración',
+    'Miembros menos activos',
+    'Autosuficiencia y necesidades de Bienestar',
+    'Ministración — necesidades detectadas',
+    'Próximas actividades del Barrio',
+    'Asignaciones y compromisos nuevos',
+  ],
+  coordinacion_ministracion: [
+    'Revisión de asignaciones de ministración vigentes',
+    'Familias o personas sin ministración asignada',
+    'Necesidades detectadas en las visitas del trimestre',
+    'Ajustes a las asignaciones',
+  ],
+};
 
 function openMeetingDetailModal(m){
   const canEdit = (currentUser.role==='admin' || Number(currentUser.id)===Number(m.createdBy)) && m.status==='active';
@@ -5823,7 +6307,7 @@ function openMeetingDetailModal(m){
               </div>
               ${commitmentStatusPillHtml(c)}
             </div>
-          </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id:'md-empty-add', label:'+ Agregar el primero' } : null)}
+          </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id:'md-empty-add', label:'+ Agregar el primero' } : null, '🎯')}
       </div>
       ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
       `}
@@ -5887,6 +6371,8 @@ function openAddAgendaItemModal(m){
   document.getElementById('ai-modal-close').addEventListener('click', aiGuardedClose);
   document.getElementById('ai-cancel').addEventListener('click', aiGuardedClose);
   document.getElementById('ai-modal-backdrop').addEventListener('click',(e)=>{ if(e.target.id==='ai-modal-backdrop') aiGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#ai-form [name="presenter"]'), () => nameSuggestionsCache?.presenters);
   document.getElementById('ai-save').addEventListener('click', ()=>{
     const form = document.getElementById('ai-form');
     if(!form.reportValidity()) return;
@@ -6015,7 +6501,7 @@ function renderWelfareView(){
   content.innerHTML = `
     <div class="section-header" style="margin-top:0;"><div></div><button class="btn btn-primary" id="wf-new">+ Nuevo caso</button></div>
     <div class="card-list">
-      ${items.length ? items.map(welfareCaseCardHtml).join('') : emptyStateHtml('Sin casos registrados en esta vista', { id:'wf-empty-new', label:'+ Agregar el primero' })}
+      ${items.length ? items.map(welfareCaseCardHtml).join('') : emptyStateHtml('Sin casos registrados en esta vista', { id:'wf-empty-new', label:'+ Agregar el primero' }, '🤝')}
     </div>
   `;
   document.getElementById('wf-new').addEventListener('click', ()=>openWelfareCaseModal());
@@ -6069,6 +6555,8 @@ function openWelfareCaseModal(existing){
   document.getElementById('wf-modal-close').addEventListener('click', wfGuardedClose);
   document.getElementById('wf-cancel').addEventListener('click', wfGuardedClose);
   document.getElementById('wf-modal-backdrop').addEventListener('click',(e)=>{ if(e.target.id==='wf-modal-backdrop') wfGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#wf-form [name="memberName"]'), () => nameSuggestionsCache?.welfareMembers);
   const deleteBtn = document.getElementById('wf-delete');
   if(deleteBtn) deleteBtn.addEventListener('click', async ()=>{
     if(!(await confirmModal('¿Eliminar este caso de Bienestar? Se perderá todo su historial de seguimiento.', { title:'Eliminar caso', confirmText:'Eliminar', danger:true }))) return;
@@ -6106,7 +6594,7 @@ function openWelfareCaseDetailModal(c){
           <div class="commitment-detail-row">
             <div style="font-weight:600; font-size:12.5px;">${esc(fmtDateHuman(a.date))}</div>
             <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">${esc(a.note)}</div>
-          </div>`).join('') : emptyStateHtml('Sin acciones de seguimiento todavía', null)}
+          </div>`).join('') : emptyStateHtml('Sin acciones de seguimiento todavía', null, '📝', true)}
       </div>
       <form id="wfd-action-form" style="margin-top:12px;">
         <div class="field"><label>Fecha</label><input type="date" name="date" value="${toISODate(new Date())}" /></div>
@@ -6204,7 +6692,7 @@ function renderCleaningView(){
         <button class="btn btn-primary" id="cs-new">+ Nuevo turno</button>
       </div>
     </div>
-    <div class="card-list">${dates.length ? dates.map((d)=>cleaningDateCardHtml(d, byDate.get(d))).join('') : emptyStateHtml('Todavía no hay turnos asignados', { id:'cs-empty-new', label:'+ Agregar el primero' })}</div>`;
+    <div class="card-list">${dates.length ? dates.map((d)=>cleaningDateCardHtml(d, byDate.get(d))).join('') : emptyStateHtml('Todavía no hay turnos asignados', { id:'cs-empty-new', label:'+ Agregar el primero' }, '🧹')}</div>`;
   document.getElementById('cs-new').addEventListener('click', ()=>openCleaningShiftModal());
   wireEmptyStateCta('cs-empty-new', ()=>openCleaningShiftModal());
   const csCsvBtn = document.getElementById('cs-export-csv');
@@ -6473,7 +6961,7 @@ function renderTalksView(){
       <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
     </div>
     <div class="card-list">
-      ${currentGroups.length ? currentGroups.map(([d, entries])=>talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id:'tk-empty-new', label:'+ Agregar el primero' })}
+      ${currentGroups.length ? currentGroups.map(([d, entries])=>talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id:'tk-empty-new', label:'+ Agregar el primero' }, '🎤')}
     </div>
     ${pastGroups.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="tk-history-toggle" style="margin-top:16px;">
@@ -6766,7 +7254,7 @@ function renderStatsPending(){
   items = items.map(withEventInfoForStats).sort((a,b)=>a.date.localeCompare(b.date));
   content.innerHTML = items.length
     ? `<div class="card-list">${items.map(pendingEvalCardHtml).join('')}</div>`
-    : '<div class="empty-state">No hay actividades pendientes de evaluar 🎉</div>';
+    : emptyStateHtml('No hay actividades pendientes de evaluar — todo al día', null, '🎉');
   content.querySelectorAll('.pe-evaluate').forEach((btn)=>{
     const ev = items.find((e)=>e.id===Number(btn.dataset.id));
     if(ev) btn.addEventListener('click', ()=>openEvaluationModal(ev));
@@ -7149,7 +7637,7 @@ function renderAchievementsCurrent(){
 function renderAchievementsHistory(){
   const el = document.getElementById('ach-content');
   const awards = DB.achievementAwards.filter((a)=>a.periodType===state.achPeriod).sort((a,b)=>b.periodKey.localeCompare(a.periodKey) || a.categoryKey.localeCompare(b.categoryKey));
-  if(!awards.length){ el.innerHTML = '<div class="empty-state">Todavía no hay períodos cerrados con premios — vuelve cuando termine el período en curso</div>'; return; }
+  if(!awards.length){ el.innerHTML = emptyStateHtml('Todavía no hay períodos cerrados con premios — vuelve cuando termine el período en curso', null, '🏅'); return; }
   const byPeriod = new Map();
   awards.forEach((a)=>{ if(!byPeriod.has(a.periodKey)) byPeriod.set(a.periodKey, []); byPeriod.get(a.periodKey).push(a); });
   const periodKeys = [...byPeriod.keys()].sort((a,b)=>b.localeCompare(a));
@@ -7257,7 +7745,7 @@ function rankingSectionHtml(cat, items){
     <div class="ranking-section">
       <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:2px;">${cat.icon} ${esc(cat.label)}</h3>
       <div class="hint-box" style="margin:0 0 8px; padding:6px 10px; font-size:11.5px;">🏅 ${esc(cat.achievementName)} — ${esc(cat.blurb)}</div>
-      <div class="card-list">${items.length ? items.slice(0,10).map((item,i)=>cat.rowFn(item,i)).join('') : `<div class="empty-state">${cat.emptyMsg}</div>`}</div>
+      <div class="card-list">${items.length ? items.slice(0,10).map((item,i)=>cat.rowFn(item,i)).join('') : emptyStateHtml(cat.emptyMsg, null, cat.icon)}</div>
     </div>`;
 }
 function rankingMedal(i){ return i===0 ? '🥇' : i===1 ? '🥈' : i===2 ? '🥉' : `${i+1}.`; }
@@ -7430,17 +7918,17 @@ function renderBishopricPanelView(){
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;" class="bp-grid">
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">⏰ Compromisos atrasados</h3>
-        <div class="card-list${data.overdueCommitments.length>1?' bp-scroll-row':''}" id="bp-commitments-row">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : '<div class="empty-state">Ninguno — al día 🎉</div>'}</div>
+        <div class="card-list${data.overdueCommitments.length>1?' bp-scroll-row':''}" id="bp-commitments-row">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : emptyStateHtml('Ninguno — al día', null, '🎉', true)}</div>
         ${bpScrollDotsHtml(data.overdueCommitments.length, 'bp-commitments-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">🧹 Turnos de aseo sin confirmar</h3>
-        <div class="card-list${data.cleaningPending.length>1?' bp-scroll-row':''}" id="bp-cleaning-row">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : '<div class="empty-state">Ninguno pendiente</div>'}</div>
+        <div class="card-list${data.cleaningPending.length>1?' bp-scroll-row':''}" id="bp-cleaning-row">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : emptyStateHtml('Ninguno pendiente', null, '🧹', true)}</div>
         ${bpScrollDotsHtml(data.cleaningPending.length, 'bp-cleaning-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">👤 Entrevistas de los próximos 7 días</h3>
-        <div class="card-list">${data.upcomingInterviews.length ? data.upcomingInterviews.map(bpInterviewRowHtml).join('') : '<div class="empty-state">Ninguna agendada</div>'}</div>
+        <div class="card-list">${data.upcomingInterviews.length ? data.upcomingInterviews.map(bpInterviewRowHtml).join('') : emptyStateHtml('Ninguna agendada', null, '👤', true)}</div>
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">💰 Presupuesto — ${esc(data.budget.quarterLabel)}</h3>
@@ -7675,7 +8163,7 @@ function wireSwipeNavigation() {
   const SWIPE_MIN_DISTANCE = 60; // px — evita que un tap o un scroll corto dispare el cambio
   const SWIPE_INTENT_THRESHOLD = 10; // px — cuánto hay que moverse antes de decidir si el gesto es horizontal o vertical
   const SWIPE_MAX_OFF_AXIS_RATIO = 0.6; // |dy| no puede pasar de esta fracción de |dx|
-  const HORIZONTAL_SCROLL_CLASSES = ['cal-grid-wrap', 'bp-scroll-row', 'table-scroll', 'tabs'];
+  const HORIZONTAL_SCROLL_CLASSES = ['cal-grid-wrap', 'bp-scroll-row', 'table-scroll', 'tabs', 'swipeable-row'];
   let touchStartX = null;
   let touchStartY = null;
   let swipeIntent = null; // null = aún no decidido; 'horizontal' | 'vertical' una vez que el gesto se define
@@ -7740,6 +8228,7 @@ function wireSwipeNavigation() {
 }
 
 achCloseElapsedPeriods();
+applyFontScale(getFontScale());
 wireOfflineBanner();
 wireSwipeNavigation();
 renderLogin();

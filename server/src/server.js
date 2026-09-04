@@ -25,6 +25,7 @@ import { registerSearchRoutes } from './routes/search.js';
 import { registerNotificationsSummaryRoutes } from './routes/notifications-summary.js';
 import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
+import { registerNamesRoutes } from './routes/names.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 import { startAchievementsScheduler } from './achievements.js';
@@ -53,6 +54,7 @@ registerSearchRoutes(router);
 registerNotificationsSummaryRoutes(router);
 registerInterviewRequestRoutes(router);
 registerWelfareRoutes(router);
+registerNamesRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

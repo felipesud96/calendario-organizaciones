@@ -14,6 +14,10 @@
   --shadow: 0 1px 3px rgba(14, 165, 233, 0.12), 0 1px 2px rgba(14, 165, 233, 0.08);
   --shadow-lg: 0 10px 30px rgba(3, 105, 161, 0.18);
   --radius: 12px;
+  /* Le dice al navegador que esta página soporta ambos temas, para que los
+     controles nativos (scrollbar, calendario del <input type="date">, etc.)
+     seleccionen su versión clara u oscura sin que tengamos que hacer nada. */
+  color-scheme: light dark;
 }
 
 * { box-sizing: border-box; }
@@ -139,6 +143,16 @@ a { color: var(--celeste-dark); }
   border-color: var(--celeste);
   box-shadow: 0 0 0 3px var(--celeste-light);
 }
+/* Punto 96: selector de tamaño de letra en Mi Perfil (3 botones "A" de
+   distinto tamaño, uno por opción — Normal / Grande / Muy grande). */
+.font-scale-picker { display: flex; gap: 8px; margin-top: 6px; }
+.font-scale-btn {
+  flex: 1; padding: 10px 0; border: 1.5px solid var(--border); border-radius: 10px;
+  background: var(--white); color: var(--ink-soft); font-weight: 700; line-height: 1; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+}
+.font-scale-btn:hover { border-color: var(--celeste); }
+.font-scale-btn.active { border-color: var(--celeste); color: var(--celeste-dark); background: var(--celeste-lighter); }
 .field textarea { resize: vertical; min-height: 64px; }
 .btn {
   display: inline-flex;
@@ -338,7 +352,69 @@ a { color: var(--celeste-dark); }
 .tab-btn.active { color: var(--celeste-darker); border-bottom-color: var(--celeste); }
 .tab-btn:hover { color: var(--celeste-dark); }
 
+/* ---------- Punto 98 (Grupo 2): barra de navegación abajo + botón "+"
+   flotante — "pensada para el pulgar". Ocultas por defecto; se muestran
+   solo en celular (ver @media max-width:640px más abajo), reemplazando a
+   la fila de pestañas de arriba, que ahí queda fuera de alcance cómodo del
+   pulgar. z-index por debajo de .modal-backdrop (100) a propósito: cualquier
+   modal (incluida la hoja de "Más") debe taparlas, no al revés. ---------- */
+.bottom-nav {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 90;
+  background: var(--white); border-top: 1px solid var(--border);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  box-shadow: var(--shadow-lg);
+}
+.bottom-nav-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: none; border: none; padding: 6px 2px; color: var(--ink-soft);
+  font-size: 10.5px; font-weight: 600; border-radius: 10px; cursor: pointer;
+}
+.bottom-nav-icon { font-size: 20px; line-height: 1; }
+.bottom-nav-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bottom-nav-btn.active { color: var(--celeste-dark); }
+.mobile-fab {
+  display: none;
+  position: fixed; right: 16px; z-index: 91;
+  width: 56px; height: 56px; border-radius: 50%; border: none;
+  background: var(--celeste); color: #fff; font-size: 28px; line-height: 1;
+  align-items: center; justify-content: center; box-shadow: var(--shadow-lg);
+  cursor: pointer;
+}
+.mobile-fab:active { background: var(--celeste-dark); }
+/* Hoja de "Más" — sube desde el borde inferior en vez de aparecer centrada
+   como el resto de los modales, porque "Más" vive en la barra de abajo. */
+.bottom-sheet-backdrop { align-items: flex-end; }
+.bottom-sheet {
+  background: var(--white); border-radius: 18px 18px 0 0; width: 100%; max-width: 480px;
+  padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
+  box-shadow: var(--shadow-lg); max-height: 70vh; overflow-y: auto;
+  animation: bottom-sheet-in 0.2s ease-out;
+}
+.bottom-sheet-handle { width: 36px; height: 4px; background: var(--border); border-radius: 999px; margin: 4px auto 12px; }
+.bottom-sheet-list { display: flex; flex-direction: column; gap: 2px; }
+.bottom-sheet-item {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 12px 10px; border: none; background: none; border-radius: 10px;
+  text-align: left; font-size: 14.5px; font-weight: 600; color: var(--ink); cursor: pointer;
+}
+.bottom-sheet-item:active { background: var(--celeste-lighter); }
+.bottom-sheet-item.active { color: var(--celeste-dark); }
+@keyframes bottom-sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .bottom-sheet { animation: none; } }
+
 main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
+
+/* Punto 95: transición suave al cambiar de pestaña principal (ver
+   renderCurrentView() en app.js, que reinicia esta clase en cada cambio). */
+main.view.view-fade-in { animation: view-fade-in .28s ease-out; }
+@keyframes view-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  main.view.view-fade-in { animation: none; }
+}
 
 /* ---------- Calendar ---------- */
 .cal-header {
@@ -535,6 +611,27 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
 .list-card .lc-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
 .list-card .lc-when { font-size: 12.5px; font-weight: 700; color: var(--celeste-dark); white-space: nowrap; text-align: right; }
 .list-card .lc-actions { display: flex; gap: 6px; }
+/* Punto 98 (Grupo 2): deslizar para completar un compromiso, en "Mis
+   Asignaciones". `.assignment-card-content` es la capa que se ve y se
+   arrastra (con el mismo padding/contenido que tenía la tarjeta antes);
+   `.assignment-swipe-action` queda fija detrás, y solo se asoma cuando el
+   dedo corre la capa de encima hacia la izquierda (ver wireCommitmentSwipe
+   en app.js). En escritorio (sin gesto táctil que la revele) queda igual
+   de invisible detrás del contenido, así que no hace falta ocultarla aparte. */
+.assignment-card-content {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; background: var(--white); position: relative; z-index: 1;
+}
+.assignment-swipe-action {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 92px; z-index: 0;
+  /* Verde fijo (no var(--success)) a propósito: en modo oscuro esa variable
+     se aclara para leerse como TEXTO sobre un fondo oscuro (ver la sección
+     de modo oscuro más abajo) — usada acá como fondo, con texto blanco
+     encima, perdería casi todo el contraste. Mismo criterio que el toast de
+     éxito, con el mismo problema. */
+  background: #16a34a; color: #fff; border: none; cursor: pointer;
+  font-size: 12px; font-weight: 700; line-height: 1.3; text-align: center;
+}
 /* Panel de Obispado: "Compromisos atrasados" y "Turnos de aseo sin
    confirmar" pueden crecer mucho a medida que se suman organizaciones — en
    vez de estirar la página hacia abajo, esas dos cajas se scrollean de
@@ -563,7 +660,26 @@ main.view { padding: 20px; max-width: 1180px; margin: 0 auto; width: 100%; }
   transition: background-color .15s ease;
 }
 .bp-scroll-dot.active { background: var(--celeste-dark); }
-.empty-state { text-align: center; color: var(--ink-soft); font-size: 13.5px; padding: 40px 10px; border: 1.5px dashed var(--border); border-radius: var(--radius); }
+.empty-state {
+  text-align: center; color: var(--ink-soft); font-size: 13.5px; padding: 32px 10px 36px;
+  border: 1.5px dashed var(--border); border-radius: var(--radius);
+  animation: empty-state-in .35s ease-out;
+}
+/* Punto 94: el ícono grande es lo que le da "algo de vida" a la pantalla
+   vacía — sin él es solo texto gris en un recuadro punteado. Se anima
+   apenas un poco al aparecer (respetando "reduce motion") para que no se
+   sienta como un error, sino como una pausa natural ("todavía no hay nada
+   acá, pero está todo listo para cuando quieras"). */
+.empty-state-icon { font-size: 34px; line-height: 1; margin-bottom: 10px; opacity: .9; }
+.empty-state.compact { padding: 16px 8px; }
+.empty-state.compact .empty-state-icon { font-size: 21px; margin-bottom: 4px; }
+@keyframes empty-state-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .empty-state { animation: none; }
+}
 
 /* ---------- Presupuesto ---------- */
 .budget-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; background: var(--white); margin-bottom: 12px; }
@@ -606,7 +722,7 @@ table.data-table tr:last-child td { border-bottom: none; }
   padding: 16px; z-index: 100;
 }
 .modal {
-  background: white; border-radius: 18px; max-width: 460px; width: 100%;
+  background: var(--white); border-radius: 18px; max-width: 460px; width: 100%;
   box-shadow: var(--shadow-lg); max-height: 90vh; overflow-y: auto;
 }
 .modal-header {
@@ -647,7 +763,11 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: white; padding: 10px 18px; border-radius: 10px;
+  /* Color fijo (no var(--ink)) a propósito: el toast es una "pastilla"
+     oscura flotante en ambos temas, no una superficie que deba invertirse
+     en modo oscuro — si usara var(--ink) se volvería clara ahí y el texto
+     blanco de encima dejaría de leerse. */
+  background: #1e293b; color: white; padding: 10px 18px; border-radius: 10px;
   font-size: 13px; z-index: 200; box-shadow: var(--shadow-lg);
 }
 .toast.error { background: var(--danger); }
@@ -677,6 +797,41 @@ table.data-table tr:last-child td { border-bottom: none; }
 
 /* ---------- Aseo del Edificio ---------- */
 .ac-item:hover { background: #f0f4f8; }
+
+/* Autocompletar nombres ya usados (Grupo 3): cuadro de sugerencias genérico
+   que se engancha con JS bajo cualquier input de texto libre (adultos
+   supervisores, presentador de un tema, persona/familia de Bienestar,
+   líder que entrevista). Usa variables de tema, así que no necesita una
+   versión aparte para modo oscuro. */
+.ac-results {
+  display: none;
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+  margin-top: 2px;
+  background: var(--white); border: 1px solid var(--border); border-radius: 8px;
+  max-height: 200px; overflow-y: auto; box-shadow: var(--shadow-lg);
+}
+.ac-results .ac-item { padding: 8px 10px; cursor: pointer; font-size: 13.5px; }
+
+/* Dictado por voz (Grupo 3): botón de micrófono flotando en la esquina
+   superior derecha de cualquier textarea que lo soporte (ver wireDictation
+   en app.js, que le agrega el padding-right por JS para no depender de
+   :has(), todavía no soportado en todos los navegadores). */
+.dictation-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--white); color: var(--ink-soft);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+}
+.dictation-btn:hover { background: var(--celeste-lighter); color: var(--celeste-dark); }
+.dictation-btn.listening {
+  background: #dc2626; border-color: #dc2626; color: #fff;
+  animation: dictation-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dictation-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, .45); }
+  50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .dictation-btn.listening { animation: none; } }
 .family-row {
   border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px;
 }
@@ -763,6 +918,13 @@ table.data-table tr:last-child td { border-bottom: none; }
   .print-area, .print-area * { visibility: visible; }
   #diploma-print-area, .print-area { position: absolute; top: 0; left: 0; width: 100%; }
   .modal-backdrop { position: static !important; background: none !important; }
+  /* El papel siempre es blanco con tinta oscura, sin importar si el celular
+     o computador tenía el modo oscuro activado al momento de imprimir o
+     exportar a PDF — si no, en un equipo con tema oscuro el reporte podía
+     salir con texto claro sobre fondo claro, ilegible. */
+  .print-report, .print-report * { color: #0f172a !important; background: #ffffff !important; }
+  .print-report h2, .print-report th { color: #075985 !important; }
+  .print-report th, .print-report td { border-color: #dbeafe !important; }
 }
 
 /* ---------- Exportar reportes (CSV / imprimir-a-PDF) ---------- */
@@ -783,7 +945,14 @@ table.data-table tr:last-child td { border-bottom: none; }
   .ranking-grid { grid-template-columns: 1fr; }
   .cal-cell { min-height: 78px; }
   .cal-month-label { min-width: 0; font-size: 15px; }
-  main.view { padding: 12px; }
+  /* Punto 98: la fila de pestañas de arriba se reemplaza por la barra de
+     abajo (más cómoda para el pulgar) — main.view reserva espacio abajo
+     para que la barra fija y el botón "+" flotante no tapen el final del
+     contenido, tal como pasaría con cualquier barra fija de siempre. */
+  .tabs#main-tabs { display: none; }
+  .bottom-nav { display: flex; }
+  .mobile-fab { display: flex; bottom: calc(64px + 16px + env(safe-area-inset-bottom)); }
+  main.view { padding: 12px 12px calc(64px + 16px + env(safe-area-inset-bottom)); }
   .topbar-title small { display: none; }
   .bp-grid { grid-template-columns: 1fr !important; }
   /* Barra superior: en celular se achica el espacio entre íconos y se
@@ -802,4 +971,84 @@ table.data-table tr:last-child td { border-bottom: none; }
   #logout-btn { padding: 6px 10px; font-size: 12.5px; }
   .topbar-dropdown-panel { padding: 10px 12px; }
   .search-panel-row input[type="text"] { font-size: 16px; } /* evita zoom automático de iOS al enfocar */
+}
+
+/* ==================================================================
+   Modo oscuro automático — sigue el tema del celular/computador
+   (prefers-color-scheme), sin ningún botón para activarlo a mano: si el
+   sistema operativo está en modo oscuro, la app lo sigue sola; si no, se ve
+   exactamente igual que antes. Útil, por ejemplo, para revisar el
+   calendario o marcar un compromiso durante una reunión de noche sin que
+   la pantalla encandile.
+
+   Estrategia: como casi todos los colores de la app ya salen de las
+   variables de :root, alcanza con redefinirlas acá para que toda la interfaz
+   seleccione su versión oscura sola. Los pocos lugares que usaban un color
+   fijo en vez de una variable (celdas "de otro mes" en el calendario, la
+   franja de sincronización con Estaca, etc.) se corrigen aparte, uno por
+   uno, porque si no quedaban como manchas claras sueltas sobre un fondo
+   oscuro. El diploma imprimible es la única excepción a propósito: se deja
+   siempre con su mismo aspecto de papel/certificado, como una foto que no
+   cambia de colores con el tema.
+   ================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --celeste: #38bdf8;
+    --celeste-dark: #7dd3fc;
+    --celeste-darker: #bae6fd;
+    --celeste-light: #1e3a4f;
+    --celeste-lighter: #16283a;
+    --white: #16212c;
+    --ink: #e7eef4;
+    --ink-soft: #9db0c2;
+    --border: #2a3f52;
+    --danger: #f87171;
+    --danger-light: #3a1414;
+    --success: #4ade80;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+  }
+
+  .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
+
+  /* Celdas "de otro mes" del calendario: en claro son un blanco apenas
+     distinto (#fafcff); en oscuro necesitan su propio tono, si no quedan
+     como un recuadro blanco encendido en medio de la grilla oscura. */
+  .cal-cell.other-month { background: #101a24; }
+  .cal-cell.other-month .cal-daynum { color: #4c6178; }
+  .mini-cal-cell.other-month { color: #3a5166; }
+
+  /* Insignias/estados lisos gris claro — el resto de las píldoras de color
+     (ámbar, verde, morado) se dejan igual: una etiqueta con color de sobra
+     se ve bien encima de cualquier fondo, pero el gris casi blanco de estas
+     dos sí necesita su propia versión oscura. */
+  .role-member { background: #263141; color: #b6c2cf; }
+  .status-gray { background: #263141; color: #b6c2cf; }
+
+  /* Avisos y tarjetas que ocupan un ancho considerable de la pantalla (no
+     son una simple píldora chica) — estos si se dejaran con su color claro
+     original se verían como un recuadro brillante fuera de lugar. */
+  .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+  .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+  .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
+  .ranking-top { background: #122a1c; border-color: #1f4a30; }
+  .ac-item:hover { background: #1c2b38; }
+
+  /* Bordes que en claro usaban un rosado suave a juego con danger-light —
+     como esa variable ya cambió arriba, sin este ajuste el borde quedaba
+     rosado claro sobre un fondo rojo oscuro. */
+  .btn-danger { border-color: #5c2323; }
+  .btn-danger:hover { background: #4a1c1c; }
+  .error-msg { border-color: #5c2323; }
+  .ranking-bottom { border-color: #5c2323; }
+
+  /* El diploma es un documento para compartir/imprimir — mantiene siempre
+     su mismo aspecto de papel/certificado, sin importar el tema del
+     celular, igual que una foto no cambia de colores en modo oscuro. */
+  .diploma-border { background: #fffdf7; border-color: #0369a1; }
+  .diploma-eyebrow, .diploma-sub, .diploma-footer { color: #475569; }
+  .diploma-title { color: #075985; }
+  .diploma-body-text, .diploma-winner { color: #0f172a; }
+  .diploma-winner { border-bottom-color: #0ea5e9; }
+  .diploma-value { color: #0369a1; }
 }

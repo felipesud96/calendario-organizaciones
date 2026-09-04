@@ -85,9 +85,15 @@ function esc(s) {
 // evita que la persona tenga que ir a buscar el botón correspondiente en
 // otra parte de la pantalla. `cta` es opcional: { id, label }. Después de
 // insertar el HTML hay que llamar wireEmptyStateCta(cta, fn) para conectar
-// el clic (el propio caller decide qué acción corresponde).
-function emptyStateHtml(message, cta) {
-  return `<div class="empty-state">
+// el clic (el propio caller decide qué acción corresponde). `icon` es
+// opcional (un emoji grande arriba del mensaje) — le da algo de vida a la
+// pantalla en vez de solo texto gris sobre un recuadro punteado; si no se
+// pasa, usa uno neutro (📭) para que igual se vea completo.
+// `compact` es para huecos chicos (tarjetas dentro de un panel, celdas de
+// tabla) donde el tamaño normal del ícono se vería desproporcionado.
+function emptyStateHtml(message, cta, icon, compact) {
+  return `<div class="empty-state${compact ? ' compact' : ''}">
+    <div class="empty-state-icon" aria-hidden="true">${esc(icon || '📭')}</div>
     <div>${esc(message)}</div>
     ${cta ? `<button type="button" class="btn btn-primary btn-sm" id="${cta.id}" style="margin-top:12px;">${esc(cta.label)}</button>` : ''}
   </div>`;
@@ -142,6 +148,8 @@ const ICON_PATHS = {
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-3.9"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
+  mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 };
 function icon(name, size = 16) {
   const paths = ICON_PATHS[name];
@@ -221,6 +229,15 @@ function toast(message, type = 'success') {
 // ---------------- Fechas ----------------
 function pad2(n) { return String(n).padStart(2, '0'); }
 function toISODate(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+// Usada para precargar la fecha al "Duplicar actividad" (Grupo 3) — suma
+// `days` días a una fecha ISO (YYYY-MM-DD) sin líos de huso horario, ya que
+// arma la fecha en hora local a mediodía antes de sumar.
+function addDaysToISO(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, m - 1, d, 12);
+  date.setDate(date.getDate() + days);
+  return toISODate(date);
+}
 function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 function isSameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
@@ -688,7 +705,26 @@ function setToken(token) {
   else localStorage.removeItem('cow_token');
 }
 
+// Punto 96: tamaño de letra ajustable — es una preferencia de cómo se ve la
+// pantalla EN ESTE dispositivo (como el modo oscuro automático, que sigue
+// al sistema), no un dato de la cuenta — así que se guarda en localStorage
+// y no en el perfil del servidor: cada persona puede querer un tamaño
+// distinto en su celular y en su computador. Se aplica agrandando toda la
+// página proporcionalmente con `zoom` (botones, íconos y espacios incluidos,
+// no solo el texto) en vez de tener que tocar cada tamaño de fuente uno por
+// uno en todo el CSS.
+const FONT_SCALE_KEY = 'organizasion_font_scale';
+const FONT_SCALE_OPTIONS = [
+  { value: '1', title: 'Normal' },
+  { value: '1.15', title: 'Grande' },
+  { value: '1.3', title: 'Muy grande' },
+];
+function getFontScale() { return localStorage.getItem(FONT_SCALE_KEY) || '1'; }
+function applyFontScale(scale) { document.body.style.zoom = scale; }
+function setFontScale(scale) { localStorage.setItem(FONT_SCALE_KEY, scale); applyFontScale(scale); }
+
 async function boot() {
+  applyFontScale(getFontScale());
   wireOfflineBanner();
   wireSwipeNavigation();
   if (!state.token) { renderLogin(); return; }
@@ -729,7 +765,11 @@ function wireSwipeNavigation() {
   const SWIPE_MIN_DISTANCE = 60; // px — evita que un tap o un scroll corto dispare el cambio
   const SWIPE_INTENT_THRESHOLD = 10; // px — cuánto hay que moverse antes de decidir si el gesto es horizontal o vertical
   const SWIPE_MAX_OFF_AXIS_RATIO = 0.6; // |dy| no puede pasar de esta fracción de |dx|
-  const HORIZONTAL_SCROLL_CLASSES = ['cal-grid-wrap', 'bp-scroll-row', 'table-scroll', 'tabs'];
+  // Punto 98 (Grupo 2): 'swipeable-row' es la tarjeta de un compromiso en
+  // "Mis Asignaciones" (ver wireCommitmentSwipe) — tiene su propio gesto de
+  // deslizar para revelar "✅ Completar", que no debe competir con este de
+  // cambiar de pestaña.
+  const HORIZONTAL_SCROLL_CLASSES = ['cal-grid-wrap', 'bp-scroll-row', 'table-scroll', 'tabs', 'swipeable-row'];
   let touchStartX = null;
   let touchStartY = null;
   let swipeIntent = null; // null = aún no decidido; 'horizontal' | 'vertical' una vez que el gesto se define
@@ -951,6 +991,13 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
         </div>
         <div class="modal-body">
           <div id="prof-error"></div>
+          <div class="field" style="margin-bottom:16px;">
+            <label>🔤 Tamaño de letra de la app (en este celular/computador)</label>
+            <div class="font-scale-picker" id="prof-font-scale-picker">
+              ${FONT_SCALE_OPTIONS.map((opt) => `<button type="button" class="font-scale-btn ${getFontScale() === opt.value ? 'active' : ''}" data-scale="${opt.value}" style="font-size:${14 + Number(opt.value) * 6}px;" title="${esc(opt.title)}">A</button>`).join('')}
+            </div>
+            <div class="hint-box" style="margin-top:8px;">Se aplica al toque, sin necesidad de guardar — es solo para este dispositivo, no cambia nada para el resto de la organización.</div>
+          </div>
           ${mandatory ? `<div class="hint-box" style="margin-top:0;">Antes de seguir, nos falta ${(!u.birthDate || !u.sex) ? 'tu fecha de nacimiento y tu sexo' : ''}${(!u.birthDate || !u.sex) && showCalling && !u.calling ? ' y ' : ''}${showCalling && !u.calling ? 'tu llamamiento' : ''} — se usan para saber con quién puedes agendar una entrevista (por ejemplo, un hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta con Sociedad de Socorro o con el Obispado; un joven o una joven solo con el Obispado)${showCalling ? ', y quién de la presidencia realiza entrevistas' : ''}.</div>` : ''}
           <form id="prof-form">
             <div class="field" style="text-align:center;">
@@ -1009,6 +1056,16 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
         </div>
       </div>
     </div>`;
+  // El selector de tamaño de letra vive fuera de #prof-form a propósito:
+  // se aplica al toque (no requiere presionar "Guardar") y por lo tanto no
+  // debe activar el aviso de "cambios sin guardar" que sí vigila el resto
+  // del formulario de perfil.
+  document.querySelectorAll('.font-scale-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setFontScale(btn.dataset.scale);
+      document.querySelectorAll('.font-scale-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    });
+  });
   if (!mandatory) {
     const guardedClose = wireUnsavedChangesGuard(document.getElementById('prof-form'));
     document.getElementById('prof-modal-close').addEventListener('click', guardedClose);
@@ -1566,16 +1623,21 @@ function canSeeWelfareTab() {
 // orden fijo para todos: se ordena por qué tan seguido ese perfil necesita
 // revisar o actuar sobre cada módulo, con Calendario siempre primero como
 // ancla común a todos los perfiles (para que no "salte de lugar").
+// `icon` y `navLabel` (Punto 98) son solo para la barra de navegación de
+// abajo en celular — el ícono grande + una etiqueta corta debajo, como en
+// cualquier app nativa. `navLabel` es opcional: se usa solo cuando el
+// `label` de siempre ya trae su propio emoji al principio (Bienestar), para
+// no repetirlo junto al ícono de la barra.
 const TAB_DEFS = {
-  calendar: { label: 'Calendario', visible: () => true },
-  myActivities: { label: 'Mis Actividades', visible: canSeeMyActivitiesTab },
-  interviews: { label: 'Entrevistas', visible: canSeeInterviewsTab },
-  meetings: { label: 'Reuniones y Consejos', visible: canSeeMeetingsTab },
-  welfare: { label: '🤲 Bienestar', visible: canSeeWelfareTab },
-  cleaning: { label: 'Asignaciones', visible: canSeeAssignmentsTab },
-  budget: { label: 'Presupuesto', visible: canSeeBudgetTab },
-  stats: { label: 'Estadísticas', visible: canSeeStatsTab },
-  admin: { label: 'Administración', visible: () => !!state.user && state.user.role === 'admin' },
+  calendar: { label: 'Calendario', icon: '📅', visible: () => true },
+  myActivities: { label: 'Mis Actividades', icon: '📌', visible: canSeeMyActivitiesTab },
+  interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
+  meetings: { label: 'Reuniones y Consejos', icon: '📋', navLabel: 'Reuniones', visible: canSeeMeetingsTab },
+  welfare: { label: '🤲 Bienestar', icon: '🤲', navLabel: 'Bienestar', visible: canSeeWelfareTab },
+  cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
+  budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
+  stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
+  admin: { label: 'Administración', icon: '⚙️', navLabel: 'Admin', visible: () => !!state.user && state.user.role === 'admin' },
 };
 
 // Orden de pestañas según perfil — Calendario siempre primero; el resto se
@@ -1680,6 +1742,8 @@ function render() {
     <div id="modal-root"></div>
     <div id="confirm-root"></div>
     <div id="ocr-root"></div>
+    ${bottomNavHtml()}
+    <button type="button" class="mobile-fab" id="mobile-fab" title="Agregar" hidden>+</button>
   `;
   document.getElementById('logout-btn').addEventListener('click', logout);
   document.getElementById('my-profile-btn').addEventListener('click', () => openProfileModal());
@@ -1689,7 +1753,122 @@ function render() {
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if (bishopricBtn) bishopricBtn.addEventListener('click', () => { state.view = 'bishopricPanel'; renderCurrentView(); });
   wireTopbarUtilities();
+  wireBottomNav();
+  wireMobileFab();
   renderCurrentView();
+}
+
+// Punto 98 (Grupo 2 — "pensada para el pulgar"): barra de navegación fija
+// abajo, solo visible en celular (ver @media max-width:640px en el CSS) —
+// reemplaza a la fila de pestañas de arriba para ese ancho de pantalla, que
+// obliga a estirar el brazo hasta arriba de la pantalla en vez de quedar al
+// alcance del pulgar. Muestra como máximo BOTTOM_NAV_MAX_PRIMARY pestañas
+// (ya vienen ordenadas por qué tan seguido las usa cada perfil, ver
+// tabOrderFor()) más un botón "Más" si sobran, que abre una hoja abajo con
+// el resto — así nunca hay más de 5 botones compitiendo por espacio, sin
+// importar cuántas pestañas le correspondan al perfil.
+const BOTTOM_NAV_MAX_PRIMARY = 4;
+function bottomNavHtml() {
+  const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+  if (!order.length) return '';
+  const primary = order.slice(0, BOTTOM_NAV_MAX_PRIMARY);
+  const overflow = order.slice(BOTTOM_NAV_MAX_PRIMARY);
+  const itemHtml = (k) => `
+    <button type="button" class="bottom-nav-btn ${state.view === k ? 'active' : ''}" data-view="${k}">
+      <span class="bottom-nav-icon">${TAB_DEFS[k].icon}</span>
+      <span class="bottom-nav-label">${esc(TAB_DEFS[k].navLabel || TAB_DEFS[k].label)}</span>
+    </button>`;
+  return `
+    <nav class="bottom-nav" id="bottom-nav">
+      ${primary.map(itemHtml).join('')}
+      ${overflow.length ? `
+        <button type="button" class="bottom-nav-btn ${overflow.includes(state.view) ? 'active' : ''}" id="bottom-nav-more">
+          <span class="bottom-nav-icon">☰</span>
+          <span class="bottom-nav-label">Más</span>
+        </button>` : ''}
+    </nav>`;
+}
+function wireBottomNav() {
+  const nav = document.getElementById('bottom-nav');
+  if (!nav) return;
+  nav.querySelectorAll('.bottom-nav-btn[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => { state.view = btn.dataset.view; renderCurrentView(); });
+  });
+  const moreBtn = document.getElementById('bottom-nav-more');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+      openBottomNavMoreSheet(order.slice(BOTTOM_NAV_MAX_PRIMARY));
+    });
+  }
+}
+// Hoja que sube desde abajo (no un modal centrado como el resto de la app)
+// a propósito: "Más" vive en la barra de abajo, así que lo natural es que
+// lo que abre también aparezca ahí, al alcance del pulgar que la tocó.
+function openBottomNavMoreSheet(overflowKeys) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop bottom-sheet-backdrop" id="bnav-sheet-backdrop">
+      <div class="bottom-sheet">
+        <div class="bottom-sheet-handle"></div>
+        <div class="bottom-sheet-list">
+          ${overflowKeys.map((k) => `
+            <button type="button" class="bottom-sheet-item ${state.view === k ? 'active' : ''}" data-view="${k}">
+              <span class="bottom-nav-icon">${TAB_DEFS[k].icon}</span>
+              <span>${esc(TAB_DEFS[k].navLabel || TAB_DEFS[k].label)}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('bnav-sheet-backdrop').addEventListener('click', (e) => { if (e.target.id === 'bnav-sheet-backdrop') close(); });
+  modalRoot.querySelectorAll('.bottom-sheet-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.view = btn.dataset.view;
+      close();
+      renderCurrentView();
+    });
+  });
+}
+
+// Punto 98: botón flotante "+" — en celular, además del botón "+ Nueva…" de
+// siempre arriba de cada pantalla (que puede quedar lejos del pulgar si la
+// lista es larga y hay que bajar a verla), un botón circular fijo abajo a
+// la derecha hace exactamente lo mismo con un solo toque, sin duplicar la
+// lógica de cada formulario: en vez de reimplementar "crear" para cada
+// módulo, el botón flotante simplemente busca cuál de los botones "+" de
+// siempre está presente en la pantalla actual y le hace clic él mismo. Si
+// la pantalla no tiene ninguna acción de "crear" (Estadísticas, por
+// ejemplo, o "Mis Asignaciones" que son compromisos que llegan solos, no se
+// crean a mano), el botón flotante se esconde solo.
+const FAB_TARGET_CANDIDATES = ['cal-new-event', 'my-act-new', 'iv-new', 'meeting-new', 'wf-new', 'cs-new', 'tk-new', 'budget-new-category', 'user-new'];
+let mobileFabObserver = null;
+function wireMobileFab() {
+  const fab = document.getElementById('mobile-fab');
+  if (!fab) return;
+  fab.addEventListener('click', () => {
+    const target = fab.dataset.targetId && document.getElementById(fab.dataset.targetId);
+    if (target) target.click();
+  });
+  const update = () => {
+    const targetId = FAB_TARGET_CANDIDATES.find((id) => document.getElementById(id));
+    if (targetId) { fab.hidden = false; fab.dataset.targetId = targetId; }
+    else { fab.hidden = true; delete fab.dataset.targetId; }
+  };
+  update();
+  // #view-root se vuelve a crear en cada render() (login/logout), así que el
+  // observer de la vez anterior quedaría mirando un nodo ya desconectado —
+  // por eso se desconecta el anterior y se crea uno nuevo cada vez, en vez
+  // de "atarlo una sola vez" como wireSwipeNavigation (que sí puede atarse a
+  // `document`, que nunca cambia).
+  if (mobileFabObserver) mobileFabObserver.disconnect();
+  let scheduled = false;
+  mobileFabObserver = new MutationObserver(() => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => { scheduled = false; update(); });
+  });
+  mobileFabObserver.observe(document.getElementById('view-root'), { childList: true, subtree: true });
 }
 
 function renderCurrentView() {
@@ -1704,6 +1883,26 @@ function renderCurrentView() {
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if (bishopricBtn) bishopricBtn.classList.toggle('active', state.view === 'bishopricPanel');
+  root.querySelectorAll('.bottom-nav-btn[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
+  const bottomNavMoreBtn = document.getElementById('bottom-nav-more');
+  if (bottomNavMoreBtn) {
+    const overflow = tabOrderFor().filter((k) => TAB_DEFS[k].visible()).slice(BOTTOM_NAV_MAX_PRIMARY);
+    bottomNavMoreBtn.classList.toggle('active', overflow.includes(state.view));
+  }
+  // Punto 95: una transición suave (fundido + leve deslizamiento) cada vez
+  // que se cambia de pestaña principal, para que no se sienta como un salto
+  // brusco de una pantalla a otra. Se reinicia la animación sacando y
+  // volviendo a poner la clase (con un reflow forzado en el medio) porque
+  // cambiar el innerHTML de #view-root no la reinicia por sí solo. Solo se
+  // aplica acá — al cambiar de pestaña principal — y no en cada refresco de
+  // datos dentro de una misma vista (sub-pestañas, filtros, etc.), que se
+  // renderizan llamando directo a su propia función y no pasan por acá.
+  const viewRoot = document.getElementById('view-root');
+  if (viewRoot) {
+    viewRoot.classList.remove('view-fade-in');
+    void viewRoot.offsetWidth;
+    viewRoot.classList.add('view-fade-in');
+  }
   if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'bishopricPanel') renderBishopricPanelView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
@@ -1825,7 +2024,7 @@ async function renderCalendarView() {
             <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
           </div>`).join('')}
       </div>
-    </div>`).join('') : '<div class="empty-state">Sin actividades este mes' + (state.activeOrgIds ? ' con los filtros de organización activos' : '') + '</div>';
+    </div>`).join('') : emptyStateHtml('Mes libre, sin actividades' + (state.activeOrgIds ? ' con los filtros de organización activos' : ''), null, '🌤️');
 
   container.innerHTML = `
     <div class="cal-header">
@@ -2122,7 +2321,7 @@ function openDayModal(iso) {
                   <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
-              </div>`).join('') : '<div class="empty-state">Sin actividades este día</div>'}
+              </div>`).join('') : emptyStateHtml('Sin actividades este día', null, '📆')}
           </div>
         </div>
       </div>
@@ -2790,7 +2989,7 @@ async function renderMyActivitiesLeaderView() {
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
-        </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id: 'my-act-empty-new', label: '+ Agregar la primera' })}
+        </div>`).join('') : emptyStateHtml('Todavía no tienes actividades agendadas', { id: 'my-act-empty-new', label: '+ Agregar la primera' }, '🗓️')}
     </div>
     ${myInterviewRequestsSectionHtml(myRequests)}
   `;
@@ -2888,7 +3087,7 @@ async function renderMyActivitiesMemberView() {
               </div>
               <div class="lc-when">${esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
             </div>`).join('')}
-        </div>`).join('') : `<div class="empty-state">${followedIds.length ? 'No hay actividades próximas de las organizaciones que elegiste' : 'Elige qué organizaciones te interesan para ver sus actividades acá'}</div>`}
+        </div>`).join('') : emptyStateHtml(followedIds.length ? 'No hay actividades próximas de las organizaciones que elegiste' : 'Elige qué organizaciones te interesan para ver sus actividades acá', null, followedIds.length ? '🌤️' : '👋')}
     </div>
     ${myInterviewRequestsSectionHtml(myRequests)}
   `;
@@ -2969,9 +3168,13 @@ function supervisingAdultsFieldHtml(existingAdults) {
 function wireSupervisingAdultsRows() {
   const rows = document.getElementById('ev-sa-rows');
   if (!rows) return;
-  const wireRow = (row) => row.querySelector('.sa-remove').addEventListener('click', () => {
-    if (rows.children.length > 2) row.remove();
-  });
+  getNameSuggestions(); // dispara el fetch en segundo plano (ver más abajo)
+  const wireRow = (row) => {
+    wireNameAutocomplete(row.querySelector('.sa-name-input'), () => nameSuggestionsCache?.supervisingAdults);
+    row.querySelector('.sa-remove').addEventListener('click', () => {
+      if (rows.children.length > 2) row.remove();
+    });
+  };
   Array.from(rows.children).forEach(wireRow);
   const addBtn = document.getElementById('ev-sa-add');
   if (addBtn) addBtn.addEventListener('click', () => {
@@ -2991,10 +3194,17 @@ function updateSupervisingAdultsSection(orgId, existingAdults) {
   }
 }
 
-function openEventModal(existing = null) {
+// `duplicate: true` reutiliza todos los datos de `existing` para precargar
+// el formulario, pero funciona como si fuera una actividad nueva (POST, no
+// PUT) — así se puede repetir una actividad que ya existe sin retipear todo
+// desde cero. La fecha se adelanta 7 días como punto de partida razonable
+// (lo más común es duplicar algo semanal), pero queda editable como
+// cualquier otro campo antes de guardar.
+function openEventModal(existing = null, { duplicate = false } = {}) {
   const options = editableOrgOptions('event');
   if (!existing && options.length === 0) { toast('No tienes una organización asignada para crear actividades', 'error'); return; }
-  const isEdit = !!existing;
+  const isEdit = !!existing && !duplicate;
+  const prefillDate = duplicate && existing?.date ? addDaysToISO(existing.date, 7) : (existing?.date || '');
   // Si ya trae algo cargado en un campo "avanzado" (es una Reunión, es de
   // todo el Barrio, o ya tiene organizaciones involucradas), la sección
   // arranca abierta — para no esconder de entrada una configuración que la
@@ -3006,7 +3216,7 @@ function openEventModal(existing = null) {
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ev-modal-backdrop">
       <div class="modal">
-        <div class="modal-header"><h3>${isEdit ? 'Editar actividad' : 'Nueva actividad'}</h3><button class="modal-close" id="ev-modal-close">×</button></div>
+        <div class="modal-header"><h3>${isEdit ? 'Editar actividad' : (duplicate ? 'Duplicar actividad' : 'Nueva actividad')}</h3><button class="modal-close" id="ev-modal-close">×</button></div>
         <div class="modal-body">
           <div id="ev-error"></div>
           <form id="ev-form">
@@ -3044,7 +3254,7 @@ function openEventModal(existing = null) {
             </div>
             <div class="field">
               <label>Día</label>
-              <input type="date" name="date" required value="${existing?.date || ''}" />
+              <input type="date" name="date" required value="${prefillDate}" />
             </div>
             <div class="two-col">
               <div class="field">
@@ -3060,10 +3270,13 @@ function openEventModal(existing = null) {
           </form>
         </div>
         <div class="modal-footer">
-          <div>${isEdit ? `<button class="btn btn-danger" id="ev-delete">Eliminar</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            ${isEdit ? `<button class="btn btn-danger" id="ev-delete">Eliminar</button>` : ''}
+            ${isEdit ? `<button type="button" class="btn btn-secondary" id="ev-duplicate">${icon('copy')} Duplicar</button>` : ''}
+          </div>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-secondary" id="ev-cancel">Cancelar</button>
-            <button class="btn btn-primary" id="ev-save">${isEdit ? 'Guardar cambios' : 'Crear actividad'}</button>
+            <button class="btn btn-primary" id="ev-save">${isEdit ? 'Guardar cambios' : (duplicate ? 'Crear copia' : 'Crear actividad')}</button>
           </div>
         </div>
       </div>
@@ -3073,6 +3286,23 @@ function openEventModal(existing = null) {
   document.getElementById('ev-modal-close').addEventListener('click', evGuardedClose);
   document.getElementById('ev-cancel').addEventListener('click', evGuardedClose);
   document.getElementById('ev-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ev-modal-backdrop') evGuardedClose(); });
+  // "Duplicar": cierra este modal y abre uno nuevo en modo creación,
+  // precargado con los datos ORIGINALES de la actividad (no con lo que se
+  // haya alcanzado a escribir sin guardar en este formulario) — así que, si
+  // hay cambios sin guardar, se avisa igual que al cerrar con la X, para no
+  // perderlos sin darse cuenta.
+  let evFormDirtyForDuplicate = false;
+  document.getElementById('ev-form').addEventListener('input', () => { evFormDirtyForDuplicate = true; });
+  document.getElementById('ev-form').addEventListener('change', () => { evFormDirtyForDuplicate = true; });
+  const duplicateBtn = document.getElementById('ev-duplicate');
+  if (duplicateBtn) duplicateBtn.addEventListener('click', async () => {
+    if (evFormDirtyForDuplicate) {
+      const ok = await confirmModal('Tienes cambios sin guardar en este formulario. ¿Duplicar de todas formas? Se va a usar la actividad original tal como está guardada, sin esos cambios.', { title: 'Cambios sin guardar', confirmText: 'Duplicar igual', danger: true });
+      if (!ok) return;
+    }
+    closeModal();
+    openEventModal(existing, { duplicate: true });
+  });
   if (isEdit) document.getElementById('ev-delete').addEventListener('click', async () => {
     if (!(await confirmModal('¿Eliminar esta actividad?', { title: 'Eliminar actividad', confirmText: 'Eliminar', danger: true }))) return;
     try { await api(`/events/${existing.id}`, { method: 'DELETE' }); closeModal(); toast('Actividad eliminada'); await refreshAfterEventChange(); }
@@ -3162,7 +3392,7 @@ function openEventModal(existing = null) {
     body.overrideStakeConflict = stakeConflictsChecked;
 
     if (!conflictsChecked) {
-      const conflicts = await findConflictingActivities(body, existing?.id);
+      const conflicts = await findConflictingActivities(body, isEdit ? existing?.id : undefined);
       if (conflicts.length) {
         document.getElementById('ev-conflict-warning').innerHTML = conflictWarningHtml(conflicts);
         conflictsChecked = true;
@@ -3313,7 +3543,7 @@ async function renderInterviewsView() {
         <button class="subtab-btn active" data-tab="requests">📥 Solicitudes${pendingRequests.length ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingRequests.length}</span>` : ''}</button>
       </div>
       <div class="card-list">
-        ${pendingRequests.length ? pendingRequests.map((r) => interviewRequestRowHtml(r)).join('') : emptyStateHtml('No hay solicitudes de entrevista pendientes')}
+        ${pendingRequests.length ? pendingRequests.map((r) => interviewRequestRowHtml(r)).join('') : emptyStateHtml('No hay solicitudes de entrevista pendientes', null, '📥')}
       </div>
       ${decidedRequests.length ? `
         <button type="button" class="btn btn-secondary btn-sm" id="ivreq-history-toggle" style="margin-top:16px;">
@@ -3380,7 +3610,8 @@ async function renderInterviewsView() {
   const pendingListHtml = !visiblePending.length
     ? emptyStateHtml(
         sectioned ? `${activeOrg.name} no tiene entrevistas pendientes de agendar o verificar` : 'No hay entrevistas pendientes de agendar o verificar',
-        canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null
+        canManage ? { id: 'iv-empty-new', label: '+ Agendar la primera' } : null,
+        '👤'
       )
     : interviewPendingDateGroupsHtml(visiblePending);
 
@@ -3413,7 +3644,7 @@ async function renderInterviewsView() {
         ${state.interviewsHistoryOpen ? (
           visibleHistory.length
             ? visibleHistory.map((iv) => interviewHistoryCardHtml(iv)).join('')
-            : emptyStateHtml(sectioned ? `${activeOrg.name} no tiene entrevistas verificadas todavía` : 'No hay entrevistas verificadas todavía')
+            : emptyStateHtml(sectioned ? `${activeOrg.name} no tiene entrevistas verificadas todavía` : 'No hay entrevistas verificadas todavía', null, '📜')
         ) : ''}
       </div>` : ''}
   `;
@@ -3684,6 +3915,143 @@ function wireMemberPicker(idPrefix, directory, onChange) {
   });
 }
 
+// ---------------- Autocompletar nombres ya usados (Grupo 3) ----------------
+// Para campos de texto libre que NO tienen un directorio de usuarios detrás
+// (adulto supervisor, quién presenta un tema, persona/familia de Bienestar,
+// líder que entrevista cuando lo escribe un Administrador): en vez de nada,
+// sugerimos nombres que ya se usaron antes en otro registro, para no
+// obligar a re-escribirlos cada vez. El servidor los junta y los ordena por
+// frecuencia (ver /api/names/suggestions en server/src/routes/names.js).
+let nameSuggestionsCache = null;
+let nameSuggestionsCacheAt = 0;
+let nameSuggestionsPromise = null;
+function getNameSuggestions() {
+  const now = Date.now();
+  if (nameSuggestionsCache && now - nameSuggestionsCacheAt < 60000) return Promise.resolve(nameSuggestionsCache);
+  if (!nameSuggestionsPromise) {
+    nameSuggestionsPromise = api('/names/suggestions')
+      .then((r) => { nameSuggestionsCache = r; nameSuggestionsCacheAt = Date.now(); nameSuggestionsPromise = null; return r; })
+      .catch(() => { nameSuggestionsPromise = null; return nameSuggestionsCache || { supervisingAdults: [], presenters: [], welfareMembers: [], interviewers: [] }; });
+  }
+  return nameSuggestionsPromise;
+}
+
+// `getNames` es una función (no un arreglo fijo) porque las sugerencias
+// llegan de un fetch en segundo plano: al momento de enganchar el campo
+// puede que todavía no hayan llegado, y así igual quedan disponibles apenas
+// lleguen (basta con que la persona siga escribiendo), sin tener que
+// re-enganchar nada.
+function wireNameAutocomplete(inputEl, getNames) {
+  if (!inputEl || inputEl.dataset.acWired) return;
+  inputEl.dataset.acWired = '1';
+  // Se envuelve el input en un contenedor propio (en vez de usar el padre
+  // tal cual, que a veces también trae el <label>) para que el cuadro de
+  // sugerencias quede pegado justo debajo del campo, sin desarmar el resto
+  // del layout del formulario.
+  const holder = document.createElement('div');
+  holder.style.position = 'relative';
+  inputEl.parentNode.insertBefore(holder, inputEl);
+  holder.appendChild(inputEl);
+  const box = document.createElement('div');
+  box.className = 'ac-results';
+  holder.appendChild(box);
+  const hide = () => { box.style.display = 'none'; };
+  inputEl.addEventListener('input', () => {
+    const q = normalizeSearchText(inputEl.value);
+    if (!q) return hide();
+    const names = getNames() || [];
+    const matches = names.filter((n) => normalizeSearchText(n).includes(q) && normalizeSearchText(n) !== q).slice(0, 6);
+    if (!matches.length) return hide();
+    box.innerHTML = matches.map((n) => `<div class="ac-item">${esc(n)}</div>`).join('');
+    box.style.display = 'block';
+    box.querySelectorAll('.ac-item').forEach((el, i) => {
+      el.addEventListener('mousedown', (e) => { e.preventDefault(); inputEl.value = matches[i]; hide(); });
+    });
+  });
+  inputEl.addEventListener('blur', () => setTimeout(hide, 150));
+}
+
+// ---------------- Dictado por voz en campos largos (Grupo 3) ----------------
+// Usa el reconocimiento de voz del navegador (Web Speech API) para que en
+// los campos largos (notas, descripciones, comentarios) no haga falta
+// tipear todo a mano, sobre todo desde el celular. En vez de enganchar cada
+// textarea a mano en cada modal/formulario (son más de una decena,
+// repartidas por toda la app, y seguirán apareciendo nuevas), un
+// MutationObserver sobre el contenedor raíz detecta cualquier <textarea>
+// que aparezca —en un modal, en una vista, donde sea— y le agrega el botón
+// de micrófono automáticamente, una sola vez por campo.
+function speechRecognitionSupported() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function wireDictation(textareaEl) {
+  if (!textareaEl || textareaEl.dataset.dictationWired) return;
+  textareaEl.dataset.dictationWired = '1';
+  const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const holder = document.createElement('div');
+  holder.style.position = 'relative';
+  textareaEl.parentNode.insertBefore(holder, textareaEl);
+  holder.appendChild(textareaEl);
+  textareaEl.style.paddingRight = '34px';
+  const micBtn = document.createElement('button');
+  micBtn.type = 'button';
+  micBtn.className = 'dictation-btn';
+  micBtn.title = 'Dictar por voz';
+  micBtn.innerHTML = icon('mic', 14);
+  holder.appendChild(micBtn);
+
+  let recognition = null;
+  let listening = false;
+  let baseValue = '';
+  const stopListening = () => {
+    listening = false;
+    micBtn.classList.remove('listening');
+  };
+  micBtn.addEventListener('click', () => {
+    if (listening) { recognition?.stop(); return; }
+    baseValue = textareaEl.value;
+    recognition = new SpeechRecognitionCtor();
+    // 'es-CL' como idioma base — si el navegador no lo reconoce, cae solo
+    // al español genérico del dispositivo; de cualquier forma la persona ve
+    // el texto reconocido antes de guardar y puede corregirlo a mano.
+    recognition.lang = 'es-CL';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onstart = () => { listening = true; micBtn.classList.add('listening'); };
+    recognition.onerror = stopListening;
+    recognition.onend = stopListening;
+    recognition.onresult = (e) => {
+      let finalText = '';
+      let interimText = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t;
+        else interimText += t;
+      }
+      if (finalText) baseValue = `${baseValue ? baseValue.trim() + ' ' : ''}${finalText.trim()}`;
+      textareaEl.value = `${baseValue}${interimText ? ' ' + interimText : ''}`.trim();
+    };
+    try { recognition.start(); } catch (e) { stopListening(); }
+  });
+}
+
+let dictationScanScheduled = false;
+function scheduleDictationScan() {
+  if (dictationScanScheduled) return;
+  dictationScanScheduled = true;
+  requestAnimationFrame(() => {
+    dictationScanScheduled = false;
+    root.querySelectorAll('textarea:not([data-dictation-wired])').forEach((ta) => wireDictation(ta));
+  });
+}
+// El navegador que no soporta la Web Speech API (ej. Safari de iPhone) ni
+// siquiera activa el observador — así el botón de micrófono simplemente
+// nunca aparece ahí, sin código muerto corriendo de fondo ni errores.
+if (speechRecognitionSupported()) {
+  new MutationObserver(scheduleDictationScan).observe(root, { childList: true, subtree: true });
+  scheduleDictationScan();
+}
+
 async function openInterviewModal(existing = null) {
   const options = editableOrgOptions('interview');
   if (!existing && options.length === 0) { toast('No tienes permiso para agendar entrevistas', 'error'); return; }
@@ -3771,6 +4139,8 @@ async function openInterviewModal(existing = null) {
   document.getElementById('iv-modal-close').addEventListener('click', ivGuardedClose);
   document.getElementById('iv-cancel').addEventListener('click', ivGuardedClose);
   document.getElementById('iv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'iv-modal-backdrop') ivGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#iv-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
   // Esto borra la entrevista sin dejar registro histórico — pensado para
   // corregir un error al agendar (ej. quedó duplicada). Si la entrevista se
   // agendó bien pero no se pudo hacer (o ya se hizo), conviene cerrar este
@@ -3978,6 +4348,8 @@ function openConfirmRequestModal(r) {
   document.getElementById('ivc-modal-close').addEventListener('click', ivcGuardedClose);
   document.getElementById('ivc-cancel').addEventListener('click', ivcGuardedClose);
   document.getElementById('ivc-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivc-modal-backdrop') ivcGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#ivc-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
   document.getElementById('ivc-save').addEventListener('click', async () => {
     const form = document.getElementById('ivc-form');
     if (!form.reportValidity()) return;
@@ -4125,13 +4497,13 @@ async function renderBudgetView() {
     </div>
     ${!isCurrentQuarter ? `<div class="hint-box">Estás viendo un trimestre anterior, a modo de historial de consulta — no se puede editar. Para agregar asignaciones o gastos, vuelve al trimestre actual con el selector de arriba.</div>` : ''}
     <div class="card-list" id="budget-cats">
-      ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id: 'budget-empty-new', label: '+ Crear la primera' } : null)}
+      ${categories.length ? categories.map((cat) => budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado)).join('') : emptyStateHtml('Todavía no hay categorías de presupuesto', (isObispado && isCurrentQuarter) ? { id: 'budget-empty-new', label: '+ Crear la primera' } : null, '💰')}
     </div>
     ${isObispado ? `
       <div style="margin:24px 0 8px;">
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📋 Solicitudes de gasto pendientes de aprobación${pendingRequests.length ? ` (${pendingRequests.length})` : ''}</h3>
         <div class="card-list">
-          ${pendingRequests.length ? pendingRequests.map((r) => expenseRequestRowHtml(r, { showActions: true })).join('') : '<div class="empty-state">No hay solicitudes pendientes</div>'}
+          ${pendingRequests.length ? pendingRequests.map((r) => expenseRequestRowHtml(r, { showActions: true })).join('') : emptyStateHtml('No hay solicitudes pendientes', null, '✅')}
         </div>
         ${decidedRequests.length ? `
         <button type="button" class="btn btn-secondary btn-sm" id="exp-req-history-toggle" style="margin-top:10px;">
@@ -4204,7 +4576,7 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
           : `<button type="button" class="btn btn-primary btn-sm budget-request-expense">📋 Solicitar aprobación de gasto</button>`) : ''}
       </div>
       <div class="budget-expenses-list" style="display:none;">
-        ${cat.expenses.length ? cat.expenses.map((e) => budgetExpenseRowHtml(e, canExpense)).join('') : '<div class="empty-state" style="padding:8px;">Sin gastos registrados</div>'}
+        ${cat.expenses.length ? cat.expenses.map((e) => budgetExpenseRowHtml(e, canExpense)).join('') : emptyStateHtml('Sin gastos registrados', null, '🧾', true)}
       </div>
     </div>`;
 }
@@ -4655,7 +5027,7 @@ async function renderAdminRequests() {
               <button class="btn btn-primary btn-sm" data-approve="${r.id}">Aprobar</button>
               <button class="btn btn-danger btn-sm" data-reject="${r.id}">Rechazar</button>
             </td>
-          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">No hay solicitudes pendientes</div></td></tr>`}
+          </tr>`).join('') : `<tr><td colspan="6">${emptyStateHtml('No hay solicitudes pendientes', null, '✅')}</td></tr>`}
       </tbody>
     </table>
     </div>
@@ -5037,6 +5409,7 @@ async function renderMeetingsView() {
 }
 
 async function renderMyAssignments() {
+  openSwipeCard = null;
   const content = document.getElementById('meetings-content');
   content.innerHTML = skeletonCardsHtml(3);
   let data;
@@ -5050,30 +5423,38 @@ async function renderMyAssignments() {
         <button type="button" class="btn btn-ghost btn-sm" id="assign-bulk-clear">Cancelar</button>
       </div>
       <div class="card-list">${data.commitments.map(assignmentCardHtml).join('')}</div>`
-    : '<div class="empty-state">No tienes compromisos pendientes 🎉</div>';
+    : emptyStateHtml('No tienes compromisos pendientes — al día con todo', null, '🎉');
   wireAssignmentCards();
 }
 
 function assignmentCardHtml(c) {
   const isOverdue = c.displayStatus === 'overdue';
+  // Punto 98 (Grupo 2): la tarjeta entera es "deslizable" — al arrastrarla
+  // hacia la izquierda aparece detrás una acción verde "✅ Completar" (ver
+  // wireCommitmentSwipe). Por eso ahora hay dos capas: `.assignment-swipe-action`
+  // (fija, detrás) y `.assignment-card-content` (la que se desliza encima,
+  // con todo el contenido de siempre sin ningún cambio).
   return `
-    <div class="list-card assignment-card" data-id="${c.id}" style="align-items:flex-start; flex-direction:column; gap:8px;">
-      <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
-        <div style="display:flex; gap:10px; align-items:flex-start; min-width:0; flex:1;">
-          <input type="checkbox" class="assignment-select-cb" title="Seleccionar" style="margin-top:4px; flex-shrink:0; width:16px; height:16px;" />
-          <div class="lc-main">
-            <div class="lc-title">${esc(c.description)}</div>
-            <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+    <div class="list-card assignment-card swipeable-row" data-id="${c.id}" style="display:block; padding:0; overflow:hidden; position:relative;">
+      <button type="button" class="assignment-swipe-action" aria-hidden="true" tabindex="-1">✅<br>Completar</button>
+      <div class="assignment-card-content" style="align-items:flex-start; flex-direction:column; gap:8px;">
+        <div style="display:flex; justify-content:space-between; width:100%; gap:10px; align-items:flex-start;">
+          <div style="display:flex; gap:10px; align-items:flex-start; min-width:0; flex:1;">
+            <input type="checkbox" class="assignment-select-cb" title="Seleccionar" style="margin-top:4px; flex-shrink:0; width:16px; height:16px;" />
+            <div class="lc-main">
+              <div class="lc-title">${esc(c.description)}</div>
+              <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
+            </div>
           </div>
+          <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
         </div>
-        <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
-      </div>
-      <div>
-        <button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button>
-      </div>
-      <div class="assignment-complete-form" style="display:none; width:100%;">
-        <textarea class="assignment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
-        <button type="button" class="btn btn-primary btn-sm assignment-complete-save">Guardar</button>
+        <div>
+          <button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button>
+        </div>
+        <div class="assignment-complete-form" style="display:none; width:100%;">
+          <textarea class="assignment-comment" placeholder="Comentario breve (opcional)" rows="2" style="width:100%; margin-bottom:8px;"></textarea>
+          <button type="button" class="btn btn-primary btn-sm assignment-complete-save">Guardar</button>
+        </div>
       </div>
     </div>`;
 }
@@ -5129,6 +5510,80 @@ function wireAssignmentCards() {
         await renderMyAssignments();
       } catch (err) { toast(err.message, 'error'); btn.disabled = false; }
     });
+    wireCommitmentSwipe(card);
+  });
+}
+
+// Punto 98 (Grupo 2): deslizar la tarjeta de un compromiso hacia la
+// izquierda revela una acción verde "✅ Completar" detrás — un atajo más
+// rápido que buscar el botón cuando la lista es larga. A propósito NO
+// completa el compromiso solo con el gesto: revela la acción, y hay que
+// tocarla — abre el mismo formulario con comentario opcional de siempre
+// (se reusa el botón `.assignment-complete-toggle` ya existente, con
+// `.click()`, para no duplicar esa lógica). `swipeable-row` está en la
+// lista de exclusión de wireSwipeNavigation (ver boot()) para que este
+// gesto no compita con el de cambiar de pestaña.
+let openSwipeCard = null;
+// Cierra cualquier tarjeta de compromiso que haya quedado abierta (revelada)
+// de un deslizamiento anterior — está fuera de wireCommitmentSwipe porque
+// puede necesitar cerrar una tarjeta DISTINTA a la que se está por empezar
+// a arrastrar ahora, no la propia.
+function closeSwipeCard(otherCard, animate) {
+  if (!otherCard) return;
+  const otherContent = otherCard.querySelector('.assignment-card-content');
+  if (otherContent) {
+    otherContent.style.transition = animate ? 'transform .18s ease-out' : 'none';
+    otherContent.style.transform = 'translateX(0)';
+  }
+  otherCard.dataset.swipeOpen = '0';
+}
+function wireCommitmentSwipe(card) {
+  const contentEl = card.querySelector('.assignment-card-content');
+  const actionEl = card.querySelector('.assignment-swipe-action');
+  if (!contentEl || !actionEl) return;
+  const REVEAL_WIDTH = 92; // debe calzar con el ancho del botón revelado en el CSS
+  const OPEN_THRESHOLD = 40;
+  const SWIPE_INTENT_THRESHOLD = 10;
+  const SWIPE_MAX_OFF_AXIS_RATIO = 0.6;
+  let startX = null, startY = null, dx = 0, dragging = false, intent = null;
+  const setX = (x, animate) => {
+    contentEl.style.transition = animate ? 'transform .18s ease-out' : 'none';
+    contentEl.style.transform = `translateX(${x}px)`;
+  };
+  const closeCard = (animate) => { card.dataset.swipeOpen = '0'; setX(0, animate); };
+  card.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    if (openSwipeCard && openSwipeCard !== card) { closeSwipeCard(openSwipeCard, true); openSwipeCard = null; }
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    dx = 0; intent = null; dragging = true;
+  }, { passive: true });
+  card.addEventListener('touchmove', (e) => {
+    if (!dragging || e.touches.length !== 1) return;
+    dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if (intent === null && (Math.abs(dx) >= SWIPE_INTENT_THRESHOLD || Math.abs(dy) >= SWIPE_INTENT_THRESHOLD)) {
+      intent = Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO ? 'vertical' : 'horizontal';
+    }
+    if (intent !== 'horizontal') return;
+    if (e.cancelable) e.preventDefault();
+    const base = card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0;
+    setX(Math.max(-REVEAL_WIDTH, Math.min(0, base + dx)), false);
+  }, { passive: false });
+  card.addEventListener('touchend', () => {
+    if (!dragging) return;
+    dragging = false;
+    if (intent !== 'horizontal') { setX(card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0, true); return; }
+    const base = card.dataset.swipeOpen === '1' ? -REVEAL_WIDTH : 0;
+    const finalX = Math.max(-REVEAL_WIDTH, Math.min(0, base + dx));
+    const shouldOpen = finalX < -OPEN_THRESHOLD;
+    card.dataset.swipeOpen = shouldOpen ? '1' : '0';
+    openSwipeCard = shouldOpen ? card : (openSwipeCard === card ? null : openSwipeCard);
+    setX(shouldOpen ? -REVEAL_WIDTH : 0, true);
+  });
+  actionEl.addEventListener('click', () => {
+    closeCard(true);
+    openSwipeCard = null;
+    card.querySelector('.assignment-complete-toggle').click();
   });
 }
 
@@ -5145,7 +5600,7 @@ async function renderMeetingsManage() {
       <button class="btn btn-primary" id="meeting-new">+ Nueva acta</button>
     </div>
     <div class="card-list">
-      ${active.length ? active.map((m) => meetingCardHtml(m)).join('') : emptyStateHtml('No hay actas activas', { id: 'meeting-empty-new', label: '+ Crear la primera' })}
+      ${active.length ? active.map((m) => meetingCardHtml(m)).join('') : emptyStateHtml('No hay actas activas', { id: 'meeting-empty-new', label: '+ Crear la primera' }, '📋')}
     </div>
     ${archived.length ? `
       <div style="margin-top:22px;">
@@ -5358,6 +5813,7 @@ async function openMeetingModal(presetType) {
   try { assignable = await api('/meetings/assignable-users'); }
   catch (e) { toast(e.message, 'error'); return; }
   if (!assignable.length) { toast('No hay líderes disponibles para asignar compromisos todavía', 'error'); return; }
+  getNameSuggestions(); // dispara el fetch en segundo plano, para "Quién lo presenta"
 
   const commitmentRowHtml = () => `
     <div class="commitment-row">
@@ -5442,7 +5898,10 @@ async function openMeetingModal(presetType) {
             <div class="field">
               <label>Agenda — temas a tratar (opcional, se puede armar antes de la reunión)</label>
               <div id="mt-agenda"></div>
-              <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-use-template" style="display:none;">${icon('copy')} Usar plantilla de temas</button>
+              </div>
             </div>
             <div class="field">
               <label>Compromisos (opcional — también se pueden agregar después)</label>
@@ -5471,12 +5930,42 @@ async function openMeetingModal(presetType) {
   }
 
   const agendaBox = document.getElementById('mt-agenda');
-  const wireAgendaRow = (row) => { row.querySelector('.ar-remove').addEventListener('click', () => row.remove()); };
+  const wireAgendaRow = (row) => {
+    wireNameAutocomplete(row.querySelector('.ar-presenter'), () => nameSuggestionsCache?.presenters);
+    row.querySelector('.ar-remove').addEventListener('click', () => row.remove());
+  };
   const addAgendaRow = () => {
     agendaBox.insertAdjacentHTML('beforeend', agendaRowHtml());
     wireAgendaRow(agendaBox.lastElementChild);
   };
   document.getElementById('mt-add-agenda').addEventListener('click', addAgendaRow);
+
+  // Punto Grupo 3: "Usar plantilla de temas" — solo aparece para los tipos
+  // de acta que ya tienen una estructura estándar (ver AGENDA_TEMPLATES más
+  // arriba). Agrega los temas AL FINAL de lo que ya haya, sin borrar nada —
+  // así se puede usar de punto de partida y seguir ajustando a mano.
+  const typeSelForTemplate = document.getElementById('mt-type');
+  const templateBtn = document.getElementById('mt-use-template');
+  const updateTemplateBtnVisibility = () => {
+    if (!templateBtn) return;
+    templateBtn.style.display = AGENDA_TEMPLATES[typeSelForTemplate?.value] ? '' : 'none';
+  };
+  if (typeSelForTemplate) {
+    typeSelForTemplate.addEventListener('change', updateTemplateBtnVisibility);
+    updateTemplateBtnVisibility();
+  }
+  if (templateBtn) templateBtn.addEventListener('click', async () => {
+    const tpl = AGENDA_TEMPLATES[typeSelForTemplate.value] || [];
+    if (!tpl.length) return;
+    const tipoLabel = typeSelForTemplate.options[typeSelForTemplate.selectedIndex].text;
+    const yaHayTemas = agendaBox.children.length > 0;
+    if (yaHayTemas && !(await confirmModal(`Esto agrega ${tpl.length} temas estándar de ${tipoLabel} al final de la lista (no borra los que ya escribiste). ¿Continuar?`, { title: 'Usar plantilla de temas', confirmText: 'Agregar temas' }))) return;
+    tpl.forEach((topic) => {
+      addAgendaRow();
+      agendaBox.lastElementChild.querySelector('.ar-topic').value = topic;
+    });
+    toast(`${tpl.length} temas agregados desde la plantilla`);
+  });
 
   const commitmentsBox = document.getElementById('mt-commitments');
   const wireRow = (row) => {
@@ -5590,6 +6079,32 @@ function agendaPatternFor(type) {
   return null;
 }
 
+// Grupo 3 — "Plantillas de acta por tipo de reunión": mismo criterio que
+// agendaPatternFor de arriba (solo Consejo de Barrio y Coordinación de
+// Ministración tienen una estructura fija; un acta "general" es demasiado
+// variada según la presidencia como para forzarle una lista pareja de
+// temas). Se usa en openMeetingModal para el botón "Usar plantilla de
+// temas", que agrega estos temas a la agenda de una — sin reemplazar lo que
+// la persona ya haya escrito a mano.
+const AGENDA_TEMPLATES = {
+  consejo_barrio: [
+    'Bienvenida y oración',
+    'Seguimiento de compromisos del consejo anterior',
+    'Nuevos convertidos y su integración',
+    'Miembros menos activos',
+    'Autosuficiencia y necesidades de Bienestar',
+    'Ministración — necesidades detectadas',
+    'Próximas actividades del Barrio',
+    'Asignaciones y compromisos nuevos',
+  ],
+  coordinacion_ministracion: [
+    'Revisión de asignaciones de ministración vigentes',
+    'Familias o personas sin ministración asignada',
+    'Necesidades detectadas en las visitas del trimestre',
+    'Ajustes a las asignaciones',
+  ],
+};
+
 // Se mantiene por compatibilidad con cualquier otro lugar que solo
 // necesite saber "¿esto sigue algún patrón de consejo especial?".
 function isCouncilMeetingType(type) {
@@ -5663,7 +6178,7 @@ async function openMeetingDetailModal(m) {
                   </div>
                   ${commitmentStatusPillHtml(c)}
                 </div>
-              </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null)}
+              </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null, '🎯')}
           </div>
           ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
           `}
@@ -5740,6 +6255,8 @@ function openAddAgendaItemModal(m) {
   document.getElementById('ai-modal-close').addEventListener('click', aiGuardedClose);
   document.getElementById('ai-cancel').addEventListener('click', aiGuardedClose);
   document.getElementById('ai-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ai-modal-backdrop') aiGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#ai-form [name="presenter"]'), () => nameSuggestionsCache?.presenters);
   document.getElementById('ai-save').addEventListener('click', async () => {
     const form = document.getElementById('ai-form');
     if (!form.reportValidity()) return;
@@ -5909,7 +6426,7 @@ async function renderWelfareView() {
   content.innerHTML = `
     <div class="section-header" style="margin-top:0;"><div></div><button class="btn btn-primary" id="wf-new">+ Nuevo caso</button></div>
     <div class="card-list">
-      ${items.length ? items.map(welfareCaseCardHtml).join('') : emptyStateHtml('Sin casos registrados en esta vista', { id: 'wf-empty-new', label: '+ Agregar el primero' })}
+      ${items.length ? items.map(welfareCaseCardHtml).join('') : emptyStateHtml('Sin casos registrados en esta vista', { id: 'wf-empty-new', label: '+ Agregar el primero' }, '🤝')}
     </div>
   `;
   document.getElementById('wf-new').addEventListener('click', () => openWelfareCaseModal());
@@ -5974,6 +6491,8 @@ function openWelfareCaseModal(existing) {
   document.getElementById('wf-modal-close').addEventListener('click', wfGuardedClose);
   document.getElementById('wf-cancel').addEventListener('click', wfGuardedClose);
   document.getElementById('wf-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wf-modal-backdrop') wfGuardedClose(); });
+  getNameSuggestions();
+  wireNameAutocomplete(document.querySelector('#wf-form [name="memberName"]'), () => nameSuggestionsCache?.welfareMembers);
   const deleteBtn = document.getElementById('wf-delete');
   if (deleteBtn) deleteBtn.addEventListener('click', async () => {
     if (!(await confirmModal('¿Eliminar este caso de Bienestar? Se perderá todo su historial de seguimiento.', { title: 'Eliminar caso', confirmText: 'Eliminar', danger: true }))) return;
@@ -6017,7 +6536,7 @@ function openWelfareCaseDetailModal(c) {
               <div class="commitment-detail-row">
                 <div style="font-weight:600; font-size:12.5px;">${esc(fmtDateHuman(a.date))}</div>
                 <div style="font-size:12.5px; color:var(--ink-soft); margin-top:2px;">${esc(a.note)}</div>
-              </div>`).join('') : emptyStateHtml('Sin acciones de seguimiento todavía', null)}
+              </div>`).join('') : emptyStateHtml('Sin acciones de seguimiento todavía', null, '📝', true)}
           </div>
           <form id="wfd-action-form" style="margin-top:12px;">
             <div class="field"><label>Fecha</label><input type="date" name="date" value="${toISODate(new Date())}" /></div>
@@ -6094,7 +6613,7 @@ async function renderCleaningView() {
       </div>
     </div>
     <div class="card-list">
-      ${dates.length ? dates.map((d) => cleaningDateCardHtml(d, byDate.get(d))).join('') : emptyStateHtml('Todavía no hay turnos asignados', { id: 'cs-empty-new', label: '+ Agregar el primero' })}
+      ${dates.length ? dates.map((d) => cleaningDateCardHtml(d, byDate.get(d))).join('') : emptyStateHtml('Todavía no hay turnos asignados', { id: 'cs-empty-new', label: '+ Agregar el primero' }, '🧹')}
     </div>
   `;
   document.getElementById('cs-new').addEventListener('click', () => openCleaningShiftModal());
@@ -6342,7 +6861,7 @@ async function renderTalksView() {
       <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
     </div>
     <div class="card-list">
-      ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id: 'tk-empty-new', label: '+ Agregar el primero' })}
+      ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id: 'tk-empty-new', label: '+ Agregar el primero' }, '🎤')}
     </div>
     ${pastGroups.length ? `
       <button type="button" class="btn btn-secondary btn-sm" id="tk-history-toggle" style="margin-top:16px;">
@@ -6670,7 +7189,7 @@ async function renderStatsPending() {
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
   content.innerHTML = items.length
     ? `<div class="card-list">${items.map(pendingEvalCardHtml).join('')}</div>`
-    : '<div class="empty-state">No hay actividades pendientes de evaluar 🎉</div>';
+    : emptyStateHtml('No hay actividades pendientes de evaluar — todo al día', null, '🎉');
   content.querySelectorAll('.pe-evaluate').forEach((btn) => {
     const ev = items.find((e) => e.id === Number(btn.dataset.id));
     if (ev) btn.addEventListener('click', () => openEvaluationModal(ev));
@@ -6978,7 +7497,7 @@ async function renderAchievementsHistory() {
   let awards;
   try { awards = await api(`/achievements/history?period=${state.achPeriod}`); }
   catch (e) { toast(e.message, 'error'); el.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
-  if (!awards.length) { el.innerHTML = '<div class="empty-state">Todavía no hay períodos cerrados con premios — vuelve cuando termine el período en curso</div>'; return; }
+  if (!awards.length) { el.innerHTML = emptyStateHtml('Todavía no hay períodos cerrados con premios — vuelve cuando termine el período en curso', null, '🏅'); return; }
   const byPeriod = new Map();
   awards.forEach((a) => { if (!byPeriod.has(a.periodKey)) byPeriod.set(a.periodKey, []); byPeriod.get(a.periodKey).push(a); });
   const periodKeys = [...byPeriod.keys()].sort((a, b) => b.localeCompare(a));
@@ -7094,7 +7613,7 @@ function rankingSectionHtml(cat, items) {
     <div class="ranking-section">
       <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:2px;">${cat.icon} ${esc(cat.label)}</h3>
       <div class="hint-box" style="margin:0 0 8px; padding:6px 10px; font-size:11.5px;">🏅 ${esc(cat.achievementName)} — ${esc(cat.blurb)}</div>
-      <div class="card-list">${items.length ? items.slice(0, 10).map((item, i) => cat.rowFn(item, i)).join('') : `<div class="empty-state">${cat.emptyMsg}</div>`}</div>
+      <div class="card-list">${items.length ? items.slice(0, 10).map((item, i) => cat.rowFn(item, i)).join('') : emptyStateHtml(cat.emptyMsg, null, cat.icon)}</div>
     </div>`;
 }
 
@@ -7198,17 +7717,17 @@ async function renderBishopricPanelView() {
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;" class="bp-grid">
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">⏰ Compromisos atrasados</h3>
-        <div class="card-list${data.overdueCommitments.length > 1 ? ' bp-scroll-row' : ''}" id="bp-commitments-row">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : '<div class="empty-state">Ninguno — al día 🎉</div>'}</div>
+        <div class="card-list${data.overdueCommitments.length > 1 ? ' bp-scroll-row' : ''}" id="bp-commitments-row">${data.overdueCommitments.length ? data.overdueCommitments.map(bpCommitmentRowHtml).join('') : emptyStateHtml('Ninguno — al día', null, '🎉', true)}</div>
         ${bpScrollDotsHtml(data.overdueCommitments.length, 'bp-commitments-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">🧹 Turnos de aseo sin confirmar</h3>
-        <div class="card-list${data.cleaningPending.length > 1 ? ' bp-scroll-row' : ''}" id="bp-cleaning-row">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : '<div class="empty-state">Ninguno pendiente</div>'}</div>
+        <div class="card-list${data.cleaningPending.length > 1 ? ' bp-scroll-row' : ''}" id="bp-cleaning-row">${data.cleaningPending.length ? data.cleaningPending.map(bpCleaningRowHtml).join('') : emptyStateHtml('Ninguno pendiente', null, '🧹', true)}</div>
         ${bpScrollDotsHtml(data.cleaningPending.length, 'bp-cleaning-row')}
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">👤 Entrevistas de los próximos 7 días</h3>
-        <div class="card-list">${data.upcomingInterviews.length ? data.upcomingInterviews.map(bpInterviewRowHtml).join('') : '<div class="empty-state">Ninguna agendada</div>'}</div>
+        <div class="card-list">${data.upcomingInterviews.length ? data.upcomingInterviews.map(bpInterviewRowHtml).join('') : emptyStateHtml('Ninguna agendada', null, '👤', true)}</div>
       </div>
       <div>
         <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">💰 Presupuesto — ${esc(data.budget.quarterLabel)}</h3>
