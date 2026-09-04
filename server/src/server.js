@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { URL } from 'url';
 
-import { Router, sendJson, readJsonBody } from './router.js';
+import { Router, sendJson, readJsonBody, readRawBody, parseMultipart } from './router.js';
 import { getUserFromToken } from './auth.js';
 import { registerAuthRoutes } from './routes/auth-routes.js';
 import { registerOrganizationRoutes } from './routes/organizations.js';
@@ -26,6 +26,7 @@ import { registerNotificationsSummaryRoutes } from './routes/notifications-summa
 import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
+import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 import { startAchievementsScheduler } from './achievements.js';
@@ -55,6 +56,7 @@ registerNotificationsSummaryRoutes(router);
 registerInterviewRequestRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
+registerWardGrowthRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -125,7 +127,16 @@ const server = http.createServer(async (req, res) => {
 
       let body = {};
       if (['POST', 'PUT'].includes(req.method)) {
-        body = await readJsonBody(req);
+        const contentType = req.headers['content-type'] || '';
+        if (contentType.startsWith('multipart/form-data')) {
+          // Subida de archivos (ej. el PDF del informe trimestral para
+          // "Crecimiento del Barrio"): 20MB de margen, de sobra para un PDF
+          // de un par de páginas de reporte.
+          const raw = await readRawBody(req, 20 * 1024 * 1024);
+          body = parseMultipart(raw, contentType);
+        } else {
+          body = await readJsonBody(req);
+        }
       }
       await match.handler(req, res, match.params, body);
     } catch (err) {

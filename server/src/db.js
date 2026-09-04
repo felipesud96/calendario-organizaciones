@@ -69,6 +69,16 @@ const EMPTY_DB = {
   // presidenta de Sociedad de Socorro, Manual General 22). Ver
   // routes/welfare.js.
   welfareCases: [],
+  // Módulo "Crecimiento del Barrio" (Estadísticas del Barrio): un registro
+  // por trimestre con los 26 indicadores oficiales (real/potencial) y el
+  // detalle de conversos de ese trimestre, más una "instantánea" única
+  // (no tiene fecha, se sobreescribe) con la foto actual de la unidad. Ver
+  // wardGrowth.js (lógica pura) y routes/wardGrowth.js (API). A propósito
+  // NO hay scoping por organización: cualquier admin/leader/ward_clerk ve
+  // todo, incluidos nombres y edades de conversos — decisión explícita del
+  // Obispado, no un descuido.
+  quarterlyStats: [],
+  wardSnapshot: null,
   // Configuración editable por el Obispado: cada cuántos días se espera un
   // Consejo de Barrio, para avisar en el Panel de Obispado si se atrasó. Ver
   // routes/ward-settings.js.
@@ -98,7 +108,7 @@ const EMPTY_DB = {
     budgetCategories: 1, budgetAllocations: 1, budgetExpenses: 1, stakeEvents: 1,
     meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1, talks: 1,
     achievementAwards: 1, achievementClosures: 1, interviewRequests: 1, budgetExpenseRequests: 1,
-    agendaItems: 1, welfareCases: 1, welfareActions: 1,
+    agendaItems: 1, welfareCases: 1, welfareActions: 1, quarterlyStats: 1,
   },
 };
 

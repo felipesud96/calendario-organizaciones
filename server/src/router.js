@@ -50,6 +50,68 @@ export function sendJson(res, status, body) {
   res.end(payload);
 }
 
+// Lee el cuerpo crudo como Buffer (para multipart/form-data — subida de
+// archivos). `maxSize` en bytes.
+export function readRawBody(req, maxSize = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxSize) {
+        reject(new Error('Cuerpo de la petición demasiado grande'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// Parser mínimo de multipart/form-data (sin librerías externas): alcanza
+// para el único caso de uso de esta app — subir un PDF (y algún campo de
+// texto suelto) desde un <form>/FormData del navegador. Devuelve
+// { fields: {nombre: valor}, files: [{field, filename, contentType, data}] }.
+export function parseMultipart(buffer, contentType) {
+  const fields = {};
+  const files = [];
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType || '');
+  const boundary = match ? (match[1] || match[2]).trim() : null;
+  if (!boundary) return { fields, files };
+  const boundaryBuf = Buffer.from(`--${boundary}`);
+  let start = buffer.indexOf(boundaryBuf);
+  if (start === -1) return { fields, files };
+  start += boundaryBuf.length;
+  while (true) {
+    if (buffer.slice(start, start + 2).toString('latin1') === '--') break; // boundary final
+    let partStart = start;
+    if (buffer.slice(partStart, partStart + 2).toString('latin1') === '\r\n') partStart += 2;
+    const nextBoundary = buffer.indexOf(boundaryBuf, partStart);
+    if (nextBoundary === -1) break;
+    let partEnd = nextBoundary;
+    if (buffer.slice(partEnd - 2, partEnd).toString('latin1') === '\r\n') partEnd -= 2;
+    const part = buffer.slice(partStart, partEnd);
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd !== -1) {
+      const headerText = part.slice(0, headerEnd).toString('utf8');
+      const content = part.slice(headerEnd + 4);
+      const nameMatch = /name="([^"]*)"/i.exec(headerText);
+      const filenameMatch = /filename="([^"]*)"/i.exec(headerText);
+      const ctMatch = /Content-Type:\s*([^\r\n]+)/i.exec(headerText);
+      const name = nameMatch ? nameMatch[1] : null;
+      if (filenameMatch) {
+        files.push({ field: name, filename: filenameMatch[1], contentType: ctMatch ? ctMatch[1].trim() : 'application/octet-stream', data: content });
+      } else if (name) {
+        fields[name] = content.toString('utf8');
+      }
+    }
+    start = nextBoundary + boundaryBuf.length;
+  }
+  return { fields, files };
+}
+
 export function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';

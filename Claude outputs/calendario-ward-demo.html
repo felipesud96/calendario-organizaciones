@@ -370,6 +370,104 @@ table.data-table tr:last-child td { border-bottom:none; }
 .ranking-grid { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
 .ranking-section .card-list { display:flex; flex-direction:column; gap:8px; }
 
+/* ==================================================================
+   Crecimiento del Barrio (indicadores trimestrales de crecimiento) — NO
+   confundir con las clases .stats-* de arriba (Estadísticas evalúa
+   actividades puntuales); esta sección reutiliza esas mismas clases donde
+   aplica (.stats-cards, .stat-card, .hint-box, .data-table, .status-pill,
+   .table-scroll) y solo agrega las que le son propias (prefijo wg-).
+   ================================================================== */
+.card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; background: var(--white);
+}
+.modal-lg { max-width: 720px; }
+.wg-card-title { font-size: 13.5px; font-weight: 700; color: var(--celeste-darker); margin-bottom: 8px; }
+.wg-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 720px) { .wg-chart-grid { grid-template-columns: 1fr; } }
+
+.wg-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; font-size: 11.5px; color: var(--ink-soft); }
+.wg-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.wg-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+.wg-chart-wrap { margin-top: 4px; }
+.wg-chart-plot { position: relative; width: 100%; }
+.wg-chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.wg-dot { position: absolute; width: 8px; height: 8px; margin-left: -4px; margin-top: -4px; border-radius: 50%; box-shadow: 0 0 0 2px var(--white); }
+.wg-chart-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-soft); margin-top: 4px; padding: 0 4px; gap: 4px; }
+.wg-chart-labels span { flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Comparativa entre organizaciones — barras horizontales rankeadas */
+.wg-rankbar-list { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
+.wg-rankbar-row { display: grid; grid-template-columns: 190px 1fr 48px; align-items: center; gap: 10px; }
+@media (max-width: 640px) { .wg-rankbar-row { grid-template-columns: 108px 1fr 40px; font-size: 12px; } }
+.wg-rankbar-label { font-size: 12.5px; color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wg-rankbar-track { height: 12px; background: var(--celeste-lighter); border-radius: 999px; overflow: hidden; }
+.wg-rankbar-fill { height: 100%; border-radius: 999px; min-width: 3px; }
+.wg-rankbar-fill.wg-rankbar-down { background: var(--danger); }
+.wg-rankbar-fill.wg-rankbar-up { background: var(--success); }
+.wg-rankbar-fill.wg-rankbar-flat { background: var(--ink-soft); }
+.wg-rankbar-value { font-size: 12.5px; font-weight: 800; color: var(--ink); text-align: right; }
+
+/* Dos barras simples (ej: Futuros Élderes ordenados vs. potencial) */
+.wg-twobar { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.wg-twobar-row { display: grid; grid-template-columns: 78px 1fr 34px; align-items: center; gap: 10px; }
+.wg-twobar-label { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
+.wg-twobar-track { height: 14px; background: var(--celeste-lighter); border-radius: 999px; overflow: hidden; }
+.wg-twobar-fill { height: 100%; border-radius: 999px; min-width: 3px; background: var(--celeste); }
+.wg-twobar-value { font-size: 12.5px; font-weight: 800; color: var(--ink); text-align: right; }
+
+/* Tabla completa de 26 indicadores */
+.wg-full-table td, .wg-full-table th { white-space: nowrap; }
+.wg-full-table td:first-child, .wg-full-table th:first-child { white-space: normal; min-width: 220px; }
+tr.wg-cat-row td {
+  background: var(--celeste-lighter); color: var(--celeste-darker);
+  font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 7px 10px;
+}
+.wg-pct { color: var(--ink-soft); font-weight: 400; }
+.wg-quarter-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+
+/* Tabla de seguimiento de conversos */
+.wg-convert-table td { vertical-align: middle; }
+.wg-dotmark { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; }
+.wg-dotmark.good { background: var(--success); }
+.wg-dotmark.bad { background: var(--danger); }
+.wg-dotmark.na { background: var(--border); }
+
+/* Instantánea del barrio */
+.wg-snap-card { display: flex; flex-direction: column; }
+.wg-snap-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+.wg-snap-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.wg-snap-row:last-child { border-bottom: none; }
+.wg-snap-row span { color: var(--ink-soft); }
+.wg-snap-row strong { color: var(--ink); }
+
+/* Formularios: cargar/editar trimestre + instantánea */
+.wg-form-category { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
+.wg-form-category-title { font-size: 12.5px; font-weight: 700; color: var(--celeste-darker); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 8px; }
+.wg-indicator-row .field { margin-bottom: 8px; }
+.wg-convert-row { border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; }
+
+/* Asistente de carga por PDF (demo): ver comentario junto a
+   wgSimulatePdfUpload() más abajo — esta demo NO analiza el archivo que se
+   suba, siempre usa un ejemplo fijo (el parseo real por OCR corre en el
+   servidor, que este archivo standalone no tiene). El estilo es el mismo
+   que en la app real para que la UX se vea igual. */
+.wg-pdf-upload { border: 1px dashed var(--celeste-dark); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; background: var(--celeste-lighter); }
+.wg-pdf-upload-label { display: block; font-size: 13px; font-weight: 700; color: var(--celeste-darker); margin-bottom: 8px; }
+.wg-pdf-upload input[type="file"] { font-size: 12.5px; color: var(--ink-soft); max-width: 100%; }
+.wg-pdf-upload-note { font-size: 11.5px; color: var(--ink-soft); margin-top: 6px; font-style: italic; }
+.wg-pdf-status { margin-top: 8px; font-size: 12.5px; }
+.wg-pdf-status-loading { color: var(--ink-soft); }
+.wg-pdf-status-ok { color: var(--success); font-weight: 600; }
+.wg-pdf-status-error { color: var(--danger); font-weight: 600; }
+.wg-autofill-banner { background: #fef3c7; border: 1px solid #fde68a; color: #92400e; border-radius: var(--radius); padding: 10px 14px; font-size: 13px; font-weight: 600; margin-bottom: 14px; line-height: 1.5; }
+.wg-pdf-warnings-box { background: #fef3c7; border: 1px solid #fde68a; color: #92400e; border-radius: var(--radius); padding: 10px 14px 10px 16px; font-size: 12.5px; margin-bottom: 14px; line-height: 1.5; }
+.wg-pdf-warnings-box ul { margin: 6px 0 0; padding-left: 18px; }
+.wg-pdf-warnings-box li { margin-bottom: 3px; }
+.modal.wg-form-autofilled { border: 2px solid var(--celeste-dark); }
+
 /* Diploma imprimible/descargable (botón "🎓 Ver / descargar diploma") */
 .diploma { padding:10px; }
 .diploma-border { border:3px double var(--celeste-dark); border-radius:10px; padding:40px 30px; text-align:center; background:#fffdf7; }
@@ -411,6 +509,7 @@ table.data-table tr:last-child td { border-bottom:none; }
   .status-gray { background: #263141; color: #b6c2cf; }
   .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
   .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+  .wg-autofill-banner, .wg-pdf-warnings-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
   .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
   .ranking-top { background: #122a1c; border-color: #1f4a30; }
   .ac-item:hover { background: #1c2b38; }
@@ -472,7 +571,7 @@ const ORG_DEFS = [
   { name:'Primaria', color:'#F97316', allowsInterviews:false },
 ];
 
-const DB = { organizations: [], users: [], events: [], interviews: [], registrationRequests: [], budgetCategories: [], budgetAllocations: [], budgetExpenses: [], stakeEvents: [], meetings: [], families: [], cleaningShifts: [], eventEvaluations: [], talks: [], achievementAwards: [], achievementClosures: [], interviewRequests: [], budgetExpenseRequests: [], welfareCases: [], wardSettings: { councilFrequencyDays: 7 }, stakeCalendar: { url: 'https://churchofjesuschrist.org/church-calendar/services/ext/v3.0/export/ical/subscribe/c1fcb8a3953a4518b977d428ae968352', displayName: 'Estaca Colina Chile', lastSyncedAt: null, lastSyncOk: true, lastSyncError: null, eventCount: 0, nonBlockingKeywords: ['entrevista', 'presidencia de estaca', 'sumo consejo', 'presentación anual'], showNonBlockingEvents: true }, counters: { organizations:1, users:1, events:1, interviews:1, registrationRequests:1, budgetCategories:1, budgetAllocations:1, budgetExpenses:1, stakeEvents:1, meetings:1, commitments:1, families:1, cleaningShifts:1, eventEvaluations:1, talks:1, achievementAwards:1, achievementClosures:1, interviewRequests:1, budgetExpenseRequests:1, agendaItems:1, welfareCases:1, welfareActions:1 } };
+const DB = { organizations: [], users: [], events: [], interviews: [], registrationRequests: [], budgetCategories: [], budgetAllocations: [], budgetExpenses: [], stakeEvents: [], meetings: [], families: [], cleaningShifts: [], eventEvaluations: [], talks: [], achievementAwards: [], achievementClosures: [], interviewRequests: [], budgetExpenseRequests: [], welfareCases: [], quarterlyStats: [], wardSnapshot: null, wardSettings: { councilFrequencyDays: 7 }, stakeCalendar: { url: 'https://churchofjesuschrist.org/church-calendar/services/ext/v3.0/export/ical/subscribe/c1fcb8a3953a4518b977d428ae968352', displayName: 'Estaca Colina Chile', lastSyncedAt: null, lastSyncOk: true, lastSyncError: null, eventCount: 0, nonBlockingKeywords: ['entrevista', 'presidencia de estaca', 'sumo consejo', 'presentación anual'], showNonBlockingEvents: true }, counters: { organizations:1, users:1, events:1, interviews:1, registrationRequests:1, budgetCategories:1, budgetAllocations:1, budgetExpenses:1, stakeEvents:1, meetings:1, commitments:1, families:1, cleaningShifts:1, eventEvaluations:1, talks:1, achievementAwards:1, achievementClosures:1, interviewRequests:1, budgetExpenseRequests:1, agendaItems:1, welfareCases:1, welfareActions:1, quarterlyStats:1 } };
 const STAKE_COLOR = '#7c3aed';
 
 function nextId(col){ const id = DB.counters[col]; DB.counters[col]++; return id; }
@@ -631,6 +730,245 @@ const statsEventIdEvaluated2 = addEvent('Cuórum de Élderes','Torneo deportivo 
 addEvent('Cuórum de Élderes','Actividad de servicio comunitario', -3, '10:00','12:00','Limpieza de la plaza del barrio','Punto de encuentro: estacionamiento','Servicio');
 DB.eventEvaluations.push({ id: nextId('eventEvaluations'), eventId: statsEventIdEvaluated1, expectedAttendance: 30, actualAttendance: 27, feedback: 'Muy buena participación de las familias.', evaluatedBy: null, evaluatedAt: new Date().toISOString() });
 DB.eventEvaluations.push({ id: nextId('eventEvaluations'), eventId: statsEventIdEvaluated2, expectedAttendance: 25, actualAttendance: 6, feedback: 'Coincidió con otra actividad del barrio — baja convocatoria.', evaluatedBy: null, evaluatedAt: new Date().toISOString() });
+
+// ---------------- "Crecimiento del Barrio": datos REALES del barrio ----------------
+// Mismos 6 trimestres + instantánea que el servidor real (server/src/seed.js)
+// — ver server/src/wardGrowth.js para de dónde salen estos números.
+(function seedWardGrowth(){
+  function ind(pairs){ const o={}; for(const [n,real,pot] of pairs) o[String(n)]={real,pot}; return o; }
+  const quarters = [
+    { label:'T1 2025', year:2025, quarter:1, indicators: ind([
+      [1,61,72],[2,50,76],[3,4,8],[4,39,53],[5,0,14],[6,11,15],[7,104,174],[8,7,null],[9,45,144],
+      [10,177,null],[11,77,null],[12,10,11],[13,10,17],[14,36,39],[15,5,14],[16,47,60],[17,15,22],
+      [18,11,15],[19,12,16],[20,20,31],[21,5,null],[22,27,28],[23,7,7],[24,5,6],[25,3,3],[26,3,6],
+    ]), converts: [
+      {name:'Dominguez Vergara, Joisy Janeth', sex:'M', age:48, attended:true, hasCalling:true},
+      {name:'Guevara Garcia, Carlos', sex:'V', age:36, attended:true, hasCalling:true},
+      {name:'Guevara Robles, Mariana Itzel', sex:'M', age:9, attended:true, hasCalling:null},
+      {name:'Manrique Dominguez, Ariana Isamar', sex:'M', age:18, attended:true, hasCalling:true},
+      {name:'Manrique Dominguez, Heidy Naomi', sex:'M', age:11, attended:true, hasCalling:null},
+      {name:'Puebla Sandoval, Ihanko Samir', sex:'V', age:16, attended:true, hasCalling:true},
+      {name:'Riquelme Romero, Román Esteban', sex:'V', age:14, attended:true, hasCalling:true},
+    ]},
+    { label:'T2 2025', year:2025, quarter:2, indicators: ind([
+      [1,64,73],[2,53,79],[3,4,8],[4,41,56],[5,1,16],[6,10,14],[7,110,182],[8,10,null],[9,57,150],
+      [10,186,null],[11,83,null],[12,4,12],[13,9,17],[14,36,41],[15,3,15],[16,49,64],[17,14,23],
+      [18,10,14],[19,12,16],[20,22,30],[21,6,null],[22,27,30],[23,7,10],[24,1,7],[25,3,4],[26,3,7],
+    ]), converts: [
+      {name:'Adana Gajardo, Isabel Margarita', sex:'M', age:38, attended:true, hasCalling:false},
+      {name:'Freire Rogel, Benjamin Andres', sex:'V', age:9, attended:true, hasCalling:null},
+      {name:'Fuentes Imiguala, Diego Adrián', sex:'V', age:30, attended:false, hasCalling:false},
+      {name:'Guevara Garcia, Carlos', sex:'V', age:37, attended:true, hasCalling:true},
+      {name:'Guevara Robles, Mariana Itzel', sex:'M', age:10, attended:true, hasCalling:null},
+      {name:'Molina Rodríguez, Leticia Fernanda', sex:'M', age:10, attended:false, hasCalling:null},
+      {name:'Pérez Rivas, Gabriangeli Paola', sex:'M', age:18, attended:true, hasCalling:false},
+      {name:'Puebla Sandoval, Ihanko Samir', sex:'V', age:16, attended:false, hasCalling:false},
+      {name:'Riquelme Romero, Román Esteban', sex:'V', age:15, attended:true, hasCalling:false},
+      {name:'Riveros Hernández, Damarys Jeannette', sex:'M', age:29, attended:true, hasCalling:false},
+    ]},
+    { label:'T3 2025', year:2025, quarter:3, indicators: ind([
+      [1,67,78],[2,60,88],[3,4,11],[4,45,61],[5,1,17],[6,9,13],[7,108,192],[8,6,null],[9,55,158],
+      [10,199,null],[11,86,null],[12,2,12],[13,17,17],[14,27,45],[15,2,16],[16,37,68],[17,8,26],
+      [18,13,13],[19,11,17],[20,22,30],[21,6,null],[22,24,34],[23,3,6],[24,1,3],[25,1,2],[26,0,3],
+    ]), converts: [
+      {name:'Freire Rogel, Benjamin Andres', sex:'V', age:9, attended:true, hasCalling:null},
+      {name:'Fuentes Imiguala, Diego Adrian', sex:'V', age:31, attended:false, hasCalling:false},
+      {name:'Guevara Robles, Mariana Itzel', sex:'M', age:10, attended:true, hasCalling:null},
+      {name:'Molina Rodríguez, Leticia Fernanda', sex:'M', age:11, attended:false, hasCalling:null},
+      {name:'Riquelme Romero, Román Esteban', sex:'V', age:15, attended:true, hasCalling:true},
+      {name:'Riveros Hernández, Damarys Jeannette', sex:'M', age:30, attended:false, hasCalling:false},
+    ]},
+    { label:'T4 2025', year:2025, quarter:4, indicators: ind([
+      [1,50,60],[2,39,64],[3,2,10],[4,33,50],[5,1,18],[6,9,12],[7,88,171],[8,10,null],[9,45,134],
+      [10,163,null],[11,77,null],[12,1,8],[13,0,13],[14,25,33],[15,3,17],[16,39,56],[17,10,26],
+      [18,7,12],[19,11,16],[20,20,28],[21,3,null],[22,24,26],[23,7,10],[24,1,7],[25,1,3],[26,2,7],
+    ]), converts: [
+      {name:'Carreño Abarca, Isidora Belén', sex:'M', age:12, attended:true, hasCalling:false},
+      {name:'Carreño Abarca, León Baltazar', sex:'V', age:8, attended:true, hasCalling:null},
+      {name:'Fuentes Imiguala, Diego Adrián', sex:'V', age:31, attended:false, hasCalling:false},
+      {name:'Gomez Victor, Teresa', sex:'M', age:58, attended:true, hasCalling:false},
+      {name:'González Cáceres, Beatriz Alejandra', sex:'M', age:25, attended:false, hasCalling:false},
+      {name:'Molina Rodríguez, Leticia Fernanda', sex:'M', age:11, attended:true, hasCalling:null},
+      {name:'Ortega Crisostomo, Santino', sex:'V', age:11, attended:true, hasCalling:null},
+      {name:'Riquelme Romero, Román Esteban', sex:'V', age:15, attended:true, hasCalling:true},
+      {name:'Riveros Hernández, Damarys Jeannette', sex:'M', age:30, attended:false, hasCalling:false},
+      {name:'Valderama Ponce, Lorenzo Alonso', sex:'V', age:22, attended:true, hasCalling:false},
+    ]},
+    { label:'T1 2026', year:2026, quarter:1, indicators: ind([
+      [1,51,61],[2,40,66],[3,3,10],[4,34,51],[5,1,18],[6,8,13],[7,77,164],[8,9,null],[9,32,139],
+      [10,165,null],[11,79,null],[12,2,8],[13,4,15],[14,27,34],[15,3,17],[16,40,57],[17,12,27],
+      [18,7,13],[19,15,18],[20,20,31],[21,3,null],[22,21,23],[23,5,9],[24,2,8],[25,1,3],[26,2,8],
+    ]), converts: [
+      {name:'Carreño Abarca, Isidora Belén', sex:'M', age:12, attended:true, hasCalling:false},
+      {name:'Carreño Abarca, León Baltazar', sex:'V', age:9, attended:true, hasCalling:null},
+      {name:'Fuentes Imiguala, Diego Adrián', sex:'V', age:31, attended:false, hasCalling:false},
+      {name:'Gomez Victor, Teresa', sex:'M', age:58, attended:true, hasCalling:false},
+      {name:'González Cáceres, Beatriz Alejandra', sex:'M', age:25, attended:true, hasCalling:true},
+      {name:'Molina Rodríguez, Leticia Fernanda', sex:'M', age:11, attended:null, hasCalling:null},
+      {name:'Ortega Crisostomo, Santino', sex:'V', age:11, attended:null, hasCalling:null},
+      {name:'Riveros Hernández, Damarys Jeannette', sex:'M', age:30, attended:null, hasCalling:false},
+      {name:'Valderama Ponce, Lorenzo Alonso', sex:'V', age:23, attended:true, hasCalling:true},
+    ]},
+    { label:'T2 2026', year:2026, quarter:2, indicators: ind([
+      [1,53,65],[2,44,68],[3,3,10],[4,35,53],[5,0,18],[6,8,13],[7,88,169],[8,7,null],[9,35,143],
+      [10,171,null],[11,83,null],[12,4,11],[13,1,15],[14,27,35],[15,4,18],[16,39,59],[17,8,28],
+      [18,7,13],[19,12,18],[20,16,31],[21,4,null],[22,22,24],[23,4,7],[24,2,6],[25,1,3],[26,2,6],
+    ]), converts: [
+      {name:'Atria, Paul Alex', sex:'V', age:57, attended:false, hasCalling:false},
+      {name:'Carreño Abarca, Isidora Belén', sex:'M', age:13, attended:true, hasCalling:false},
+      {name:'Carreño Abarca, León Baltazar', sex:'V', age:9, attended:true, hasCalling:null},
+      {name:'Gomez Victor, Teresa', sex:'M', age:59, attended:true, hasCalling:false},
+      {name:'González Cáceres, Beatriz Alejandra', sex:'M', age:26, attended:false, hasCalling:true},
+      {name:'Ortega Crisostomo, Santino', sex:'V', age:11, attended:false, hasCalling:null},
+      {name:'Valderama Ponce, Lorenzo Alonso', sex:'V', age:23, attended:true, hasCalling:true},
+    ]},
+  ];
+  const now = new Date().toISOString();
+  for(const q of quarters){
+    DB.quarterlyStats.push({ id: nextId('quarterlyStats'), ...q, createdAt: now, createdBy: null, updatedAt: now, updatedBy: null });
+  }
+  DB.wardSnapshot = {
+    totalMembers: 175,
+    men: { total:54, highPriests:15, elders:21, futureElders:18 },
+    women: { total:63 },
+    youngMen: { total:14, priests:6, teachers:6, deacons:2 },
+    youngWomen: { total:16, guardiansOfLight:2, heraldsOfHope:5, faithBuilders:9 },
+    children3plus: 24, children0to2: 4,
+    families: { total:84, withoutMelchizedekHolder:52, withYouth:28, withChildren:23, singleParent:4 },
+    adults: { married:71, single36plus:18, youngSingleAdults:30 },
+    recentConverts: { total:7, adultMen:2, adultWomen:2, youngMen:1, youngWomen:1, children:1 },
+    ordinationStatus: { total:3, ordained:1, notOrdained:2 },
+    endowedAdults: { total:68, withRecommend:40, withoutRecommend:28 },
+    notIncluded: { total:10, missingBirthdate:0, baptizedNotConfirmed:0, enrolled9plus:10 },
+    updatedAt: now, updatedBy: null,
+  };
+})();
+
+// ---------------- "Crecimiento del Barrio": lógica pura (mismo contenido
+// que server/src/wardGrowth.js, adaptado a variables globales sin módulos
+// ES — mantener ambos sincronizados si se toca uno). ----------------
+const WARD_GROWTH_CATEGORIES = [
+  { key: 'conversion', label: 'Indicadores de conversión y del crecimiento de la Iglesia', range: [1, 9] },
+  { key: 'members', label: 'Miembros / Familias', range: [10, 13] },
+  { key: 'adults', label: 'Adultos', range: [14, 17] },
+  { key: 'youth', label: 'Jóvenes', range: [18, 20] },
+  { key: 'children', label: 'Niños', range: [21, 22] },
+  { key: 'converts', label: 'Conversos', range: [23, 26] },
+];
+function wgCategoryFor(number){ const cat = WARD_GROWTH_CATEGORIES.find((c) => number >= c.range[0] && number <= c.range[1]); return cat ? cat.key : null; }
+const INDICATOR_DEFS = [
+  { number: 1, label: 'Miembros sellados en el templo', hasPotential: true },
+  { number: 2, label: 'Miembros investidos', hasPotential: true },
+  { number: 3, label: 'Bautismos y confirmaciones de conversos', hasPotential: true },
+  { number: 4, label: 'Miembros que participan en la obra misional', hasPotential: true },
+  { number: 5, label: 'Matrimonios sellados en el templo (este trimestre)', hasPotential: true },
+  { number: 6, label: 'Miembros menos activos reactivados', hasPotential: true },
+  { number: 7, label: 'Asistencia a la reunión sacramental', hasPotential: true },
+  { number: 8, label: 'Miembros con bautismo/confirmación agendada', hasPotential: false },
+  { number: 9, label: 'Adultos con recomendación vigente para el templo', hasPotential: true },
+  { number: 10, label: 'Total de miembros registrados', hasPotential: false },
+  { number: 11, label: 'Total de familias', hasPotential: false },
+  { number: 12, label: 'Entrevistas de ministración completadas — Cuórum de Élderes', hasPotential: true },
+  { number: 13, label: 'Entrevistas de ministración completadas — Sociedad de Socorro', hasPotential: true },
+  { number: 14, label: 'Cuórum de Élderes (Melquisedec) — asisten', hasPotential: true },
+  { number: 15, label: 'Futuros Élderes — asisten', hasPotential: true },
+  { number: 16, label: 'Sociedad de Socorro (Mujeres) — asisten', hasPotential: true },
+  { number: 17, label: 'Jóvenes Adultos Solteros (JAS) — asisten', hasPotential: true },
+  { number: 18, label: 'Hombres Jóvenes (HJ) — asisten', hasPotential: true },
+  { number: 19, label: 'Mujeres Jóvenes (MJ) — asisten', hasPotential: true },
+  { number: 20, label: 'Jóvenes con recomendación vigente para el templo', hasPotential: true },
+  { number: 21, label: 'Niños de Primaria bautizados este trimestre', hasPotential: false },
+  { number: 22, label: 'Niños de Primaria — asisten', hasPotential: true },
+  { number: 23, label: 'Conversos que asisten regularmente', hasPotential: true },
+  { number: 24, label: 'Conversos con llamamiento', hasPotential: true },
+  { number: 25, label: 'Conversos con progreso hacia el templo', hasPotential: true },
+  { number: 26, label: 'Conversos visitados por sus ministrantes', hasPotential: true },
+].map((d) => ({ ...d, category: wgCategoryFor(d.number) }));
+const INDICATOR_NUMBERS = INDICATOR_DEFS.map((d) => d.number);
+function indicatorDef(number){ return INDICATOR_DEFS.find((d) => d.number === Number(number)) || null; }
+const ORG_COMPARATIVA_INDICATORS = [1, 2, 14, 15, 16, 17, 18, 19, 20, 22];
+function sortedQuarters(quarters){ return [...(quarters || [])].sort((a, b) => (a.year - b.year) || (a.quarter - b.quarter)); }
+function wgPct(real, pot){ if (pot === null || pot === undefined || Number(pot) === 0) return null; if (real === null || real === undefined) return null; return Math.round((Number(real) / Number(pot)) * 100); }
+function pctForIndicator(quarter, number){ const entry = quarter?.indicators?.[String(number)]; if (!entry) return null; return wgPct(entry.real, entry.pot); }
+function comparativa(quarterFirst, quarterLast, numbers = ORG_COMPARATIVA_INDICATORS){
+  if (!quarterFirst || !quarterLast) return [];
+  const rows = [];
+  for (const number of numbers) {
+    const def = indicatorDef(number);
+    const pctFirst = pctForIndicator(quarterFirst, number);
+    const pctLast = pctForIndicator(quarterLast, number);
+    if (pctFirst === null || pctLast === null) continue;
+    const diff = pctLast - pctFirst;
+    rows.push({ number, label: def?.label || `Indicador ${number}`, category: def?.category || null, pctFirst, pctLast, diff, magnitude: Math.abs(diff) });
+  }
+  rows.sort((a, b) => b.magnitude - a.magnitude);
+  return rows;
+}
+// Clave insensible a tildes/mayúsculas para no partir en dos filas a un
+// mismo converso que quedó tipeado con y sin tilde en trimestres distintos
+// (mismo fix que en server/src/wardGrowth.js — ver el comentario ahí para
+// el detalle completo). Lo que se muestra sigue siendo la ortografía
+// EXACTA del trimestre más reciente, nunca la clave normalizada.
+function convertKey(name) {
+  return String(name || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function computeConvertTracking(quarters){
+  const ordered = sortedQuarters(quarters);
+  const lastLabel = ordered.length ? ordered[ordered.length - 1].label : null;
+  const people = new Map();
+  for (const q of ordered) {
+    for (const c of (q.converts || [])) {
+      if (!c || !c.name) continue;
+      const key = convertKey(c.name);
+      let p = people.get(key);
+      if (!p) { p = { name: c.name, sex: c.sex, age: c.age, appearances: [] }; people.set(key, p); }
+      p.name = c.name; // ortografía de la aparición más reciente
+      p.sex = c.sex; p.age = c.age;
+      p.appearances.push({ label: q.label, attended: c.attended ?? null, hasCalling: c.hasCalling ?? null });
+    }
+  }
+  const results = [];
+  for (const p of people.values()) {
+    const n = p.appearances.length;
+    const last2 = p.appearances.slice(-2);
+    const lastOne = p.appearances[n - 1];
+    let status, statusLabel;
+    if (n >= 2 && last2.every((a) => a.attended !== true)) { status = 'critical'; statusLabel = 'En riesgo — probablemente perdido/a'; }
+    else if (n === 1 && lastOne.label === lastLabel && lastOne.attended === false) { status = 'warning'; statusLabel = 'Nuevo/a — necesita seguimiento'; }
+    else if (p.age !== null && p.age !== undefined && p.age >= 12 && last2.every((a) => a.attended === true) && p.appearances.every((a) => a.hasCalling === false)) { status = 'warning'; statusLabel = 'Asiste con regularidad, sin llamamiento — oportunidad'; }
+    else {
+      const trueCount = p.appearances.filter((a) => a.attended === true).length;
+      if (trueCount > n / 2) { status = 'good'; statusLabel = 'Buen camino — activo/a'; }
+      else { status = 'warning'; statusLabel = 'Señal mixta — revisar la secuencia'; }
+    }
+    results.push({ name: p.name, sex: p.sex, age: p.age, quarters: p.appearances.map((a) => a.label), attended: p.appearances.map((a) => a.attended), hasCalling: p.appearances.map((a) => a.hasCalling), status, statusLabel });
+  }
+  return results.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+function wgValidateQuarterPayload(body, existing, editingId){
+  const label = String(body?.label || '').trim();
+  const year = Number(body?.year);
+  const quarter = Number(body?.quarter);
+  if (!label) return 'Falta la etiqueta (ej: "T1 2025")';
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return 'Año inválido';
+  if (!Number.isInteger(quarter) || quarter < 1 || quarter > 4) return 'El trimestre debe ser 1, 2, 3 o 4';
+  const dup = (existing || []).some((q) => q.year === year && q.quarter === quarter && q.id !== editingId);
+  if (dup) return `Ya existe un trimestre cargado para ${label} (año ${year}, T${quarter})`;
+  for (const number of INDICATOR_NUMBERS) {
+    const entry = body?.indicators?.[String(number)];
+    if (!entry) return `Falta el indicador ${number}`;
+    if (typeof entry.real !== 'number' || !Number.isFinite(entry.real) || entry.real < 0) return `El valor "Real" del indicador ${number} debe ser un número`;
+  }
+  if (!Array.isArray(body?.converts)) return 'Los conversos deben ser una lista';
+  for (const c of body.converts) {
+    if (!c || typeof c.name !== 'string' || !c.name.trim()) return 'Cada converso necesita un nombre';
+    if (c.sex !== 'M' && c.sex !== 'V') return `Sexo inválido para ${c.name} (debe ser M o V)`;
+    if (!Number.isInteger(c.age) || c.age < 0) return `Edad inválida para ${c.name}`;
+  }
+  return null;
+}
 
 function addInterview(orgName, memberName, dayOffset, startTime, endTime, description, location, interviewerName, status){
   // `groupId` = su propio id (auto-referenciado): esta entrevista de
@@ -1049,6 +1387,12 @@ function canSeeBudgetTab(){
 // (Punto 29). "Estadísticas" se mantiene solo para Líder/Administrador.
 function canSeeMeetingsTab(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='leader' || currentUser.role==='ward_clerk'); }
 function canSeeStatsTab(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='leader'); }
+// "Crecimiento del Barrio" (indicadores trimestrales de crecimiento) — NO
+// confundir con "Estadísticas" de arriba (evalúa actividades puntuales).
+// Ver = admin/leader (cualquier organización)/ward_clerk, sin acotar por
+// organización (decisión explícita del Obispado). Editar = admin/ward_clerk.
+function canSeeWardGrowthTab(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='leader' || currentUser.role==='ward_clerk'); }
+function canEditWardGrowth(){ return !!currentUser && (currentUser.role==='admin' || currentUser.role==='ward_clerk'); }
 // "Asignaciones" (Aseo del Edificio + Discursos): estrictamente oculto
 // salvo Administrador o líder de Obispado.
 function canSeeAssignmentsTab(){ return isObispadoLeader(currentUser); }
@@ -1073,16 +1417,17 @@ const TAB_DEFS = {
   cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
   budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
   stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
+  wardGrowth: { label: 'Crecimiento del Barrio', icon: '📈', navLabel: 'Crecimiento', visible: canSeeWardGrowthTab },
   admin: { label: 'Administración', icon: '⚙️', navLabel: 'Admin', visible: () => !!currentUser && currentUser.role==='admin' },
 };
 function tabOrderFor(){
   if(isObispadoLeader(currentUser)){
-    return ['calendar','meetings','welfare','cleaning','interviews','myActivities','budget','stats','admin'];
+    return ['calendar','meetings','welfare','cleaning','interviews','myActivities','budget','stats','wardGrowth','admin'];
   }
   if(canSeeInterviewsTab()){
-    return ['calendar','myActivities','interviews','meetings','welfare','budget','stats'];
+    return ['calendar','myActivities','interviews','meetings','welfare','budget','stats','wardGrowth'];
   }
-  return ['calendar','myActivities','meetings','budget','stats'];
+  return ['calendar','myActivities','meetings','budget','stats','wardGrowth'];
 }
 function canViewAllInterviews(){
   // Igual que orgSeesAllInterviews() en server/routes/interviews.js: exige
@@ -1145,7 +1490,7 @@ function visibleEvents(){
   return DB.events.filter((e)=>canSeeMeeting(e));
 }
 
-const state = { view:'calendar', calMonth:(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1);})(), activeOrgIds:null, interviewsSubtab:'pending', interviewsOrgTab:null, interviewRequestsHistoryOpen:false, adminSubtab:'users', meetingsSubtab:'mine', statsSubtab:'pending', statsYear:null, statsOrgId:null, assignmentsSubtab:'cleaning', talksHistoryOpen:false, interviewsHistoryOpen:false, achPeriod:'month', achView:'current', calViewMode:'month', searchOpen:false, notifOpen:false, miniCalOpen:false, miniCalMonth:null, expenseRequestsHistoryOpen:false };
+const state = { view:'calendar', calMonth:(()=>{const d=new Date();return new Date(d.getFullYear(),d.getMonth(),1);})(), activeOrgIds:null, interviewsSubtab:'pending', interviewsOrgTab:null, interviewRequestsHistoryOpen:false, adminSubtab:'users', meetingsSubtab:'mine', statsSubtab:'pending', statsYear:null, statsOrgId:null, wardGrowthSubtab:'resumen', assignmentsSubtab:'cleaning', talksHistoryOpen:false, interviewsHistoryOpen:false, achPeriod:'month', achView:'current', calViewMode:'month', searchOpen:false, notifOpen:false, miniCalOpen:false, miniCalMonth:null, expenseRequestsHistoryOpen:false };
 
 const root = document.getElementById('app');
 function esc(s){ if(s===null||s===undefined) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
@@ -2476,6 +2821,7 @@ function renderCurrentView(){
   if(state.view==='welfare' && !canSeeWelfareTab()) state.view = 'calendar';
   if(state.view==='cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if(state.view==='stats' && !canSeeStatsTab()) state.view = 'calendar';
+  if(state.view==='wardGrowth' && !canSeeWardGrowthTab()) state.view = 'calendar';
   if(state.view==='bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   const bishopricBtn = document.getElementById('bishopric-toggle');
@@ -2497,6 +2843,7 @@ function renderCurrentView(){
   else if(state.view==='welfare') renderWelfareView();
   else if(state.view==='cleaning') renderAssignmentsView();
   else if(state.view==='stats') renderStatsView();
+  else if(state.view==='wardGrowth') renderWardGrowthView();
   else if(state.view==='admin') renderAdminView();
 }
 function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
@@ -8225,6 +8572,710 @@ function wireSwipeNavigation() {
     state.view = order[nextIdx];
     renderCurrentView();
   }, { passive: true });
+}
+
+// ==================================================================
+// ---------------- Crecimiento del Barrio ----------------
+// ==================================================================
+// Espejo de la versión real (client/public/app.js) — misma UI/lógica de
+// render, pero leyendo/escribiendo directo en DB (sin fetch) como el resto
+// de este archivo de demo standalone.
+
+const WARD_GROWTH_CHART_COLORS = COLOR_PALETTE;
+
+function wardGrowthQuartersPayload(){
+  return {
+    quarters: sortedQuarters(DB.quarterlyStats),
+    indicatorDefs: INDICATOR_DEFS,
+    categories: WARD_GROWTH_CATEGORIES,
+    convertTracking: computeConvertTracking(DB.quarterlyStats),
+  };
+}
+
+function renderWardGrowthView(){
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header">
+      <div><h2>Crecimiento del Barrio</h2><p>Indicadores trimestrales de crecimiento y la instantánea actual de la unidad</p></div>
+      ${canEditWardGrowth() ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-secondary btn-sm" id="wg-edit-snapshot">${icon('edit')} Editar instantánea</button>
+          <button type="button" class="btn btn-primary btn-sm" id="wg-new-quarter">+ Cargar trimestre nuevo</button>
+        </div>` : ''}
+    </div>
+    <div class="subtabs">
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'resumen' ? 'active' : ''}" data-tab="resumen">Resumen</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'tabla' ? 'active' : ''}" data-tab="tabla">Tabla completa</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'conversos' ? 'active' : ''}" data-tab="conversos">Seguimiento de Conversos</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'instantanea' ? 'active' : ''}" data-tab="instantanea">Instantánea del Barrio</button>
+    </div>
+    <div id="wg-content"></div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.wardGrowthSubtab = b.dataset.tab; renderWardGrowthView(); }));
+  const newQuarterBtn = document.getElementById('wg-new-quarter');
+  if (newQuarterBtn) newQuarterBtn.addEventListener('click', () => openWardGrowthQuarterModal());
+  const editSnapshotBtn = document.getElementById('wg-edit-snapshot');
+  if (editSnapshotBtn) editSnapshotBtn.addEventListener('click', () => openWardSnapshotModal());
+
+  const content = document.getElementById('wg-content');
+  const data = wardGrowthQuartersPayload();
+
+  if (!data.quarters.length) {
+    content.innerHTML = emptyStateHtml('Todavía no hay ningún trimestre cargado', canEditWardGrowth() ? { id: 'wg-empty-cta', label: '+ Cargar trimestre nuevo' } : null, '📈');
+    wireEmptyStateCta('wg-empty-cta', () => openWardGrowthQuarterModal());
+    return;
+  }
+
+  if (state.wardGrowthSubtab === 'tabla') renderWardGrowthTable(data);
+  else if (state.wardGrowthSubtab === 'conversos') renderWardGrowthConverts(data);
+  else if (state.wardGrowthSubtab === 'instantanea') renderWardGrowthSnapshot();
+  else renderWardGrowthResumen(data);
+}
+
+function wgLineChartHtml(quarters, series, { height = 130, valueSuffix = '' } = {}) {
+  const padY = 12;
+  const usableH = height - padY * 2;
+  const allValues = series.flatMap((s) => quarters.map((q) => s.valueFn(q)).filter((v) => v !== null && v !== undefined));
+  const maxVal = Math.max(1, ...allValues, ...(series.map((s) => s.maxHint || 0)));
+  const n = quarters.length;
+  const xPct = (i) => (n <= 1 ? 50 : (i / (n - 1)) * 100);
+  const yFor = (v) => padY + usableH - (usableH * v) / maxVal;
+
+  const paths = [];
+  const dots = [];
+  series.forEach((s) => {
+    let pathParts = [];
+    let drawing = false;
+    quarters.forEach((q, i) => {
+      const v = s.valueFn(q);
+      if (v === null || v === undefined) { drawing = false; return; }
+      pathParts.push(`${drawing ? 'L' : 'M'}${xPct(i).toFixed(2)},${yFor(v).toFixed(1)}`);
+      drawing = true;
+      dots.push(`<div class="wg-dot" style="left:${xPct(i).toFixed(2)}%; top:${yFor(v).toFixed(1)}px; background:${s.color};" title="${esc(s.label)} · ${esc(q.label)}: ${v}${valueSuffix}"></div>`);
+    });
+    if (pathParts.length) paths.push(`<path d="${pathParts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" vector-effect="non-scaling-stroke" />`);
+  });
+
+  return `
+    <div class="wg-chart-wrap">
+      ${series.length > 1 ? `<div class="wg-legend">${series.map((s) => `<span class="wg-legend-item"><span class="wg-legend-dot" style="background:${s.color};"></span>${esc(s.label)}</span>`).join('')}</div>` : ''}
+      <div class="wg-chart-plot" style="height:${height}px;">
+        <svg viewBox="0 0 100 ${height}" class="wg-chart-svg" preserveAspectRatio="none">${paths.join('')}</svg>
+        ${dots.join('')}
+      </div>
+      <div class="wg-chart-labels">${quarters.map((q) => `<span>${esc(q.label)}</span>`).join('')}</div>
+    </div>`;
+}
+
+function wgRankedBarHtml(rows) {
+  if (!rows.length) return '<div class="empty-state compact">No hay suficientes trimestres para comparar</div>';
+  const maxMag = Math.max(1, ...rows.map((r) => r.magnitude));
+  return `<div class="wg-rankbar-list">
+    ${rows.map((r) => {
+      const sign = r.diff > 0 ? '+' : '';
+      const dir = r.diff < 0 ? 'wg-rankbar-down' : (r.diff > 0 ? 'wg-rankbar-up' : 'wg-rankbar-flat');
+      const titleText = `${r.label}: ${sign}${r.diff} puntos porcentuales (de ${r.pctFirst}% a ${r.pctLast}%)`;
+      return `
+      <div class="wg-rankbar-row">
+        <div class="wg-rankbar-label">${esc(r.label)}</div>
+        <div class="wg-rankbar-track">
+          <div class="wg-rankbar-fill ${dir}" style="width:${(r.magnitude / maxMag * 100).toFixed(1)}%;" title="${esc(titleText)}"></div>
+        </div>
+        <div class="wg-rankbar-value" title="${esc(titleText)}">${sign}${r.diff}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function wgTwoBarHtml(rows) {
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return `<div class="wg-twobar">
+    ${rows.map((r) => `
+      <div class="wg-twobar-row">
+        <span class="wg-twobar-label">${esc(r.label)}</span>
+        <div class="wg-twobar-track"><div class="wg-twobar-fill" style="width:${(r.value / max * 100).toFixed(1)}%; background:${r.color};" title="${esc(r.label)}: ${r.value}"></div></div>
+        <span class="wg-twobar-value">${r.value}</span>
+      </div>`).join('')}
+  </div>`;
+}
+
+function wgPctSeries(number) { return (q) => pctForIndicator(q, number); }
+
+function renderWardGrowthResumen(data) {
+  const content = document.getElementById('wg-content');
+  const { quarters, indicatorDefs } = data;
+  const latest = quarters[quarters.length - 1];
+  const first = quarters[0];
+  const snapshot = DB.wardSnapshot;
+
+  const totalMembers = latest.indicators['10']?.real ?? snapshot?.totalMembers ?? null;
+  const totalFamilies = latest.indicators['11']?.real ?? snapshot?.families?.total ?? null;
+  const sacReal = latest.indicators['7']?.real ?? null;
+  const sacPct = pctForIndicator(latest, 7);
+  const recentConverts = snapshot?.recentConverts?.total ?? null;
+
+  const comp = comparativa(first, latest);
+  const ordination = snapshot?.ordinationStatus;
+
+  content.innerHTML = `
+    <div class="stats-cards">
+      <div class="stat-card"><div class="stat-card-label">Total de miembros</div><div class="stat-card-value">${totalMembers ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Total de familias</div><div class="stat-card-value">${totalFamilies ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Asistencia sacramental (${esc(latest.label)})</div><div class="stat-card-value">${sacReal ?? '—'}${sacPct !== null ? ` <span style="font-size:13px; font-weight:400; color:var(--ink-soft);">(${sacPct}%)</span>` : ''}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Conversos recientes</div><div class="stat-card-value">${recentConverts ?? '—'}</div></div>
+    </div>
+
+    <div class="wg-chart-grid">
+      <div class="card">
+        <div class="wg-card-title">Total de miembros</div>
+        ${wgLineChartHtml(quarters, [{ label: 'Miembros', color: WARD_GROWTH_CHART_COLORS[0], valueFn: (q) => q.indicators['10']?.real ?? null }])}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Total de familias</div>
+        ${wgLineChartHtml(quarters, [{ label: 'Familias', color: WARD_GROWTH_CHART_COLORS[1], valueFn: (q) => q.indicators['11']?.real ?? null }])}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="wg-card-title">Asistencia sacramental — Real vs. Potencial</div>
+      ${wgLineChartHtml(quarters, [
+        { label: 'Real', color: WARD_GROWTH_CHART_COLORS[0], valueFn: (q) => q.indicators['7']?.real ?? null },
+        { label: 'Potencial', color: WARD_GROWTH_CHART_COLORS[3], valueFn: (q) => q.indicators['7']?.pot ?? null },
+      ], { valueSuffix: ' personas' })}
+    </div>
+
+    <div class="wg-chart-grid" style="margin-top:14px;">
+      <div class="card">
+        <div class="wg-card-title">% Comparativa — Sellados, Investidos, Melquisedec, HJ</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Sellados', color: WARD_GROWTH_CHART_COLORS[0], valueFn: wgPctSeries(1) },
+          { label: 'Investidos', color: WARD_GROWTH_CHART_COLORS[1], valueFn: wgPctSeries(2) },
+          { label: 'Melquisedec asisten', color: WARD_GROWTH_CHART_COLORS[2], valueFn: wgPctSeries(14) },
+          { label: 'HJ asisten', color: WARD_GROWTH_CHART_COLORS[4], valueFn: wgPctSeries(18) },
+        ], { valueSuffix: '%' })}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Entrevistas de ministración completadas (%)</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Cuórum de Élderes', color: WARD_GROWTH_CHART_COLORS[0], valueFn: wgPctSeries(12) },
+          { label: 'Sociedad de Socorro', color: WARD_GROWTH_CHART_COLORS[2], valueFn: wgPctSeries(13) },
+        ], { valueSuffix: '%' })}
+      </div>
+    </div>
+
+    <div class="wg-chart-grid" style="margin-top:14px;">
+      <div class="card">
+        <div class="wg-card-title">Asistencia de jóvenes (%) — HJ vs. MJ</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Hombres Jóvenes', color: WARD_GROWTH_CHART_COLORS[4], valueFn: wgPctSeries(18) },
+          { label: 'Mujeres Jóvenes', color: WARD_GROWTH_CHART_COLORS[5], valueFn: wgPctSeries(19) },
+        ], { valueSuffix: '%' })}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Futuros Élderes — Ordenados vs. Potencial</div>
+        ${ordination ? wgTwoBarHtml([
+          { label: 'Ordenados', value: ordination.ordained, color: WARD_GROWTH_CHART_COLORS[0] },
+          { label: 'Potencial', value: ordination.total, color: WARD_GROWTH_CHART_COLORS[3] },
+        ]) : '<div class="empty-state compact">Sin datos en la instantánea todavía</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="wg-card-title">Comparativa entre organizaciones <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${esc(first.label)} → ${esc(latest.label)}, % de cambio)</span></div>
+      ${wgRankedBarHtml(comp)}
+    </div>
+  `;
+}
+
+function renderWardGrowthTable(data) {
+  const content = document.getElementById('wg-content');
+  const { quarters, indicatorDefs, categories } = data;
+  const rows = categories.map((cat) => {
+    const defs = indicatorDefs.filter((d) => d.category === cat.key);
+    return `
+      <tr class="wg-cat-row"><td colspan="${1 + quarters.length}">${esc(cat.label)}</td></tr>
+      ${defs.map((d) => `
+        <tr>
+          <td>${d.number}. ${esc(d.label)}</td>
+          ${quarters.map((q) => {
+            const entry = q.indicators[String(d.number)];
+            if (!entry) return '<td>—</td>';
+            const pctVal = (entry.pot !== null && entry.pot !== undefined && Number(entry.pot) > 0) ? Math.round((entry.real / entry.pot) * 100) : null;
+            return `<td>${entry.real}${entry.pot !== null && entry.pot !== undefined ? ` / ${entry.pot}` : ''}${pctVal !== null ? ` <span class="wg-pct">(${pctVal}%)</span>` : ''}</td>`;
+          }).join('')}
+        </tr>`).join('')}
+    `;
+  }).join('');
+  content.innerHTML = `
+    <div class="hint-box">Tabla completa de los ${indicatorDefs.length} indicadores, uno por fila, agrupados por categoría igual que en el reporte oficial. Cada celda muestra Real${quarters[0] ? ' / Potencial (%)' : ''}.</div>
+    ${canEditWardGrowth() ? `
+      <div class="wg-quarter-chips">
+        ${quarters.map((q) => `<button type="button" class="btn btn-secondary btn-sm wg-edit-quarter-btn" data-id="${q.id}">${icon('edit')} ${esc(q.label)}</button>`).join('')}
+      </div>` : ''}
+    <div class="table-scroll">
+      <table class="data-table wg-full-table">
+        <thead><tr><th>Indicador</th>${quarters.map((q) => `<th>${esc(q.label)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  content.querySelectorAll('.wg-edit-quarter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const q = quarters.find((x) => String(x.id) === btn.dataset.id);
+      if (q) openWardGrowthQuarterModal(q);
+    });
+  });
+}
+
+function wgAttendedDotClass(v) {
+  if (v === true) return 'wg-dotmark good';
+  if (v === false) return 'wg-dotmark bad';
+  return 'wg-dotmark na';
+}
+function wgAttendedDotTitle(label, v, kind) {
+  const val = v === true ? 'Sí' : (v === false ? 'No' : 'Sin dato / no aplica');
+  return `${label} · ${kind}: ${val}`;
+}
+function wgStatusPillClass(status) {
+  if (status === 'critical') return 'status-pill status-red';
+  if (status === 'good') return 'status-pill status-green';
+  return 'status-pill status-amber';
+}
+function wgStatusIcon(status) {
+  if (status === 'critical') return '🔴';
+  if (status === 'good') return '🟢';
+  return '🟡';
+}
+
+function renderWardGrowthConverts(data) {
+  const content = document.getElementById('wg-content');
+  const people = data.convertTracking || [];
+  content.innerHTML = `
+    <div class="hint-box">
+      <strong>Cómo se calculan estos estados:</strong> es una heurística aproximada a partir de la secuencia de asistencia/llamamiento de cada persona — sirve para priorizar a quién visitar primero, pero el Obispado/liderazgo debería igual mirar la secuencia real (los puntitos de abajo), no solo la píldora de color.
+    </div>
+    <div class="table-scroll">
+      <table class="data-table wg-convert-table">
+        <thead><tr><th>Nombre</th><th>Sexo</th><th>Edad</th><th>Trimestres</th><th>Asistencia</th><th>Llamamiento</th><th>Estado</th></tr></thead>
+        <tbody>
+          ${people.length ? people.map((p) => `
+            <tr>
+              <td>${esc(p.name)}</td>
+              <td>${esc(p.sex || '—')}</td>
+              <td>${p.age ?? '—'}</td>
+              <td>${p.quarters.map((q) => esc(q)).join(', ')}</td>
+              <td>${p.attended.map((v, i) => `<span class="${wgAttendedDotClass(v)}" title="${esc(wgAttendedDotTitle(p.quarters[i], v, 'Asistió'))}"></span>`).join('')}</td>
+              <td>${p.hasCalling.map((v, i) => `<span class="${wgAttendedDotClass(v)}" title="${esc(wgAttendedDotTitle(p.quarters[i], v, 'Llamamiento'))}"></span>`).join('')}</td>
+              <td><span class="${wgStatusPillClass(p.status)}" title="${esc(p.statusLabel)}">${wgStatusIcon(p.status)} ${esc(p.statusLabel)}</span></td>
+            </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state compact">Sin conversos registrados todavía</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function wgSnapshotCardHtml(title, rows) {
+  return `<div class="card wg-snap-card">
+    <div class="wg-card-title">${esc(title)}</div>
+    <div class="wg-snap-rows">${rows.map(([label, val]) => `<div class="wg-snap-row"><span>${esc(label)}</span><strong>${val ?? '—'}</strong></div>`).join('')}</div>
+  </div>`;
+}
+
+function renderWardGrowthSnapshot() {
+  const content = document.getElementById('wg-content');
+  const s = DB.wardSnapshot;
+  if (!s) {
+    content.innerHTML = emptyStateHtml('Todavía no se ha cargado la instantánea del barrio', canEditWardGrowth() ? { id: 'wg-snap-empty-cta', label: 'Cargar instantánea' } : null, '🏘️');
+    wireEmptyStateCta('wg-snap-empty-cta', () => openWardSnapshotModal());
+    return;
+  }
+  content.innerHTML = `
+    <div class="hint-box">Esta instantánea no tiene fecha propia — es la "foto" más reciente del estado de la unidad, y se reemplaza cada vez que se edita.${s.updatedAt ? ` Última actualización: ${esc(fmtDateHuman(s.updatedAt.slice(0, 10)))}.` : ''}</div>
+    <div class="stats-cards" style="margin-bottom:14px;">
+      <div class="stat-card"><div class="stat-card-label">Total de miembros</div><div class="stat-card-value">${s.totalMembers ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Total de familias</div><div class="stat-card-value">${s.families?.total ?? '—'}</div></div>
+    </div>
+    <div class="wg-chart-grid">
+      ${wgSnapshotCardHtml('Sacerdocio y organizaciones', [
+        ['Hombres (total)', s.men?.total], ['Sumos Sacerdotes', s.men?.highPriests], ['Élderes', s.men?.elders], ['Futuros Élderes', s.men?.futureElders],
+        ['Mujeres (total)', s.women?.total],
+        ['Hombres Jóvenes (total)', s.youngMen?.total], ['Sacerdotes', s.youngMen?.priests], ['Maestros', s.youngMen?.teachers], ['Diáconos', s.youngMen?.deacons],
+        ['Mujeres Jóvenes (total)', s.youngWomen?.total], ['Guardianas de la Luz', s.youngWomen?.guardiansOfLight], ['Heraldos de la Esperanza', s.youngWomen?.heraldsOfHope], ['Constructoras de Fe', s.youngWomen?.faithBuilders],
+        ['Niños 3+ años', s.children3plus], ['Niños 0-2 años', s.children0to2],
+      ])}
+      ${wgSnapshotCardHtml('Familias y adultos', [
+        ['Familias (total)', s.families?.total], ['Sin portador de Melquisedec', s.families?.withoutMelchizedekHolder], ['Con jóvenes', s.families?.withYouth], ['Con niños', s.families?.withChildren], ['Monoparentales', s.families?.singleParent],
+        ['Adultos casados', s.adults?.married], ['Solteros 36+', s.adults?.single36plus], ['Jóvenes Adultos Solteros', s.adults?.youngSingleAdults],
+      ])}
+      ${wgSnapshotCardHtml('Conversos recientes', [
+        ['Total', s.recentConverts?.total], ['Hombres adultos', s.recentConverts?.adultMen], ['Mujeres adultas', s.recentConverts?.adultWomen], ['Jóvenes varones', s.recentConverts?.youngMen], ['Jóvenes mujeres', s.recentConverts?.youngWomen], ['Niños', s.recentConverts?.children],
+      ])}
+      ${wgSnapshotCardHtml('Ordenanzas y no incluidos', [
+        ['Ordenación — total', s.ordinationStatus?.total], ['Ordenados', s.ordinationStatus?.ordained], ['No ordenados', s.ordinationStatus?.notOrdained],
+        ['Investidos — total', s.endowedAdults?.total], ['Con recomendación', s.endowedAdults?.withRecommend], ['Sin recomendación', s.endowedAdults?.withoutRecommend],
+        ['No incluidos — total', s.notIncluded?.total], ['Sin fecha de nacimiento', s.notIncluded?.missingBirthdate], ['Bautizados sin confirmar', s.notIncluded?.baptizedNotConfirmed], ['Matriculados 9+ años', s.notIncluded?.enrolled9plus],
+      ])}
+    </div>
+  `;
+}
+
+// ---------------- Asistente de carga por PDF (demo) -------------------------
+//
+// LIMITACIÓN DE ESTA DEMO (documentada a propósito, no es un descuido): en
+// la app real, subir el PDF dispara POST /api/ward-growth/parse-pdf, que
+// rasteriza cada página (pdftoppm) y le corre OCR (tesseract) — un binario
+// de sistema que este archivo HTML standalone, sin servidor, no tiene forma
+// de invocar. pdf.js vía CDN tampoco resolvería nada: los 7 PDFs reales que
+// motivaron esta función se generan con el driver "Microsoft: Print To PDF"
+// y no tienen ninguna capa de texto (cada carácter es un trazo vectorial),
+// así que ninguna librería de EXTRACCIÓN de texto —ni pdf.js ni ninguna
+// otra— podría leer nada de ahí; hace falta el mismo pipeline de OCR que
+// corre en el servidor. Emular OCR completo en el navegador (tesseract.js +
+// su WASM, vía CDN) para una demo es demasiado peso/tiempo para lo que esta
+// demo necesita mostrar.
+//
+// Por eso: wgSimulatePdfUpload() IGNORA el contenido real del archivo que
+// se suba (con tal de que se elija alguno) y, tras una pausa breve que
+// imita el tiempo real de análisis, devuelve un borrador FIJO de ejemplo
+// —los mismos valores reales del trimestre T1 2025 / de la instantánea que
+// ya trae esta demo, con el mismo warning real que el parser genuino emite
+// para ese PDF (columna del indicador 25 ilegible)— para que se vea
+// exactamente la misma UX de revisión (banner persistente + warnings +
+// formulario pre-llenado pero 100% editable) que en la app real. Esto se
+// avisa también en la propia pantalla (nota en cursiva bajo el input de
+// archivo), para que quien explore la demo no piense que de verdad analizó
+// su PDF.
+function wgPdfUploadHtml(idPrefix, label) {
+  return `
+    <div class="wg-pdf-upload" id="${idPrefix}-pdf-upload">
+      <label class="wg-pdf-upload-label" for="${idPrefix}-pdf-input">📄 Subir PDF del informe (opcional) — ${esc(label)}</label>
+      <input type="file" accept="application/pdf" id="${idPrefix}-pdf-input" />
+      <div class="wg-pdf-upload-note">Demo: se ignora el contenido del archivo y se usa un ejemplo fijo — el análisis real de PDF corre en el servidor (OCR), que esta demo standalone no tiene.</div>
+      <div class="wg-pdf-status" id="${idPrefix}-pdf-status"></div>
+    </div>
+    <div id="${idPrefix}-pdf-banner"></div>
+    <div id="${idPrefix}-pdf-warnings"></div>`;
+}
+function wgAutofillBannerHtml() {
+  return `<div class="wg-autofill-banner">✨ Completado automáticamente a partir del PDF — revisá todos los valores antes de guardar.</div>`;
+}
+function wgWarningsHtml(warnings) {
+  if (!warnings || !warnings.length) return '';
+  return `<div class="wg-pdf-warnings-box"><strong>⚠️ Revisar antes de guardar (${warnings.length}):</strong><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`;
+}
+// Los mismos valores reales de T1 2025 (ver seedWardGrowth) — así la demo
+// muestra un borrador consistente con el resto de los datos de ejemplo.
+function wgInd(pairs) { const o = {}; for (const [n, real, pot] of pairs) o[String(n)] = { real, pot }; return o; }
+const WG_DEMO_QUARTER_DRAFT = {
+  label: 'T1 2025', year: 2025, quarter: 1,
+  indicators: wgInd([
+    [1,61,72],[2,50,76],[3,4,8],[4,39,53],[5,0,14],[6,11,15],[7,104,174],[8,7,null],[9,45,144],
+    [10,177,null],[11,77,null],[12,10,11],[13,10,17],[14,36,39],[15,5,14],[16,47,60],[17,15,22],
+    [18,11,15],[19,12,16],[20,20,31],[21,5,null],[22,27,28],[23,7,7],[24,5,6],[25,0,null],[26,3,6],
+  ]),
+  converts: [
+    { name: 'Dominguez Vergara, Joisy Janeth', sex: 'M', age: 48, attended: true, hasCalling: true },
+    { name: 'Guevara Garcia, Carlos', sex: 'V', age: 36, attended: true, hasCalling: true },
+    { name: 'Guevara Robles, Mariana Itzel', sex: 'M', age: 9, attended: true, hasCalling: null },
+    { name: 'Manrique Dominguez, Ariana Isamar', sex: 'M', age: 18, attended: true, hasCalling: true },
+    { name: 'Manrique Dominguez, Heidy Naomi', sex: 'M', age: 11, attended: true, hasCalling: null },
+    { name: 'Puebla Sandoval, Ihanko Samir', sex: 'V', age: 16, attended: true, hasCalling: true },
+    { name: 'Riquelme Romero, Roman Esteban', sex: 'V', age: 14, attended: true, hasCalling: true },
+  ],
+};
+const WG_DEMO_QUARTER_WARNINGS = [
+  'Indicador 25: se esperaban 5 columnas numéricas en esa fila del PDF y se reconocieron 4; verificar Real/Potencial contra el reporte original.',
+  'Indicador 25: no se pudo leer el valor "Real" con confianza en el PDF, completar manualmente.',
+];
+const WG_DEMO_SNAPSHOT_DRAFT = {
+  totalMembers: 175,
+  men: { total: 54, highPriests: 15, elders: 21, futureElders: 18 },
+  women: { total: 63 },
+  youngMen: { total: 14, priests: 6, teachers: 6, deacons: 2 },
+  youngWomen: { total: 16, guardiansOfLight: 2, heraldsOfHope: 5, faithBuilders: 9 },
+  children3plus: 24, children0to2: 4,
+  families: { total: 84, withoutMelchizedekHolder: 52, withYouth: 28, withChildren: 23, singleParent: 4 },
+  adults: { married: 71, single36plus: 18, youngSingleAdults: 30 },
+  recentConverts: { total: 7, adultMen: 2, adultWomen: 2, youngMen: 1, youngWomen: 1, children: 1 },
+  ordinationStatus: { total: 3, ordained: 1, notOrdained: 2 },
+  endowedAdults: { total: 68, withRecommend: 40, withoutRecommend: 28 },
+  notIncluded: { total: 10, missingBirthdate: 0, baptizedNotConfirmed: 0, enrolled9plus: 10 },
+};
+function wgSimulatePdfUpload(idPrefix, expectedType, onDraft) {
+  const input = document.getElementById(`${idPrefix}-pdf-input`);
+  const statusEl = document.getElementById(`${idPrefix}-pdf-status`);
+  const bannerEl = document.getElementById(`${idPrefix}-pdf-banner`);
+  const warningsEl = document.getElementById(`${idPrefix}-pdf-warnings`);
+  input.addEventListener('change', () => {
+    if (!input.files[0]) return;
+    statusEl.innerHTML = `<span class="wg-pdf-status-loading">Analizando PDF (demo)…</span>`;
+    bannerEl.innerHTML = '';
+    warningsEl.innerHTML = '';
+    setTimeout(() => {
+      statusEl.innerHTML = `<span class="wg-pdf-status-ok">✓ PDF analizado (ejemplo de demo).</span>`;
+      bannerEl.innerHTML = wgAutofillBannerHtml();
+      const warnings = expectedType === 'quarter' ? WG_DEMO_QUARTER_WARNINGS : [];
+      warningsEl.innerHTML = wgWarningsHtml(warnings);
+      const draft = expectedType === 'quarter' ? WG_DEMO_QUARTER_DRAFT : WG_DEMO_SNAPSHOT_DRAFT;
+      onDraft(draft);
+      input.value = '';
+    }, 900);
+  });
+}
+
+// ---------------- Formulario: cargar/editar un trimestre ----------------
+
+function wgIndicatorFieldsHtml(categories, indicatorDefs, existingIndicators) {
+  return categories.map((cat) => `
+    <div class="wg-form-category">
+      <div class="wg-form-category-title">${esc(cat.label)}</div>
+      ${indicatorDefs.filter((d) => d.category === cat.key).map((d) => {
+        const entry = existingIndicators?.[String(d.number)];
+        const realVal = entry ? entry.real : '';
+        const potVal = entry && entry.pot !== null && entry.pot !== undefined ? entry.pot : '';
+        return `
+        <div class="two-col wg-indicator-row">
+          <div class="field">
+            <label>${d.number}. ${esc(d.label)} — Real</label>
+            <input type="number" min="0" step="1" class="wg-ind-real" data-number="${d.number}" required value="${esc(realVal)}" />
+          </div>
+          <div class="field">
+            <label>Potencial${d.hasPotential ? '' : ' (no aplica)'}</label>
+            <input type="number" min="0" step="1" class="wg-ind-pot" data-number="${d.number}" value="${esc(potVal)}" ${d.hasPotential ? '' : 'disabled placeholder="—"'} />
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+function wgConvertRowHtml(c) {
+  const attendedVal = c?.attended === true ? 'true' : (c?.attended === false ? 'false' : 'null');
+  const callingVal = c?.hasCalling === true ? 'true' : (c?.hasCalling === false ? 'false' : 'null');
+  return `
+    <div class="wg-convert-row">
+      <div class="two-col">
+        <div class="field"><label>Nombre</label><input type="text" class="wg-cv-name" required placeholder="Apellidos, Nombres" value="${esc(c?.name || '')}" /></div>
+        <div class="field"><label>Sexo</label>
+          <select class="wg-cv-sex">
+            <option value="M" ${c?.sex === 'M' ? 'selected' : ''}>Mujer (M)</option>
+            <option value="V" ${c?.sex === 'V' ? 'selected' : ''}>Varón (V)</option>
+          </select>
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="field"><label>Edad</label><input type="number" min="0" step="1" class="wg-cv-age" required value="${c?.age ?? ''}" /></div>
+        <div class="field"><label>¿Asistió?</label>
+          <select class="wg-cv-attended">
+            <option value="true" ${attendedVal === 'true' ? 'selected' : ''}>Sí</option>
+            <option value="false" ${attendedVal === 'false' ? 'selected' : ''}>No</option>
+            <option value="null" ${attendedVal === 'null' ? 'selected' : ''}>Sin dato</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>¿Tiene llamamiento?</label>
+        <select class="wg-cv-calling">
+          <option value="true" ${callingVal === 'true' ? 'selected' : ''}>Sí</option>
+          <option value="false" ${callingVal === 'false' ? 'selected' : ''}>No</option>
+          <option value="null" ${callingVal === 'null' ? 'selected' : ''}>No aplica</option>
+        </select>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm wg-cv-remove" title="Quitar este converso">${icon('trash')} Quitar</button>
+    </div>`;
+}
+
+function openWardGrowthQuarterModal(existing = null) {
+  const isEdit = !!existing;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wgq-modal-backdrop">
+      <div class="modal modal-lg">
+        <div class="modal-header"><h3>${isEdit ? 'Editar trimestre' : 'Cargar trimestre nuevo'}</h3><button class="modal-close" id="wgq-modal-close">×</button></div>
+        <div class="modal-body">
+          ${wgPdfUploadHtml('wgq', 'Informe trimestral')}
+          <div id="wgq-error"></div>
+          <form id="wgq-form">
+            <div class="two-col">
+              <div class="field"><label>Año</label><input type="number" name="year" required min="2000" max="2100" value="${existing?.year || new Date().getFullYear()}" /></div>
+              <div class="field"><label>Trimestre</label>
+                <select name="quarter" required>
+                  ${[1, 2, 3, 4].map((q) => `<option value="${q}" ${existing?.quarter === q ? 'selected' : ''}>T${q}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="field"><label>Etiqueta</label><input type="text" name="label" required placeholder="Ej: T1 2025" value="${esc(existing?.label || '')}" /></div>
+            <div class="hint-box" style="margin-top:0;">Los 26 indicadores del reporte oficial, agrupados igual que en el reporte. "Potencial" queda vacío/deshabilitado en los que no aplica.</div>
+            <div id="wgq-indicators">${wgIndicatorFieldsHtml(WARD_GROWTH_CATEGORIES, INDICATOR_DEFS, existing?.indicators)}</div>
+            <div class="field">
+              <label>Detalle de conversos de este trimestre</label>
+              <div id="wgq-convert-rows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="wgq-add-convert">+ Agregar converso</button>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${isEdit ? `<button class="btn btn-danger" id="wgq-delete">Eliminar</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="wgq-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="wgq-save">${isEdit ? 'Guardar cambios' : 'Cargar trimestre'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('wgq-form'));
+  document.getElementById('wgq-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('wgq-cancel').addEventListener('click', guardedClose);
+  document.getElementById('wgq-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wgq-modal-backdrop') guardedClose(); });
+
+  const convertRowsBox = document.getElementById('wgq-convert-rows');
+  const wireConvertRow = (row) => { row.querySelector('.wg-cv-remove').addEventListener('click', () => row.remove()); };
+  const addConvertRow = (c) => { convertRowsBox.insertAdjacentHTML('beforeend', wgConvertRowHtml(c)); wireConvertRow(convertRowsBox.lastElementChild); };
+  (existing?.converts || []).forEach(addConvertRow);
+  document.getElementById('wgq-add-convert').addEventListener('click', () => addConvertRow());
+
+  wgSimulatePdfUpload('wgq', 'quarter', (draft) => {
+    const form = document.getElementById('wgq-form');
+    if (draft.year) form.querySelector('[name="year"]').value = draft.year;
+    if (draft.quarter) form.querySelector('[name="quarter"]').value = String(draft.quarter);
+    if (draft.label) form.querySelector('[name="label"]').value = draft.label;
+    document.getElementById('wgq-indicators').innerHTML = wgIndicatorFieldsHtml(WARD_GROWTH_CATEGORIES, INDICATOR_DEFS, draft.indicators);
+    convertRowsBox.innerHTML = '';
+    (draft.converts || []).forEach(addConvertRow);
+    document.querySelector('#wgq-modal-backdrop .modal').classList.add('wg-form-autofilled');
+  });
+
+  if (isEdit) {
+    document.getElementById('wgq-delete').addEventListener('click', async () => {
+      const ok = await confirmModal('¿Eliminar este trimestre? Esta acción no se puede deshacer.', { title: 'Eliminar trimestre', confirmText: 'Eliminar', danger: true });
+      if (!ok) return;
+      DB.quarterlyStats = DB.quarterlyStats.filter((q) => q.id !== existing.id);
+      toast('Trimestre eliminado');
+      closeModal();
+      renderWardGrowthView();
+    });
+  }
+
+  document.getElementById('wgq-save').addEventListener('click', () => {
+    const form = document.getElementById('wgq-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const indicators = {};
+    INDICATOR_DEFS.forEach((d) => {
+      const realInput = form.querySelector(`.wg-ind-real[data-number="${d.number}"]`);
+      const potInput = form.querySelector(`.wg-ind-pot[data-number="${d.number}"]`);
+      const real = Number(realInput.value);
+      const pot = (d.hasPotential && potInput.value !== '') ? Number(potInput.value) : null;
+      indicators[String(d.number)] = { real, pot };
+    });
+    const converts = Array.from(convertRowsBox.children).map((row) => {
+      const attendedRaw = row.querySelector('.wg-cv-attended').value;
+      const callingRaw = row.querySelector('.wg-cv-calling').value;
+      return {
+        name: row.querySelector('.wg-cv-name').value.trim(),
+        sex: row.querySelector('.wg-cv-sex').value,
+        age: Number(row.querySelector('.wg-cv-age').value),
+        attended: attendedRaw === 'null' ? null : attendedRaw === 'true',
+        hasCalling: callingRaw === 'null' ? null : callingRaw === 'true',
+      };
+    }).filter((c) => c.name);
+    const body = { label: fd.get('label'), year: Number(fd.get('year')), quarter: Number(fd.get('quarter')), indicators, converts };
+    const err = wgValidateQuarterPayload(body, DB.quarterlyStats, isEdit ? existing.id : null);
+    if (err) { document.getElementById('wgq-error').innerHTML = `<div class="error-msg">${esc(err)}</div>`; return; }
+    const now = new Date().toISOString();
+    if (isEdit) {
+      Object.assign(existing, { ...body, updatedAt: now, updatedBy: currentUser.id });
+    } else {
+      DB.quarterlyStats.push({ id: nextId('quarterlyStats'), ...body, createdAt: now, createdBy: currentUser.id, updatedAt: now, updatedBy: currentUser.id });
+    }
+    toast(isEdit ? 'Trimestre actualizado' : 'Trimestre cargado');
+    closeModal();
+    renderWardGrowthView();
+  });
+}
+
+// ---------------- Formulario: editar la instantánea del barrio ----------------
+
+const WARD_SNAPSHOT_FIELDS = [
+  { group: 'Totales', fields: [['totalMembers', 'Total de miembros']] },
+  { group: 'Hombres', fields: [['men.total', 'Total'], ['men.highPriests', 'Sumos Sacerdotes'], ['men.elders', 'Élderes'], ['men.futureElders', 'Futuros Élderes']] },
+  { group: 'Mujeres', fields: [['women.total', 'Total']] },
+  { group: 'Hombres Jóvenes', fields: [['youngMen.total', 'Total'], ['youngMen.priests', 'Sacerdotes'], ['youngMen.teachers', 'Maestros'], ['youngMen.deacons', 'Diáconos']] },
+  { group: 'Mujeres Jóvenes', fields: [['youngWomen.total', 'Total'], ['youngWomen.guardiansOfLight', 'Guardianas de la Luz'], ['youngWomen.heraldsOfHope', 'Heraldos de la Esperanza'], ['youngWomen.faithBuilders', 'Constructoras de Fe']] },
+  { group: 'Niños', fields: [['children3plus', '3 años o más'], ['children0to2', '0 a 2 años']] },
+  { group: 'Familias', fields: [['families.total', 'Total'], ['families.withoutMelchizedekHolder', 'Sin portador de Melquisedec'], ['families.withYouth', 'Con jóvenes'], ['families.withChildren', 'Con niños'], ['families.singleParent', 'Monoparentales']] },
+  { group: 'Adultos', fields: [['adults.married', 'Casados'], ['adults.single36plus', 'Solteros 36+'], ['adults.youngSingleAdults', 'Jóvenes Adultos Solteros']] },
+  { group: 'Conversos recientes', fields: [['recentConverts.total', 'Total'], ['recentConverts.adultMen', 'Hombres adultos'], ['recentConverts.adultWomen', 'Mujeres adultas'], ['recentConverts.youngMen', 'Jóvenes varones'], ['recentConverts.youngWomen', 'Jóvenes mujeres'], ['recentConverts.children', 'Niños']] },
+  { group: 'Estado de ordenación', fields: [['ordinationStatus.total', 'Total'], ['ordinationStatus.ordained', 'Ordenados'], ['ordinationStatus.notOrdained', 'No ordenados']] },
+  { group: 'Adultos investidos', fields: [['endowedAdults.total', 'Total'], ['endowedAdults.withRecommend', 'Con recomendación'], ['endowedAdults.withoutRecommend', 'Sin recomendación']] },
+  { group: 'No incluidos', fields: [['notIncluded.total', 'Total'], ['notIncluded.missingBirthdate', 'Sin fecha de nacimiento'], ['notIncluded.baptizedNotConfirmed', 'Bautizados sin confirmar'], ['notIncluded.enrolled9plus', 'Matriculados 9+ años']] },
+];
+function wgGetPath(obj, path) { return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj); }
+function wgSetPath(obj, path, val) {
+  const keys = path.split('.');
+  let o = obj;
+  for (let i = 0; i < keys.length - 1; i++) { o[keys[i]] = o[keys[i]] || {}; o = o[keys[i]]; }
+  o[keys[keys.length - 1]] = val;
+}
+
+function wgSnapshotFieldsHtml(existing) {
+  return WARD_SNAPSHOT_FIELDS.map((g) => `
+    <div class="wg-form-category">
+      <div class="wg-form-category-title">${esc(g.group)}</div>
+      ${g.fields.map(([path, label]) => `
+        <div class="field">
+          <label>${esc(label)}</label>
+          <input type="number" min="0" step="1" class="wgs-field" data-path="${path}" required value="${wgGetPath(existing, path) ?? ''}" />
+        </div>`).join('')}
+    </div>
+  `).join('');
+}
+
+function openWardSnapshotModal() {
+  const existing = DB.wardSnapshot || {};
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wgs-modal-backdrop">
+      <div class="modal modal-lg">
+        <div class="modal-header"><h3>Editar instantánea del barrio</h3><button class="modal-close" id="wgs-modal-close">×</button></div>
+        <div class="modal-body">
+          ${wgPdfUploadHtml('wgs', 'Estadísticas de la unidad')}
+          <div id="wgs-error"></div>
+          <div class="hint-box" style="margin-top:0;">Esta instantánea no tiene fecha — es la foto más reciente del estado de la unidad. Se reemplaza por completo cada vez que se guarda.</div>
+          <form id="wgs-form">
+            <div id="wgs-fields">${wgSnapshotFieldsHtml(existing)}</div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="wgs-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="wgs-save">Guardar instantánea</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('wgs-form'));
+  document.getElementById('wgs-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('wgs-cancel').addEventListener('click', guardedClose);
+  document.getElementById('wgs-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wgs-modal-backdrop') guardedClose(); });
+
+  wgSimulatePdfUpload('wgs', 'snapshot', (draft) => {
+    document.getElementById('wgs-fields').innerHTML = wgSnapshotFieldsHtml(draft);
+    document.querySelector('#wgs-modal-backdrop .modal').classList.add('wg-form-autofilled');
+  });
+
+  document.getElementById('wgs-save').addEventListener('click', () => {
+    const form = document.getElementById('wgs-form');
+    if (!form.reportValidity()) return;
+    const body = {};
+    form.querySelectorAll('.wgs-field').forEach((input) => { wgSetPath(body, input.dataset.path, Number(input.value)); });
+    DB.wardSnapshot = { ...body, updatedAt: new Date().toISOString(), updatedBy: currentUser.id };
+    toast('Instantánea actualizada');
+    closeModal();
+    renderWardGrowthView();
+  });
 }
 
 achCloseElapsedPeriods();

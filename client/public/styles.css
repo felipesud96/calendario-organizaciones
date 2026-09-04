@@ -894,6 +894,114 @@ table.data-table tr:last-child td { border-bottom: none; }
 .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
 .ranking-section .card-list { display: flex; flex-direction: column; gap: 8px; }
 
+/* ==================================================================
+   Crecimiento del Barrio (indicadores trimestrales de crecimiento) — NO
+   confundir con las clases .stats-* de arriba (Estadísticas evalúa
+   actividades puntuales); esta sección reutiliza esas mismas clases donde
+   aplica (.stats-cards, .stat-card, .hint-box, .data-table, .status-pill,
+   .table-scroll) y solo agrega las que le son propias (prefijo wg-).
+   ================================================================== */
+.card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; background: var(--white);
+}
+.modal-lg { max-width: 720px; }
+.wg-card-title { font-size: 13.5px; font-weight: 700; color: var(--celeste-darker); margin-bottom: 8px; }
+.wg-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 720px) { .wg-chart-grid { grid-template-columns: 1fr; } }
+
+.wg-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; font-size: 11.5px; color: var(--ink-soft); }
+.wg-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.wg-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+.wg-chart-wrap { margin-top: 4px; }
+.wg-chart-plot { position: relative; width: 100%; }
+.wg-chart-svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.wg-dot { position: absolute; width: 8px; height: 8px; margin-left: -4px; margin-top: -4px; border-radius: 50%; box-shadow: 0 0 0 2px var(--white); }
+.wg-chart-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-soft); margin-top: 4px; padding: 0 4px; gap: 4px; }
+.wg-chart-labels span { flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Comparativa entre organizaciones — barras horizontales rankeadas */
+.wg-rankbar-list { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
+.wg-rankbar-row { display: grid; grid-template-columns: 190px 1fr 48px; align-items: center; gap: 10px; }
+@media (max-width: 640px) { .wg-rankbar-row { grid-template-columns: 108px 1fr 40px; font-size: 12px; } }
+.wg-rankbar-label { font-size: 12.5px; color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wg-rankbar-track { height: 12px; background: var(--celeste-lighter); border-radius: 999px; overflow: hidden; }
+.wg-rankbar-fill { height: 100%; border-radius: 999px; min-width: 3px; }
+.wg-rankbar-fill.wg-rankbar-down { background: var(--danger); }
+.wg-rankbar-fill.wg-rankbar-up { background: var(--success); }
+.wg-rankbar-fill.wg-rankbar-flat { background: var(--ink-soft); }
+.wg-rankbar-value { font-size: 12.5px; font-weight: 800; color: var(--ink); text-align: right; }
+
+/* Dos barras simples (ej: Futuros Élderes ordenados vs. potencial) */
+.wg-twobar { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.wg-twobar-row { display: grid; grid-template-columns: 78px 1fr 34px; align-items: center; gap: 10px; }
+.wg-twobar-label { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
+.wg-twobar-track { height: 14px; background: var(--celeste-lighter); border-radius: 999px; overflow: hidden; }
+.wg-twobar-fill { height: 100%; border-radius: 999px; min-width: 3px; background: var(--celeste); }
+.wg-twobar-value { font-size: 12.5px; font-weight: 800; color: var(--ink); text-align: right; }
+
+/* Tabla completa de 26 indicadores */
+.wg-full-table td, .wg-full-table th { white-space: nowrap; }
+.wg-full-table td:first-child, .wg-full-table th:first-child { white-space: normal; min-width: 220px; }
+tr.wg-cat-row td {
+  background: var(--celeste-lighter); color: var(--celeste-darker);
+  font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 7px 10px;
+}
+.wg-pct { color: var(--ink-soft); font-weight: 400; }
+.wg-quarter-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+
+/* Tabla de seguimiento de conversos */
+.wg-convert-table td { vertical-align: middle; }
+.wg-dotmark { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; }
+.wg-dotmark.good { background: var(--success); }
+.wg-dotmark.bad { background: var(--danger); }
+.wg-dotmark.na { background: var(--border); }
+
+/* Instantánea del barrio */
+.wg-snap-card { display: flex; flex-direction: column; }
+.wg-snap-rows { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+.wg-snap-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.wg-snap-row:last-child { border-bottom: none; }
+.wg-snap-row span { color: var(--ink-soft); }
+.wg-snap-row strong { color: var(--ink); }
+
+/* Formularios: cargar/editar trimestre + instantánea */
+.wg-form-category { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
+.wg-form-category-title { font-size: 12.5px; font-weight: 700; color: var(--celeste-darker); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 8px; }
+.wg-indicator-row .field { margin-bottom: 8px; }
+.wg-convert-row { border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 12px; }
+
+/* Asistente de carga por PDF (Punto ~102, 2da etapa): subir el informe
+   oficial para pre-llenar el formulario de arriba. El banner de "completado
+   automáticamente" es un elemento fijo del DOM (no un toast que desaparece
+   solo) para que la persona no pueda perder de vista que tiene que revisar
+   antes de guardar — se queda ahí durante toda la vida del modal. */
+.wg-pdf-upload { border: 1px dashed var(--celeste-dark); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; background: var(--celeste-lighter); }
+.wg-pdf-upload-label { display: block; font-size: 13px; font-weight: 700; color: var(--celeste-darker); margin-bottom: 8px; }
+.wg-pdf-upload input[type="file"] { font-size: 12.5px; color: var(--ink-soft); max-width: 100%; }
+.wg-pdf-status { margin-top: 8px; font-size: 12.5px; }
+.wg-pdf-status-loading { color: var(--ink-soft); }
+.wg-pdf-status-ok { color: var(--success); font-weight: 600; }
+.wg-pdf-status-error { color: var(--danger); font-weight: 600; }
+.wg-autofill-banner {
+  background: #fef3c7; border: 1px solid #fde68a; color: #92400e;
+  border-radius: var(--radius); padding: 10px 14px; font-size: 13px; font-weight: 600;
+  margin-bottom: 14px; line-height: 1.5;
+}
+.wg-pdf-warnings-box {
+  background: #fef3c7; border: 1px solid #fde68a; color: #92400e;
+  border-radius: var(--radius); padding: 10px 14px 10px 16px; font-size: 12.5px;
+  margin-bottom: 14px; line-height: 1.5;
+}
+.wg-pdf-warnings-box ul { margin: 6px 0 0; padding-left: 18px; }
+.wg-pdf-warnings-box li { margin-bottom: 3px; }
+/* Marca persistente en TODO el modal (no solo el banner de arriba) mientras
+   el formulario vino de un PDF y todavía no se guardó — un borde de color
+   que se nota sin importar hasta dónde se haya scrolleado el formulario. */
+.modal.wg-form-autofilled { border: 2px solid var(--celeste-dark); }
+
 /* Diploma imprimible/descargable (botón "🎓 Ver / descargar diploma") */
 .diploma { padding: 10px; }
 .diploma-border {
@@ -1030,6 +1138,7 @@ table.data-table tr:last-child td { border-bottom: none; }
      original se verían como un recuadro brillante fuera de lugar. */
   .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
   .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+  .wg-autofill-banner, .wg-pdf-warnings-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
   .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
   .ranking-top { background: #122a1c; border-color: #1f4a30; }
   .ac-item:hover { background: #1c2b38; }

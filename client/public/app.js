@@ -43,6 +43,9 @@ const state = {
   statsSubtab: 'pending',
   statsYear: null,
   statsOrgId: null,
+  wardGrowthSubtab: 'resumen', // Crecimiento del Barrio: 'resumen' / 'tabla' / 'conversos' / 'instantanea'
+  wardGrowthData: null, // cache de la última carga: { quarters, indicatorDefs, categories, convertTracking }
+  wardGrowthSnapshot: null,
   achPeriod: 'month', // Rachas y Logros: mes / quarter / semester / year / allTime
   achView: 'current', // 'current' (en curso) o 'history' (períodos ya cerrados)
   calViewMode: 'month', // Calendario: 'month' (grilla) o 'agenda' (lista cronológica)
@@ -1637,6 +1640,7 @@ const TAB_DEFS = {
   cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
   budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
   stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
+  wardGrowth: { label: 'Crecimiento del Barrio', icon: '📈', navLabel: 'Crecimiento', visible: canSeeWardGrowthTab },
   admin: { label: 'Administración', icon: '⚙️', navLabel: 'Admin', visible: () => !!state.user && state.user.role === 'admin' },
 };
 
@@ -1649,7 +1653,7 @@ function tabOrderFor() {
     // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
     // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
     // semanal) van primero, Estadísticas al final por ser lo más ocasional.
-    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'admin'];
+    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
   }
   if (canSeeInterviewsTab()) {
     // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
@@ -1657,11 +1661,11 @@ function tabOrderFor() {
     // las más accionables día a día. Bienestar (Punto 51) va justo después
     // de Reuniones — solo la presidencia (isPresident) de estas mismas dos
     // organizaciones llega a verlo de verdad (canSeeWelfareTab lo filtra).
-    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats'];
+    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats', 'wardGrowth'];
   }
   // Líder de una organización sin entrevistas, o Miembro (a este último le
   // queda filtrado solo Calendario + Mis Actividades de todas formas).
-  return ['calendar', 'myActivities', 'meetings', 'budget', 'stats'];
+  return ['calendar', 'myActivities', 'meetings', 'budget', 'stats', 'wardGrowth'];
 }
 // "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
 // Administrador — los Miembros no las ven en absoluto.
@@ -1672,6 +1676,19 @@ function canSeeMeetingsTab() {
 }
 function canSeeStatsTab() {
   return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader');
+}
+// "Crecimiento del Barrio" (indicadores trimestrales de crecimiento — NO
+// confundir con "Estadísticas" de arriba, que evalúa actividades puntuales):
+// visible para cualquier admin, leader (de cualquier organización) o
+// ward_clerk — a propósito SIN acotar por organización, decisión explícita
+// del Obispado (todos los líderes ven todo, incluida la tabla de
+// conversos). Editar (cargar/editar trimestre o instantánea) es más
+// restringido — ver canEditWardGrowth.
+function canSeeWardGrowthTab() {
+  return !!state.user && (state.user.role === 'admin' || state.user.role === 'leader' || state.user.role === 'ward_clerk');
+}
+function canEditWardGrowth() {
+  return !!state.user && (state.user.role === 'admin' || state.user.role === 'ward_clerk');
 }
 // "Asignaciones" (Aseo del Edificio + Discursos): estrictamente oculto
 // salvo Administrador o líder de Obispado (reutiliza isObispadoUser, la
@@ -1879,6 +1896,7 @@ function renderCurrentView() {
   if (state.view === 'welfare' && !canSeeWelfareTab()) state.view = 'calendar';
   if (state.view === 'cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
+  if (state.view === 'wardGrowth' && !canSeeWardGrowthTab()) state.view = 'calendar';
   if (state.view === 'bishopricPanel' && !canSeeBishopricPanelTab()) state.view = 'calendar';
   root.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   const bishopricBtn = document.getElementById('bishopric-toggle');
@@ -1912,6 +1930,7 @@ function renderCurrentView() {
   else if (state.view === 'welfare') renderWelfareView();
   else if (state.view === 'cleaning') renderAssignmentsView();
   else if (state.view === 'stats') renderStatsView();
+  else if (state.view === 'wardGrowth') renderWardGrowthView();
   else if (state.view === 'admin') renderAdminView();
 }
 
@@ -7926,6 +7945,738 @@ function bpInterviewRowHtml(iv) {
       </div>
       <div class="lc-when">${esc(fmtDateHuman(iv.date))}<br>${esc(fmtTime(iv.startTime))}</div>
     </div>`;
+}
+
+// ==================================================================
+// ---------------- Crecimiento del Barrio ----------------
+// ==================================================================
+// Indicadores trimestrales de crecimiento (Punto ~102) — NO confundir con
+// "Estadísticas" (arriba: evalúa actividades puntuales, asistencia
+// esperada/real por actividad). Este módulo sigue 26 indicadores oficiales
+// por trimestre + una "instantánea" única del estado actual de la unidad,
+// tal como el Obispado ya los venía calculando fuera de la app a partir de
+// sus reportes trimestrales oficiales. VER es para admin/leader/ward_clerk
+// sin acotar por organización (decisión explícita del Obispado); EDITAR es
+// solo admin/ward_clerk — ver canSeeWardGrowthTab/canEditWardGrowth.
+
+const WARD_GROWTH_CHART_COLORS = COLOR_PALETTE; // reutiliza la paleta ya definida arriba
+
+async function loadWardGrowthData() {
+  const [quartersRes, snapshot] = await Promise.all([
+    api('/ward-growth/quarters'),
+    api('/ward-growth/snapshot').catch(() => null),
+  ]);
+  state.wardGrowthData = quartersRes;
+  state.wardGrowthSnapshot = snapshot;
+  return quartersRes;
+}
+
+async function renderWardGrowthView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header">
+      <div><h2>Crecimiento del Barrio</h2><p>Indicadores trimestrales de crecimiento y la instantánea actual de la unidad</p></div>
+      ${canEditWardGrowth() ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-secondary btn-sm" id="wg-edit-snapshot">${icon('edit')} Editar instantánea</button>
+          <button type="button" class="btn btn-primary btn-sm" id="wg-new-quarter">+ Cargar trimestre nuevo</button>
+        </div>` : ''}
+    </div>
+    <div class="subtabs">
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'resumen' ? 'active' : ''}" data-tab="resumen">Resumen</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'tabla' ? 'active' : ''}" data-tab="tabla">Tabla completa</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'conversos' ? 'active' : ''}" data-tab="conversos">Seguimiento de Conversos</button>
+      <button class="subtab-btn ${state.wardGrowthSubtab === 'instantanea' ? 'active' : ''}" data-tab="instantanea">Instantánea del Barrio</button>
+    </div>
+    <div id="wg-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.wardGrowthSubtab = b.dataset.tab; renderWardGrowthView(); }));
+  const newQuarterBtn = document.getElementById('wg-new-quarter');
+  if (newQuarterBtn) newQuarterBtn.addEventListener('click', () => openWardGrowthQuarterModal());
+  const editSnapshotBtn = document.getElementById('wg-edit-snapshot');
+  if (editSnapshotBtn) editSnapshotBtn.addEventListener('click', () => openWardSnapshotModal());
+
+  const content = document.getElementById('wg-content');
+  let data;
+  try { data = await loadWardGrowthData(); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+
+  if (!data.quarters.length) {
+    content.innerHTML = emptyStateHtml('Todavía no hay ningún trimestre cargado', canEditWardGrowth() ? { id: 'wg-empty-cta', label: '+ Cargar trimestre nuevo' } : null, '📈');
+    wireEmptyStateCta('wg-empty-cta', () => openWardGrowthQuarterModal());
+    return;
+  }
+
+  if (state.wardGrowthSubtab === 'tabla') renderWardGrowthTable(data);
+  else if (state.wardGrowthSubtab === 'conversos') renderWardGrowthConverts(data);
+  else if (state.wardGrowthSubtab === 'instantanea') renderWardGrowthSnapshot();
+  else renderWardGrowthResumen(data);
+}
+
+// ---------- Gráfico de líneas genérico (mismo estilo que el sparkline de
+// Estadísticas → Panel de Control, generalizado a 1-N series con la misma
+// escala). x en % (posicionado por CSS) para que los puntitos HTML calcen
+// exacto con el trazo SVG sin importar el ancho real de pantalla. ----------
+function wgLineChartHtml(quarters, series, { height = 130, valueSuffix = '' } = {}) {
+  const padY = 12;
+  const usableH = height - padY * 2;
+  const allValues = series.flatMap((s) => quarters.map((q) => s.valueFn(q)).filter((v) => v !== null && v !== undefined));
+  const maxVal = Math.max(1, ...allValues, ...(series.map((s) => s.maxHint || 0)));
+  const n = quarters.length;
+  const xPct = (i) => (n <= 1 ? 50 : (i / (n - 1)) * 100);
+  const yFor = (v) => padY + usableH - (usableH * v) / maxVal;
+
+  const paths = [];
+  const dots = [];
+  series.forEach((s) => {
+    let pathParts = [];
+    let drawing = false;
+    quarters.forEach((q, i) => {
+      const v = s.valueFn(q);
+      if (v === null || v === undefined) { drawing = false; return; }
+      pathParts.push(`${drawing ? 'L' : 'M'}${xPct(i).toFixed(2)},${yFor(v).toFixed(1)}`);
+      drawing = true;
+      dots.push(`<div class="wg-dot" style="left:${xPct(i).toFixed(2)}%; top:${yFor(v).toFixed(1)}px; background:${s.color};" title="${esc(s.label)} · ${esc(q.label)}: ${v}${valueSuffix}"></div>`);
+    });
+    if (pathParts.length) paths.push(`<path d="${pathParts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" vector-effect="non-scaling-stroke" />`);
+  });
+
+  return `
+    <div class="wg-chart-wrap">
+      ${series.length > 1 ? `<div class="wg-legend">${series.map((s) => `<span class="wg-legend-item"><span class="wg-legend-dot" style="background:${s.color};"></span>${esc(s.label)}</span>`).join('')}</div>` : ''}
+      <div class="wg-chart-plot" style="height:${height}px;">
+        <svg viewBox="0 0 100 ${height}" class="wg-chart-svg" preserveAspectRatio="none">${paths.join('')}</svg>
+        ${dots.join('')}
+      </div>
+      <div class="wg-chart-labels">${quarters.map((q) => `<span>${esc(q.label)}</span>`).join('')}</div>
+    </div>`;
+}
+
+// ---------- Barras horizontales rankeadas (Comparativa entre organizaciones)
+// `title` de cada barra lleva el valor exacto — así un test puede leerlo del
+// DOM sin depender de interpretar píxeles. ----------
+function wgRankedBarHtml(rows) {
+  if (!rows.length) return '<div class="empty-state compact">No hay suficientes trimestres para comparar</div>';
+  const maxMag = Math.max(1, ...rows.map((r) => r.magnitude));
+  return `<div class="wg-rankbar-list">
+    ${rows.map((r) => {
+      const sign = r.diff > 0 ? '+' : '';
+      const dir = r.diff < 0 ? 'wg-rankbar-down' : (r.diff > 0 ? 'wg-rankbar-up' : 'wg-rankbar-flat');
+      const titleText = `${r.label}: ${sign}${r.diff} puntos porcentuales (de ${r.pctFirst}% a ${r.pctLast}%)`;
+      return `
+      <div class="wg-rankbar-row">
+        <div class="wg-rankbar-label">${esc(r.label)}</div>
+        <div class="wg-rankbar-track">
+          <div class="wg-rankbar-fill ${dir}" style="width:${(r.magnitude / maxMag * 100).toFixed(1)}%;" title="${esc(titleText)}"></div>
+        </div>
+        <div class="wg-rankbar-value" title="${esc(titleText)}">${sign}${r.diff}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// ---------- Dos barras simples (ej: Futuros Élderes ordenados vs potencial) ----------
+function wgTwoBarHtml(rows) {
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return `<div class="wg-twobar">
+    ${rows.map((r) => `
+      <div class="wg-twobar-row">
+        <span class="wg-twobar-label">${esc(r.label)}</span>
+        <div class="wg-twobar-track"><div class="wg-twobar-fill" style="width:${(r.value / max * 100).toFixed(1)}%; background:${r.color};" title="${esc(r.label)}: ${r.value}"></div></div>
+        <span class="wg-twobar-value">${r.value}</span>
+      </div>`).join('')}
+  </div>`;
+}
+
+function wgPctSeries(number) {
+  return (q) => pctForIndicatorClient(q, number);
+}
+// Réplica cliente de wardGrowth.js#pctForIndicator (el cliente no importa
+// módulos del servidor) — mantener la misma fórmula (Math.round(real/pot*100))
+// si se toca una de las dos.
+function pctForIndicatorClient(quarter, number) {
+  const entry = quarter?.indicators?.[String(number)];
+  if (!entry || entry.pot === null || entry.pot === undefined || Number(entry.pot) === 0) return null;
+  return Math.round((Number(entry.real) / Number(entry.pot)) * 100);
+}
+// Réplica cliente de wardGrowth.js#comparativa (mismo motivo que arriba).
+const WG_ORG_COMPARATIVA_INDICATORS = [1, 2, 14, 15, 16, 17, 18, 19, 20, 22];
+function wgComparativaClient(quarterFirst, quarterLast, indicatorDefs, numbers = WG_ORG_COMPARATIVA_INDICATORS) {
+  if (!quarterFirst || !quarterLast) return [];
+  const rows = [];
+  for (const number of numbers) {
+    const def = indicatorDefs.find((d) => d.number === number);
+    const pctFirst = pctForIndicatorClient(quarterFirst, number);
+    const pctLast = pctForIndicatorClient(quarterLast, number);
+    if (pctFirst === null || pctLast === null) continue;
+    const diff = pctLast - pctFirst;
+    rows.push({ number, label: def?.label || `Indicador ${number}`, pctFirst, pctLast, diff, magnitude: Math.abs(diff) });
+  }
+  rows.sort((a, b) => b.magnitude - a.magnitude);
+  return rows;
+}
+
+function renderWardGrowthResumen(data) {
+  const content = document.getElementById('wg-content');
+  const { quarters, indicatorDefs } = data;
+  const latest = quarters[quarters.length - 1];
+  const first = quarters[0];
+  const snapshot = state.wardGrowthSnapshot;
+
+  const totalMembers = latest.indicators['10']?.real ?? snapshot?.totalMembers ?? null;
+  const totalFamilies = latest.indicators['11']?.real ?? snapshot?.families?.total ?? null;
+  const sacReal = latest.indicators['7']?.real ?? null;
+  const sacPct = pctForIndicatorClient(latest, 7);
+  const recentConverts = snapshot?.recentConverts?.total ?? null;
+
+  const comparativa = wgComparativaClient(first, latest, indicatorDefs);
+  const ordination = snapshot?.ordinationStatus;
+
+  content.innerHTML = `
+    <div class="stats-cards">
+      <div class="stat-card"><div class="stat-card-label">Total de miembros</div><div class="stat-card-value">${totalMembers ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Total de familias</div><div class="stat-card-value">${totalFamilies ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Asistencia sacramental (${esc(latest.label)})</div><div class="stat-card-value">${sacReal ?? '—'}${sacPct !== null ? ` <span style="font-size:13px; font-weight:400; color:var(--ink-soft);">(${sacPct}%)</span>` : ''}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Conversos recientes</div><div class="stat-card-value">${recentConverts ?? '—'}</div></div>
+    </div>
+
+    <div class="wg-chart-grid">
+      <div class="card">
+        <div class="wg-card-title">Total de miembros</div>
+        ${wgLineChartHtml(quarters, [{ label: 'Miembros', color: WARD_GROWTH_CHART_COLORS[0], valueFn: (q) => q.indicators['10']?.real ?? null }])}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Total de familias</div>
+        ${wgLineChartHtml(quarters, [{ label: 'Familias', color: WARD_GROWTH_CHART_COLORS[1], valueFn: (q) => q.indicators['11']?.real ?? null }])}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="wg-card-title">Asistencia sacramental — Real vs. Potencial</div>
+      ${wgLineChartHtml(quarters, [
+        { label: 'Real', color: WARD_GROWTH_CHART_COLORS[0], valueFn: (q) => q.indicators['7']?.real ?? null },
+        { label: 'Potencial', color: WARD_GROWTH_CHART_COLORS[3], valueFn: (q) => q.indicators['7']?.pot ?? null },
+      ], { valueSuffix: ' personas' })}
+    </div>
+
+    <div class="wg-chart-grid" style="margin-top:14px;">
+      <div class="card">
+        <div class="wg-card-title">% Comparativa — Sellados, Investidos, Melquisedec, HJ</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Sellados', color: WARD_GROWTH_CHART_COLORS[0], valueFn: wgPctSeries(1) },
+          { label: 'Investidos', color: WARD_GROWTH_CHART_COLORS[1], valueFn: wgPctSeries(2) },
+          { label: 'Melquisedec asisten', color: WARD_GROWTH_CHART_COLORS[2], valueFn: wgPctSeries(14) },
+          { label: 'HJ asisten', color: WARD_GROWTH_CHART_COLORS[4], valueFn: wgPctSeries(18) },
+        ], { valueSuffix: '%' })}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Entrevistas de ministración completadas (%)</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Cuórum de Élderes', color: WARD_GROWTH_CHART_COLORS[0], valueFn: wgPctSeries(12) },
+          { label: 'Sociedad de Socorro', color: WARD_GROWTH_CHART_COLORS[2], valueFn: wgPctSeries(13) },
+        ], { valueSuffix: '%' })}
+      </div>
+    </div>
+
+    <div class="wg-chart-grid" style="margin-top:14px;">
+      <div class="card">
+        <div class="wg-card-title">Asistencia de jóvenes (%) — HJ vs. MJ</div>
+        ${wgLineChartHtml(quarters, [
+          { label: 'Hombres Jóvenes', color: WARD_GROWTH_CHART_COLORS[4], valueFn: wgPctSeries(18) },
+          { label: 'Mujeres Jóvenes', color: WARD_GROWTH_CHART_COLORS[5], valueFn: wgPctSeries(19) },
+        ], { valueSuffix: '%' })}
+      </div>
+      <div class="card">
+        <div class="wg-card-title">Futuros Élderes — Ordenados vs. Potencial</div>
+        ${ordination ? wgTwoBarHtml([
+          { label: 'Ordenados', value: ordination.ordained, color: WARD_GROWTH_CHART_COLORS[0] },
+          { label: 'Potencial', value: ordination.total, color: WARD_GROWTH_CHART_COLORS[3] },
+        ]) : '<div class="empty-state compact">Sin datos en la instantánea todavía</div>'}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="wg-card-title">Comparativa entre organizaciones <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${esc(first.label)} → ${esc(latest.label)}, % de cambio)</span></div>
+      ${wgRankedBarHtml(comparativa)}
+    </div>
+  `;
+}
+
+function renderWardGrowthTable(data) {
+  const content = document.getElementById('wg-content');
+  const { quarters, indicatorDefs, categories } = data;
+  const rows = categories.map((cat) => {
+    const defs = indicatorDefs.filter((d) => d.category === cat.key);
+    return `
+      <tr class="wg-cat-row"><td colspan="${1 + quarters.length}">${esc(cat.label)}</td></tr>
+      ${defs.map((d) => `
+        <tr>
+          <td>${d.number}. ${esc(d.label)}</td>
+          ${quarters.map((q) => {
+            const entry = q.indicators[String(d.number)];
+            if (!entry) return '<td>—</td>';
+            const pctVal = (entry.pot !== null && entry.pot !== undefined && Number(entry.pot) > 0) ? Math.round((entry.real / entry.pot) * 100) : null;
+            return `<td>${entry.real}${entry.pot !== null && entry.pot !== undefined ? ` / ${entry.pot}` : ''}${pctVal !== null ? ` <span class="wg-pct">(${pctVal}%)</span>` : ''}</td>`;
+          }).join('')}
+        </tr>`).join('')}
+    `;
+  }).join('');
+  content.innerHTML = `
+    <div class="hint-box">Tabla completa de los ${indicatorDefs.length} indicadores, uno por fila, agrupados por categoría igual que en el reporte oficial. Cada celda muestra Real${quarters[0] ? ' / Potencial (%)' : ''}.</div>
+    ${canEditWardGrowth() ? `
+      <div class="wg-quarter-chips">
+        ${quarters.map((q) => `<button type="button" class="btn btn-secondary btn-sm wg-edit-quarter-btn" data-id="${q.id}">${icon('edit')} ${esc(q.label)}</button>`).join('')}
+      </div>` : ''}
+    <div class="table-scroll">
+      <table class="data-table wg-full-table">
+        <thead><tr><th>Indicador</th>${quarters.map((q) => `<th>${esc(q.label)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  content.querySelectorAll('.wg-edit-quarter-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const q = quarters.find((x) => String(x.id) === btn.dataset.id);
+      if (q) openWardGrowthQuarterModal(q);
+    });
+  });
+}
+
+function wgAttendedDotClass(v) {
+  if (v === true) return 'wg-dotmark good';
+  if (v === false) return 'wg-dotmark bad';
+  return 'wg-dotmark na';
+}
+function wgAttendedDotTitle(label, v, kind) {
+  const val = v === true ? 'Sí' : (v === false ? 'No' : 'Sin dato / no aplica');
+  return `${label} · ${kind}: ${val}`;
+}
+function wgStatusPillClass(status) {
+  if (status === 'critical') return 'status-pill status-red';
+  if (status === 'good') return 'status-pill status-green';
+  return 'status-pill status-amber';
+}
+function wgStatusIcon(status) {
+  if (status === 'critical') return '🔴';
+  if (status === 'good') return '🟢';
+  return '🟡';
+}
+
+function renderWardGrowthConverts(data) {
+  const content = document.getElementById('wg-content');
+  const people = data.convertTracking || [];
+  content.innerHTML = `
+    <div class="hint-box">
+      <strong>Cómo se calculan estos estados:</strong> es una heurística aproximada a partir de la secuencia de asistencia/llamamiento de cada persona — sirve para priorizar a quién visitar primero, pero el Obispado/liderazgo debería igual mirar la secuencia real (los puntitos de abajo), no solo la píldora de color.
+    </div>
+    <div class="table-scroll">
+      <table class="data-table wg-convert-table">
+        <thead><tr><th>Nombre</th><th>Sexo</th><th>Edad</th><th>Trimestres</th><th>Asistencia</th><th>Llamamiento</th><th>Estado</th></tr></thead>
+        <tbody>
+          ${people.length ? people.map((p) => `
+            <tr>
+              <td>${esc(p.name)}</td>
+              <td>${esc(p.sex || '—')}</td>
+              <td>${p.age ?? '—'}</td>
+              <td>${p.quarters.map((q) => esc(q)).join(', ')}</td>
+              <td>${p.attended.map((v, i) => `<span class="${wgAttendedDotClass(v)}" title="${esc(wgAttendedDotTitle(p.quarters[i], v, 'Asistió'))}"></span>`).join('')}</td>
+              <td>${p.hasCalling.map((v, i) => `<span class="${wgAttendedDotClass(v)}" title="${esc(wgAttendedDotTitle(p.quarters[i], v, 'Llamamiento'))}"></span>`).join('')}</td>
+              <td><span class="${wgStatusPillClass(p.status)}" title="${esc(p.statusLabel)}">${wgStatusIcon(p.status)} ${esc(p.statusLabel)}</span></td>
+            </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state compact">Sin conversos registrados todavía</div></td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function wgSnapshotCardHtml(title, rows) {
+  return `<div class="card wg-snap-card">
+    <div class="wg-card-title">${esc(title)}</div>
+    <div class="wg-snap-rows">${rows.map(([label, val]) => `<div class="wg-snap-row"><span>${esc(label)}</span><strong>${val ?? '—'}</strong></div>`).join('')}</div>
+  </div>`;
+}
+
+function renderWardGrowthSnapshot() {
+  const content = document.getElementById('wg-content');
+  const s = state.wardGrowthSnapshot;
+  if (!s) {
+    content.innerHTML = emptyStateHtml('Todavía no se ha cargado la instantánea del barrio', canEditWardGrowth() ? { id: 'wg-snap-empty-cta', label: 'Cargar instantánea' } : null, '🏘️');
+    wireEmptyStateCta('wg-snap-empty-cta', () => openWardSnapshotModal());
+    return;
+  }
+  content.innerHTML = `
+    <div class="hint-box">Esta instantánea no tiene fecha propia — es la "foto" más reciente del estado de la unidad, y se reemplaza cada vez que se edita.${s.updatedAt ? ` Última actualización: ${esc(fmtDateHuman(s.updatedAt.slice(0, 10)))}.` : ''}</div>
+    <div class="stats-cards" style="margin-bottom:14px;">
+      <div class="stat-card"><div class="stat-card-label">Total de miembros</div><div class="stat-card-value">${s.totalMembers ?? '—'}</div></div>
+      <div class="stat-card"><div class="stat-card-label">Total de familias</div><div class="stat-card-value">${s.families?.total ?? '—'}</div></div>
+    </div>
+    <div class="wg-chart-grid">
+      ${wgSnapshotCardHtml('Sacerdocio y organizaciones', [
+        ['Hombres (total)', s.men?.total], ['Sumos Sacerdotes', s.men?.highPriests], ['Élderes', s.men?.elders], ['Futuros Élderes', s.men?.futureElders],
+        ['Mujeres (total)', s.women?.total],
+        ['Hombres Jóvenes (total)', s.youngMen?.total], ['Sacerdotes', s.youngMen?.priests], ['Maestros', s.youngMen?.teachers], ['Diáconos', s.youngMen?.deacons],
+        ['Mujeres Jóvenes (total)', s.youngWomen?.total], ['Guardianes de la Luz', s.youngWomen?.guardiansOfLight], ['Heraldos de la Esperanza', s.youngWomen?.heraldsOfHope], ['Constructoras de Fe', s.youngWomen?.faithBuilders],
+        ['Niños 3+ años', s.children3plus], ['Niños 0-2 años', s.children0to2],
+      ])}
+      ${wgSnapshotCardHtml('Familias y adultos', [
+        ['Familias (total)', s.families?.total], ['Sin portador de Melquisedec', s.families?.withoutMelchizedekHolder], ['Con jóvenes', s.families?.withYouth], ['Con niños', s.families?.withChildren], ['Monoparentales', s.families?.singleParent],
+        ['Adultos casados', s.adults?.married], ['Solteros 36+', s.adults?.single36plus], ['Jóvenes Adultos Solteros', s.adults?.youngSingleAdults],
+      ])}
+      ${wgSnapshotCardHtml('Conversos recientes', [
+        ['Total', s.recentConverts?.total], ['Hombres adultos', s.recentConverts?.adultMen], ['Mujeres adultas', s.recentConverts?.adultWomen], ['Jóvenes varones', s.recentConverts?.youngMen], ['Jóvenes mujeres', s.recentConverts?.youngWomen], ['Niños', s.recentConverts?.children],
+      ])}
+      ${wgSnapshotCardHtml('Ordenanzas y no incluidos', [
+        ['Ordenación — total', s.ordinationStatus?.total], ['Ordenados', s.ordinationStatus?.ordained], ['No ordenados', s.ordinationStatus?.notOrdained],
+        ['Investidos — total', s.endowedAdults?.total], ['Con recomendación', s.endowedAdults?.withRecommend], ['Sin recomendación', s.endowedAdults?.withoutRecommend],
+        ['No incluidos — total', s.notIncluded?.total], ['Sin fecha de nacimiento', s.notIncluded?.missingBirthdate], ['Bautizados sin confirmar', s.notIncluded?.baptizedNotConfirmed], ['Matriculados 9+ años', s.notIncluded?.enrolled9plus],
+      ])}
+    </div>
+  `;
+}
+
+// ---------------- Formulario: cargar/editar un trimestre ----------------
+
+// ---------------- Asistente de carga por PDF (Punto ~102, 2da etapa) -------
+//
+// Sube el PDF del informe oficial a POST /ward-growth/parse-pdf, que
+// devuelve un BORRADOR con la misma forma que ya usan estos formularios —
+// pero NUNCA guarda nada por sí solo. Este bloque solo pre-llena los campos
+// existentes del formulario (mismos inputs de siempre) y deja un indicador
+// visual PERSISTENTE (no un toast que desaparece) de que hay que revisar
+// antes de tocar "Guardar" — ese botón sigue siendo el único que persiste
+// algo, con la validación de siempre corriendo justo antes. Si el parseo
+// falla o el PDF no es del tipo esperado, se avisa y el formulario queda
+// vacío/como estaba — nunca bloquea la carga manual.
+function wgPdfUploadHtml(idPrefix, label) {
+  return `
+    <div class="wg-pdf-upload" id="${idPrefix}-pdf-upload">
+      <label class="wg-pdf-upload-label" for="${idPrefix}-pdf-input">📄 Subir PDF del informe (opcional) — ${esc(label)}</label>
+      <input type="file" accept="application/pdf" id="${idPrefix}-pdf-input" />
+      <div class="wg-pdf-status" id="${idPrefix}-pdf-status"></div>
+    </div>
+    <div id="${idPrefix}-pdf-banner"></div>
+    <div id="${idPrefix}-pdf-warnings"></div>`;
+}
+
+function wgAutofillBannerHtml() {
+  return `<div class="wg-autofill-banner">✨ Completado automáticamente a partir del PDF — revisá todos los valores antes de guardar.</div>`;
+}
+
+function wgWarningsHtml(warnings) {
+  if (!warnings || !warnings.length) return '';
+  return `<div class="wg-pdf-warnings-box"><strong>⚠️ Revisar antes de guardar (${warnings.length}):</strong><ul>${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`;
+}
+
+// `expectedType`: 'quarter' | 'snapshot' — si el PDF resulta ser del otro
+// tipo, se avisa en vez de pre-llenar cualquier cosa. `onDraft(data)` se
+// llama solo cuando el tipo coincide y hay datos para pre-llenar.
+function wireWgPdfUpload(idPrefix, expectedType, onDraft) {
+  const input = document.getElementById(`${idPrefix}-pdf-input`);
+  const statusEl = document.getElementById(`${idPrefix}-pdf-status`);
+  const bannerEl = document.getElementById(`${idPrefix}-pdf-banner`);
+  const warningsEl = document.getElementById(`${idPrefix}-pdf-warnings`);
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    statusEl.innerHTML = `<span class="wg-pdf-status-loading">Analizando PDF… puede tardar unos segundos.</span>`;
+    bannerEl.innerHTML = '';
+    warningsEl.innerHTML = '';
+    try {
+      const fd = new FormData();
+      fd.append('pdf', file, file.name);
+      const headers = {};
+      if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+      const res = await fetch(API + '/ward-growth/parse-pdf', { method: 'POST', headers, body: fd });
+      let result = null;
+      try { result = await res.json(); } catch (e) { /* sin cuerpo */ }
+      if (!res.ok) throw new Error((result && result.error) || `Error ${res.status}`);
+      if (!result || !result.type || !result.data) {
+        statusEl.innerHTML = `<span class="wg-pdf-status-error">⚠️ No se pudo leer el PDF automáticamente. Completá el formulario manualmente.</span>`;
+        warningsEl.innerHTML = wgWarningsHtml(result?.warnings);
+        return;
+      }
+      if (result.type !== expectedType) {
+        const nameFor = (t) => (t === 'quarter' ? 'un informe trimestral' : 'una instantánea de la unidad');
+        statusEl.innerHTML = `<span class="wg-pdf-status-error">⚠️ Este PDF parece ser ${nameFor(result.type)}, no ${nameFor(expectedType)}. No se pre-llenó nada — completá el formulario manualmente o subí el PDF correcto.</span>`;
+        return;
+      }
+      statusEl.innerHTML = `<span class="wg-pdf-status-ok">✓ PDF analizado.</span>`;
+      bannerEl.innerHTML = wgAutofillBannerHtml();
+      warningsEl.innerHTML = wgWarningsHtml(result.warnings);
+      onDraft(result.data);
+    } catch (e) {
+      statusEl.innerHTML = `<span class="wg-pdf-status-error">⚠️ No se pudo procesar el PDF (${esc(e.message)}). Completá el formulario manualmente.</span>`;
+    } finally {
+      input.value = '';
+    }
+  });
+}
+
+function wgIndicatorFieldsHtml(categories, indicatorDefs, existingIndicators) {
+  return categories.map((cat) => `
+    <div class="wg-form-category">
+      <div class="wg-form-category-title">${esc(cat.label)}</div>
+      ${indicatorDefs.filter((d) => d.category === cat.key).map((d) => {
+        const entry = existingIndicators?.[String(d.number)];
+        const realVal = entry ? entry.real : '';
+        const potVal = entry && entry.pot !== null && entry.pot !== undefined ? entry.pot : '';
+        return `
+        <div class="two-col wg-indicator-row">
+          <div class="field">
+            <label>${d.number}. ${esc(d.label)} — Real</label>
+            <input type="number" min="0" step="1" class="wg-ind-real" data-number="${d.number}" required value="${esc(realVal)}" />
+          </div>
+          <div class="field">
+            <label>Potencial${d.hasPotential ? '' : ' (no aplica)'}</label>
+            <input type="number" min="0" step="1" class="wg-ind-pot" data-number="${d.number}" value="${esc(potVal)}" ${d.hasPotential ? '' : 'disabled placeholder="—"'} />
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+function wgConvertRowHtml(c) {
+  const attendedVal = c?.attended === true ? 'true' : (c?.attended === false ? 'false' : 'null');
+  const callingVal = c?.hasCalling === true ? 'true' : (c?.hasCalling === false ? 'false' : 'null');
+  return `
+    <div class="wg-convert-row">
+      <div class="two-col">
+        <div class="field"><label>Nombre</label><input type="text" class="wg-cv-name" required placeholder="Apellidos, Nombres" value="${esc(c?.name || '')}" /></div>
+        <div class="field"><label>Sexo</label>
+          <select class="wg-cv-sex">
+            <option value="M" ${c?.sex === 'M' ? 'selected' : ''}>Mujer (M)</option>
+            <option value="V" ${c?.sex === 'V' ? 'selected' : ''}>Varón (V)</option>
+          </select>
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="field"><label>Edad</label><input type="number" min="0" step="1" class="wg-cv-age" required value="${c?.age ?? ''}" /></div>
+        <div class="field"><label>¿Asistió?</label>
+          <select class="wg-cv-attended">
+            <option value="true" ${attendedVal === 'true' ? 'selected' : ''}>Sí</option>
+            <option value="false" ${attendedVal === 'false' ? 'selected' : ''}>No</option>
+            <option value="null" ${attendedVal === 'null' ? 'selected' : ''}>Sin dato</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>¿Tiene llamamiento?</label>
+        <select class="wg-cv-calling">
+          <option value="true" ${callingVal === 'true' ? 'selected' : ''}>Sí</option>
+          <option value="false" ${callingVal === 'false' ? 'selected' : ''}>No</option>
+          <option value="null" ${callingVal === 'null' ? 'selected' : ''}>No aplica</option>
+        </select>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm wg-cv-remove" title="Quitar este converso">${icon('trash')} Quitar</button>
+    </div>`;
+}
+
+async function openWardGrowthQuarterModal(existing = null) {
+  if (!state.wardGrowthData) { try { await loadWardGrowthData(); } catch (e) { toast(e.message, 'error'); return; } }
+  const gd = state.wardGrowthData;
+  const isEdit = !!existing;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wgq-modal-backdrop">
+      <div class="modal modal-lg">
+        <div class="modal-header"><h3>${isEdit ? 'Editar trimestre' : 'Cargar trimestre nuevo'}</h3><button class="modal-close" id="wgq-modal-close">×</button></div>
+        <div class="modal-body">
+          ${wgPdfUploadHtml('wgq', 'Informe trimestral')}
+          <div id="wgq-error"></div>
+          <form id="wgq-form">
+            <div class="two-col">
+              <div class="field"><label>Año</label><input type="number" name="year" required min="2000" max="2100" value="${existing?.year || new Date().getFullYear()}" /></div>
+              <div class="field"><label>Trimestre</label>
+                <select name="quarter" required>
+                  ${[1, 2, 3, 4].map((q) => `<option value="${q}" ${existing?.quarter === q ? 'selected' : ''}>T${q}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="field"><label>Etiqueta</label><input type="text" name="label" required placeholder="Ej: T1 2025" value="${esc(existing?.label || '')}" /></div>
+            <div class="hint-box" style="margin-top:0;">Los 26 indicadores del reporte oficial, agrupados igual que en el reporte. "Potencial" queda vacío/deshabilitado en los que no aplica.</div>
+            <div id="wgq-indicators">${wgIndicatorFieldsHtml(gd.categories, gd.indicatorDefs, existing?.indicators)}</div>
+            <div class="field">
+              <label>Detalle de conversos de este trimestre</label>
+              <div id="wgq-convert-rows"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="wgq-add-convert">+ Agregar converso</button>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${isEdit ? `<button class="btn btn-danger" id="wgq-delete">Eliminar</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="wgq-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="wgq-save">${isEdit ? 'Guardar cambios' : 'Cargar trimestre'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('wgq-form'));
+  document.getElementById('wgq-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('wgq-cancel').addEventListener('click', guardedClose);
+  document.getElementById('wgq-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wgq-modal-backdrop') guardedClose(); });
+
+  const convertRowsBox = document.getElementById('wgq-convert-rows');
+  const wireConvertRow = (row) => {
+    row.querySelector('.wg-cv-remove').addEventListener('click', () => row.remove());
+  };
+  const addConvertRow = (c) => {
+    convertRowsBox.insertAdjacentHTML('beforeend', wgConvertRowHtml(c));
+    wireConvertRow(convertRowsBox.lastElementChild);
+  };
+  (existing?.converts || []).forEach(addConvertRow);
+  document.getElementById('wgq-add-convert').addEventListener('click', () => addConvertRow());
+
+  wireWgPdfUpload('wgq', 'quarter', (draft) => {
+    const form = document.getElementById('wgq-form');
+    if (draft.year) form.querySelector('[name="year"]').value = draft.year;
+    if (draft.quarter) form.querySelector('[name="quarter"]').value = String(draft.quarter);
+    if (draft.label) form.querySelector('[name="label"]').value = draft.label;
+    document.getElementById('wgq-indicators').innerHTML = wgIndicatorFieldsHtml(gd.categories, gd.indicatorDefs, draft.indicators);
+    convertRowsBox.innerHTML = '';
+    (draft.converts || []).forEach(addConvertRow);
+    document.querySelector('#wgq-modal-backdrop .modal').classList.add('wg-form-autofilled');
+  });
+
+  if (isEdit) {
+    document.getElementById('wgq-delete').addEventListener('click', async () => {
+      const ok = await confirmModal('¿Eliminar este trimestre? Esta acción no se puede deshacer.', { title: 'Eliminar trimestre', confirmText: 'Eliminar', danger: true });
+      if (!ok) return;
+      try {
+        await api(`/ward-growth/quarters/${existing.id}`, { method: 'DELETE' });
+        toast('Trimestre eliminado');
+        closeModal();
+        await renderWardGrowthView();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  }
+
+  document.getElementById('wgq-save').addEventListener('click', async () => {
+    const form = document.getElementById('wgq-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const indicators = {};
+    gd.indicatorDefs.forEach((d) => {
+      const realInput = form.querySelector(`.wg-ind-real[data-number="${d.number}"]`);
+      const potInput = form.querySelector(`.wg-ind-pot[data-number="${d.number}"]`);
+      const real = Number(realInput.value);
+      const pot = (d.hasPotential && potInput.value !== '') ? Number(potInput.value) : null;
+      indicators[String(d.number)] = { real, pot };
+    });
+    const converts = Array.from(convertRowsBox.children).map((row) => {
+      const attendedRaw = row.querySelector('.wg-cv-attended').value;
+      const callingRaw = row.querySelector('.wg-cv-calling').value;
+      return {
+        name: row.querySelector('.wg-cv-name').value.trim(),
+        sex: row.querySelector('.wg-cv-sex').value,
+        age: Number(row.querySelector('.wg-cv-age').value),
+        attended: attendedRaw === 'null' ? null : attendedRaw === 'true',
+        hasCalling: callingRaw === 'null' ? null : callingRaw === 'true',
+      };
+    }).filter((c) => c.name);
+    const body = { label: fd.get('label'), year: Number(fd.get('year')), quarter: Number(fd.get('quarter')), indicators, converts };
+    try {
+      if (isEdit) await api(`/ward-growth/quarters/${existing.id}`, { method: 'PUT', body });
+      else await api('/ward-growth/quarters', { method: 'POST', body });
+      toast(isEdit ? 'Trimestre actualizado' : 'Trimestre cargado');
+      closeModal();
+      await renderWardGrowthView();
+    } catch (e) {
+      document.getElementById('wgq-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// ---------------- Formulario: editar la instantánea del barrio ----------------
+
+const WARD_SNAPSHOT_FIELDS = [
+  { group: 'Totales', fields: [['totalMembers', 'Total de miembros']] },
+  { group: 'Hombres', fields: [['men.total', 'Total'], ['men.highPriests', 'Sumos Sacerdotes'], ['men.elders', 'Élderes'], ['men.futureElders', 'Futuros Élderes']] },
+  { group: 'Mujeres', fields: [['women.total', 'Total']] },
+  { group: 'Hombres Jóvenes', fields: [['youngMen.total', 'Total'], ['youngMen.priests', 'Sacerdotes'], ['youngMen.teachers', 'Maestros'], ['youngMen.deacons', 'Diáconos']] },
+  { group: 'Mujeres Jóvenes', fields: [['youngWomen.total', 'Total'], ['youngWomen.guardiansOfLight', 'Guardianas de la Luz'], ['youngWomen.heraldsOfHope', 'Heraldos de la Esperanza'], ['youngWomen.faithBuilders', 'Constructoras de Fe']] },
+  { group: 'Niños', fields: [['children3plus', '3 años o más'], ['children0to2', '0 a 2 años']] },
+  { group: 'Familias', fields: [['families.total', 'Total'], ['families.withoutMelchizedekHolder', 'Sin portador de Melquisedec'], ['families.withYouth', 'Con jóvenes'], ['families.withChildren', 'Con niños'], ['families.singleParent', 'Monoparentales']] },
+  { group: 'Adultos', fields: [['adults.married', 'Casados'], ['adults.single36plus', 'Solteros 36+'], ['adults.youngSingleAdults', 'Jóvenes Adultos Solteros']] },
+  { group: 'Conversos recientes', fields: [['recentConverts.total', 'Total'], ['recentConverts.adultMen', 'Hombres adultos'], ['recentConverts.adultWomen', 'Mujeres adultas'], ['recentConverts.youngMen', 'Jóvenes varones'], ['recentConverts.youngWomen', 'Jóvenes mujeres'], ['recentConverts.children', 'Niños']] },
+  { group: 'Estado de ordenación', fields: [['ordinationStatus.total', 'Total'], ['ordinationStatus.ordained', 'Ordenados'], ['ordinationStatus.notOrdained', 'No ordenados']] },
+  { group: 'Adultos investidos', fields: [['endowedAdults.total', 'Total'], ['endowedAdults.withRecommend', 'Con recomendación'], ['endowedAdults.withoutRecommend', 'Sin recomendación']] },
+  { group: 'No incluidos', fields: [['notIncluded.total', 'Total'], ['notIncluded.missingBirthdate', 'Sin fecha de nacimiento'], ['notIncluded.baptizedNotConfirmed', 'Bautizados sin confirmar'], ['notIncluded.enrolled9plus', 'Matriculados 9+ años']] },
+];
+function wgGetPath(obj, path) {
+  return path.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), obj);
+}
+function wgSetPath(obj, path, val) {
+  const keys = path.split('.');
+  let o = obj;
+  for (let i = 0; i < keys.length - 1; i++) { o[keys[i]] = o[keys[i]] || {}; o = o[keys[i]]; }
+  o[keys[keys.length - 1]] = val;
+}
+
+function wgSnapshotFieldsHtml(existing) {
+  return WARD_SNAPSHOT_FIELDS.map((g) => `
+    <div class="wg-form-category">
+      <div class="wg-form-category-title">${esc(g.group)}</div>
+      ${g.fields.map(([path, label]) => `
+        <div class="field">
+          <label>${esc(label)}</label>
+          <input type="number" min="0" step="1" class="wgs-field" data-path="${path}" required value="${wgGetPath(existing, path) ?? ''}" />
+        </div>`).join('')}
+    </div>
+  `).join('');
+}
+
+async function openWardSnapshotModal() {
+  const existing = state.wardGrowthSnapshot || {};
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="wgs-modal-backdrop">
+      <div class="modal modal-lg">
+        <div class="modal-header"><h3>Editar instantánea del barrio</h3><button class="modal-close" id="wgs-modal-close">×</button></div>
+        <div class="modal-body">
+          ${wgPdfUploadHtml('wgs', 'Estadísticas de la unidad')}
+          <div id="wgs-error"></div>
+          <div class="hint-box" style="margin-top:0;">Esta instantánea no tiene fecha — es la foto más reciente del estado de la unidad. Se reemplaza por completo cada vez que se guarda.</div>
+          <form id="wgs-form">
+            <div id="wgs-fields">${wgSnapshotFieldsHtml(existing)}</div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="wgs-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="wgs-save">Guardar instantánea</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('wgs-form'));
+  document.getElementById('wgs-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('wgs-cancel').addEventListener('click', guardedClose);
+  document.getElementById('wgs-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wgs-modal-backdrop') guardedClose(); });
+
+  wireWgPdfUpload('wgs', 'snapshot', (draft) => {
+    document.getElementById('wgs-fields').innerHTML = wgSnapshotFieldsHtml(draft);
+    document.querySelector('#wgs-modal-backdrop .modal').classList.add('wg-form-autofilled');
+  });
+
+  document.getElementById('wgs-save').addEventListener('click', async () => {
+    const form = document.getElementById('wgs-form');
+    if (!form.reportValidity()) return;
+    const body = {};
+    form.querySelectorAll('.wgs-field').forEach((input) => { wgSetPath(body, input.dataset.path, Number(input.value)); });
+    try {
+      await api('/ward-growth/snapshot', { method: 'PUT', body });
+      toast('Instantánea actualizada');
+      closeModal();
+      state.wardGrowthSnapshot = null;
+      await renderWardGrowthView();
+    } catch (e) {
+      document.getElementById('wgs-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 boot();
