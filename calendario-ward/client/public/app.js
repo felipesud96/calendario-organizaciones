@@ -6784,7 +6784,123 @@ const CUADRANTE_INFO = {
   Retener: { emoji: '💪', pill: 'status-green', desc: 'Asisten y tienen todo en regla — los más fuertes; mantenerlos así.' },
 };
 const CUADRANTE_DISPLAY_ORDER = ['Enfoque', 'Rescatar', 'Actividad', 'Retener'];
+// Mismos colores que usa el resto de gráficos de líneas (wgLineChartHtml,
+// ver Crecimiento del Barrio) pero elegidos para calzar con el color de
+// cada píldora de cuadrante de arriba (CUADRANTE_INFO.pill).
+const CUADRANTE_CHART_COLORS = { Enfoque: '#d97706', Rescatar: '#64748b', Actividad: '#2563eb', Retener: '#16a34a' };
 const DIRECTORY_CATEGORY_FILTERS = ['Todos', 'Primaria', 'Hombres Jóvenes', 'Mujeres Jóvenes', 'Cuórum de Élderes', 'Sociedad de Socorro', 'Sin clasificar'];
+
+// Qué le falta exactamente a una persona ya evaluada — pedido explícito:
+// "donde esté cada persona debería aparecer en rojo... qué le falta para
+// que sea más visible". Se usa tanto para las etiquetas de la tarjeta
+// (pastoralFocusMissingTags) como para los chips de filtro de más abajo
+// (MINISTERING_MISSING_FILTERS), así los dos lugares quedan sincronizados
+// por definición — nunca puede haber un chip que cuente distinto de lo que
+// se ve en las tarjetas.
+const MINISTERING_MISSING_FILTERS = [
+  { key: 'llamamiento', label: '❌ Sin llamamiento', match: (it) => !!it.cuadrante && !it.tieneLlamamiento },
+  { key: 'convenio', label: '❌ Convenio pendiente', match: (it) => !!it.cuadrante && !!it.faltaConvenio },
+  { key: 'recomendacion', label: '❌ Recomendación vencida', match: (it) => !!it.cuadrante && !it.recomendacionVigente },
+  { key: 'asistencia', label: '📉 Asistencia baja', match: (it) => !!it.cuadrante && it.asistencia === 'Bajo' },
+];
+
+function pastoralFocusMissingTags(it) {
+  if (!it.cuadrante) return '';
+  const tags = MINISTERING_MISSING_FILTERS.filter((f) => f.match(it)).map((f) => `<span class="status-pill status-red">${f.label}</span>`);
+  if (!tags.length) tags.push('<span class="status-pill status-green">✅ Todo en regla</span>');
+  return tags.join(' ');
+}
+
+// Punto pedido explícitamente: avisar cuando una evaluación quedó vieja
+// (nadie la revisó hace rato) — para que un cuadrante no se sienta
+// "verdadero" para siempre aunque la realidad de esa persona ya cambió.
+const MINISTERING_STALE_DAYS = 90;
+function pastoralFocusStaleBadge(it) {
+  if (!it.cuadrante || !it.updatedAt) return '';
+  const days = Math.floor((Date.now() - new Date(it.updatedAt).getTime()) / 86400000);
+  if (days < MINISTERING_STALE_DAYS) return '';
+  const months = Math.floor(days / 30);
+  return `<span class="status-pill status-gray" title="Última actualización: ${esc(fmtDateHuman(it.updatedAt.slice(0, 10)))}">⏰ sin actualizar hace ${months} ${months === 1 ? 'mes' : 'meses'}</span>`;
+}
+
+// ---------------- Reconstrucción histórica de cuadrante ----------------
+// Para la estadística de movimiento y el gráfico de evolución mensual de
+// más abajo hace falta saber "qué cuadrante tenía esta persona en tal
+// fecha del pasado" — y esa información YA está disponible en el propio
+// `history` que trae cada persona (ver GET /api/pastoral-focus), sin
+// necesidad de ningún endpoint ni cálculo nuevo del lado servidor. Cada
+// entrada de `history` es el estado ANTERIOR justo antes de `changedAt`
+// (ver PUT /api/pastoral-focus/:memberId en routes/directory.js) — así que
+// reconstruir la línea de tiempo completa de una persona es simplemente
+// recorrer su historial ordenado y comparar contra la fecha pedida.
+function cuadranteAsOf(it, isoDateTime) {
+  const hist = [...(it.history || [])].sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+  if (!hist.length) {
+    // Nunca tuvo un cambio registrado (una sola evaluación, sin editar
+    // después): no se sabe la fecha exacta de esa primera carga, así que
+    // se usa `updatedAt` como mejor aproximación de "desde cuándo existe"
+    // este dato — antes de esa fecha, se considera que no estaba evaluada.
+    if (!it.cuadrante) return null;
+    return (it.updatedAt && it.updatedAt > isoDateTime) ? null : it.cuadrante;
+  }
+  if (isoDateTime < hist[0].changedAt) return hist[0].cuadrante;
+  for (let i = 0; i < hist.length - 1; i++) {
+    if (isoDateTime < hist[i + 1].changedAt) return hist[i + 1].cuadrante;
+  }
+  const last = hist[hist.length - 1];
+  return (it.updatedAt && isoDateTime < it.updatedAt) ? last.cuadrante : it.cuadrante;
+}
+
+// Estadística de movimiento (Punto pedido: "estadística" de quién avanzó o
+// retrocedió) — ventana rodante de 30 días, no "este mes calendario", para
+// que siempre tenga contenido significativo sin importar qué día del mes
+// sea hoy. Se destaca especialmente quién llegó a Retener (el objetivo) y
+// quién salió de Retener (una alerta), tal como describe CUADRANTE_INFO.
+const MINISTERING_MOVEMENT_WINDOW_DAYS = 30;
+function computeMinisteringMovementStats(items) {
+  const cutoff = new Date(Date.now() - MINISTERING_MOVEMENT_WINDOW_DAYS * 86400000).toISOString();
+  let newlyEvaluated = 0;
+  let changed = 0;
+  let enteredRetener = 0;
+  let leftRetener = 0;
+  for (const it of items) {
+    if (!it.cuadrante) continue; // todavía sin evaluar -- no hay "movimiento" que contar
+    const before = cuadranteAsOf(it, cutoff);
+    if (before === null) { newlyEvaluated += 1; continue; }
+    if (before !== it.cuadrante) {
+      changed += 1;
+      if (it.cuadrante === 'Retener') enteredRetener += 1;
+      if (before === 'Retener') leftRetener += 1;
+    }
+  }
+  return { newlyEvaluated, changed, enteredRetener, leftRetener, totalConsidered: newlyEvaluated + changed };
+}
+
+// Gráfico de evolución mensual (Punto pedido: "quizás agregar
+// estadística") — reutiliza el mismo componente de línea que ya dibuja los
+// gráficos de Crecimiento del Barrio (wgLineChartHtml), reconstruyendo con
+// cuadranteAsOf() cuántas personas había en cada cuadrante al CIERRE de
+// cada uno de los últimos 6 meses (el mes en curso se corta "ahora", no al
+// 30, porque todavía no terminó).
+const MINISTERING_MONTHLY_CHART_MONTHS = 6;
+function computeMinisteringMonthlySeries(items) {
+  const now = new Date();
+  const months = [];
+  for (let i = MINISTERING_MONTHLY_CHART_MONTHS - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const isCurrentMonth = i === 0;
+    const cutoff = isCurrentMonth
+      ? now.toISOString()
+      : new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
+    months.push({ label: `${MONTH_LABELS[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`, cutoff });
+  }
+  const series = CUADRANTE_DISPLAY_ORDER.map((key) => ({
+    label: `${CUADRANTE_INFO[key].emoji} ${key}`,
+    color: CUADRANTE_CHART_COLORS[key],
+    valueFn: (m) => items.filter((it) => it.cuadrante && cuadranteAsOf(it, m.cutoff) === key).length,
+  }));
+  return { months, series };
+}
 
 // Replica exacta de computeCuadrante() en server/src/pastoralFocus.js — solo
 // para la vista previa en vivo dentro del formulario. El valor que de
@@ -6806,7 +6922,22 @@ async function renderPastoralFocusView() {
   try { items = await api('/pastoral-focus'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
   const sinEvaluar = items.filter((x) => !x.cuadrante);
+  const evaluados = items.filter((x) => !!x.cuadrante);
   const groups = CUADRANTE_DISPLAY_ORDER.map((key) => ({ key, items: items.filter((x) => x.cuadrante === key) }));
+
+  // Filtro por "qué le falta" (Punto pedido explícitamente) — corta
+  // transversalmente los 4 cuadrantes, así que cuando está activo se
+  // reemplaza la agrupación por cuadrante por una sola lista plana con
+  // todos los que matchean, sin importar en qué cuadrante estén.
+  const activeFilterKey = state.ministracionMissingFilter || null;
+  const activeFilterDef = MINISTERING_MISSING_FILTERS.find((f) => f.key === activeFilterKey) || null;
+  const filteredItems = activeFilterDef
+    ? evaluados.filter(activeFilterDef.match).sort((a, b) => a.member.name.localeCompare(b.member.name, 'es'))
+    : null;
+
+  const movement = computeMinisteringMovementStats(items);
+  const monthly = computeMinisteringMonthlySeries(items);
+
   content.innerHTML = `
     <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">🔒 Cuadrante de enfoque para adultos del barrio — el presidente de Cuórum de Élderes ve a los hombres y la presidenta de Sociedad de Socorro ve a las mujeres (el Obispado ve ambos).</p>
     <div class="stats-cards" style="margin-bottom:18px;">
@@ -6817,24 +6948,43 @@ async function renderPastoralFocusView() {
           <div style="font-size:22px; font-weight:700;">${items.filter((x) => x.cuadrante === key).length}</div>
         </div>`).join('')}
     </div>
-    ${sinEvaluar.length ? `
-      <div class="hint-box" style="margin-top:0;">📝 Todavía faltan ${sinEvaluar.length} ${sinEvaluar.length === 1 ? 'persona' : 'personas'} por evaluar por primera vez.</div>
-      <div class="card-list" style="margin-bottom:18px;">
-        ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
-      </div>` : ''}
-    ${groups.map((g) => {
-      const isOpen = !!(state.ministracionOpenQuadrantes || {})[g.key];
-      return `
-      <div class="quadrante-header" data-quadrante="${g.key}" style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;">
-        <span class="quadrante-chevron" style="font-size:11px; width:12px; display:inline-block; color:var(--ink-soft);">${isOpen ? '▾' : '▸'}</span>
-        <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
-        <span style="font-weight:700; font-size:12.5px; color:var(--ink-soft);">(${g.items.length})</span>
-        <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
+    ${movement.totalConsidered ? `
+    <div class="hint-box" style="margin-top:0; margin-bottom:14px;">📈 Últimos ${MINISTERING_MOVEMENT_WINDOW_DAYS} días: ${movement.newlyEvaluated} evaluado${movement.newlyEvaluated === 1 ? '' : 's'} por primera vez · ${movement.changed} cambio${movement.changed === 1 ? '' : 's'} de cuadrante${(movement.enteredRetener || movement.leftRetener) ? ` — 💪 ${movement.enteredRetener} llegaron a Retener, ${movement.leftRetener} salieron de Retener` : ''}.</div>` : ''}
+    ${monthly.months.length > 1 ? `
+    <div style="margin:0 0 16px;">
+      <div style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin-bottom:6px;">📊 Evolución por cuadrante (últimos ${MINISTERING_MONTHLY_CHART_MONTHS} meses)</div>
+      ${wgLineChartHtml(monthly.months, monthly.series, { height: 120 })}
+    </div>` : ''}
+    <div style="display:flex; flex-wrap:wrap; gap:6px; margin:0 0 14px;">
+      <button type="button" class="status-pill status-blue ministracion-filter-chip ${!activeFilterDef ? 'ministracion-filter-active' : ''}" data-filter="" style="cursor:pointer; border:none; font:inherit; font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.3px;">Todos (${evaluados.length})</button>
+      ${MINISTERING_MISSING_FILTERS.map((f) => `
+        <button type="button" class="status-pill status-red ministracion-filter-chip ${activeFilterKey === f.key ? 'ministracion-filter-active' : ''}" data-filter="${f.key}" style="cursor:pointer; border:none; font:inherit; font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.3px;">${f.label} (${evaluados.filter(f.match).length})</button>
+      `).join('')}
+    </div>
+    ${activeFilterDef ? `
+      <div class="card-list">
+        ${filteredItems.length ? filteredItems.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie con este filtro por ahora', null, '🔍', true)}
       </div>
-      <div class="card-list" data-quadrante-list="${g.key}" ${isOpen ? '' : 'hidden'}>
-        ${g.items.length ? g.items.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
-      </div>`;
-    }).join('')}
+    ` : `
+      ${sinEvaluar.length ? `
+        <div class="hint-box" style="margin-top:0;">📝 Todavía faltan ${sinEvaluar.length} ${sinEvaluar.length === 1 ? 'persona' : 'personas'} por evaluar por primera vez.</div>
+        <div class="card-list" style="margin-bottom:18px;">
+          ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
+        </div>` : ''}
+      ${groups.map((g) => {
+        const isOpen = !!(state.ministracionOpenQuadrantes || {})[g.key];
+        return `
+        <div class="quadrante-header" data-quadrante="${g.key}" style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;">
+          <span class="quadrante-chevron" style="font-size:11px; width:12px; display:inline-block; color:var(--ink-soft);">${isOpen ? '▾' : '▸'}</span>
+          <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
+          <span style="font-weight:700; font-size:12.5px; color:var(--ink-soft);">(${g.items.length})</span>
+          <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
+        </div>
+        <div class="card-list" data-quadrante-list="${g.key}" ${isOpen ? '' : 'hidden'}>
+          ${g.items.length ? g.items.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
+        </div>`;
+      }).join('')}
+    `}
   `;
   content.querySelectorAll('.pastoral-focus-card').forEach((card) => {
     card.addEventListener('click', () => {
@@ -6842,11 +6992,21 @@ async function renderPastoralFocusView() {
       if (it) openPastoralFocusModal(it);
     });
   });
+  content.querySelectorAll('.ministracion-filter-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.filter || null;
+      // Tocar el mismo filtro que ya está activo lo apaga (vuelve a
+      // "Todos") — no hace falta un botón "quitar filtro" aparte.
+      state.ministracionMissingFilter = (key && state.ministracionMissingFilter === key) ? null : key;
+      renderPastoralFocusView();
+    });
+  });
   // Los 4 cuadrantes arrancan colapsados (el conteo ya se ve en las
   // tarjetas de arriba y en el "(N)" del título) — con 58 hombres adultos
   // la lista completa siempre expandida era demasiado larga para navegar.
   // Se expande/colapsa sin volver a pedir al servidor, solo togglea el
-  // `hidden` de la lista ya renderizada.
+  // `hidden` de la lista ya renderizada. Solo existen estos encabezados
+  // cuando NO hay un filtro de "qué le falta" activo (ver arriba).
   content.querySelectorAll('.quadrante-header').forEach((h) => {
     h.addEventListener('click', () => {
       const key = h.dataset.quadrante;
@@ -6867,15 +7027,18 @@ function pastoralFocusCardHtml(it) {
   // mezclados en la misma lista (para quien ve ambos, es decir el
   // Obispado/Administrador), ya no alcanza con el nombre para saber a qué
   // presidencia le corresponde cada persona.
-  const detail = it.cuadrante
-    ? `Asistencia ${it.asistencia} · ${it.tieneLlamamiento ? 'con llamamiento' : 'sin llamamiento'} · ${it.faltaConvenio ? 'convenio pendiente' : 'convenios al día'} · recomendación ${it.recomendacionVigente ? 'vigente' : 'vencida'}`
-    : 'Todavía no se ha evaluado';
-  const sub = `${it.member.category} · ${detail}`;
+  const sub = it.cuadrante ? `${it.member.category} · Asistencia ${it.asistencia}` : `${it.member.category} · Todavía no se ha evaluado`;
+  // Punto pedido explícitamente: "donde esté cada persona debería aparecer
+  // en rojo qué le falta, para que sea más visible" — en vez de una sola
+  // línea de texto con todos los datos mezclados, cada cosa pendiente es
+  // su propia etiqueta roja (pastoralFocusMissingTags), más un aviso gris
+  // aparte si la evaluación quedó vieja (pastoralFocusStaleBadge).
   return `
     <div class="list-card pastoral-focus-card" data-id="${it.member.id}" style="cursor:pointer;">
       <div class="lc-main">
         <div class="lc-title">${esc(it.member.name)}</div>
         <div class="lc-sub">${esc(sub)}</div>
+        ${it.cuadrante ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${pastoralFocusMissingTags(it)}${pastoralFocusStaleBadge(it)}</div>` : ''}
       </div>
       ${it.cuadrante ? `<span class="status-pill ${CUADRANTE_INFO[it.cuadrante].pill}">${CUADRANTE_INFO[it.cuadrante].emoji} ${it.cuadrante}</span>` : '<span class="status-pill status-gray">Sin evaluar</span>'}
     </div>`;

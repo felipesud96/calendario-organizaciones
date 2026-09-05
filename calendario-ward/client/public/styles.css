@@ -22,6 +22,17 @@
 
 * { box-sizing: border-box; }
 
+/* El atributo `hidden` (usado en varios lados de app.js para
+   mostrar/ocultar paneles vía `el.hidden = true/false`) es una regla del
+   navegador con MUY poca prioridad: cualquier clase de acá abajo que ya le
+   ponga `display: flex/grid/block` a ese mismo elemento gana por sobre
+   `[hidden]`, y el elemento queda igual de visible aunque `hidden` esté
+   puesto. Pasó justo así con las listas de cuadrante de "Enfoque
+   Ministración" (`.card-list` trae `display: flex` — ver más abajo — así
+   que `hidden` no alcanzaba a ocultarlas al colapsar). `!important` fuerza
+   que `hidden` siempre gane, sin importar qué otra clase tenga el elemento. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -787,6 +798,14 @@ table.data-table tr:last-child td { border-bottom: none; }
    no está resuelto) ni ámbar (ya se está actuando, no es "sin empezar"). */
 .status-blue { background: #dbeafe; color: #1d4ed8; }
 
+/* Chips de filtro de "Enfoque Ministración" (qué le falta a cada persona):
+   son .status-pill normales pero como <button>, así que necesitan su
+   propio aro para distinguir cuál está activo — el color de fondo solo no
+   alcanza porque varios chips comparten el mismo (status-red). */
+.ministracion-filter-chip { opacity: 0.55; transition: opacity .15s; }
+.ministracion-filter-chip:hover { opacity: 0.8; }
+.ministracion-filter-chip.ministracion-filter-active { opacity: 1; box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.45); }
+
 .commitment-row {
   border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px;
 }
@@ -1147,6 +1166,7 @@ tr.wg-cat-row td {
      dos sí necesita su propia versión oscura. */
   .role-member { background: #263141; color: #b6c2cf; }
   .status-gray { background: #263141; color: #b6c2cf; }
+  .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
 
   /* Avisos y tarjetas que ocupan un ancho considerable de la pantalla (no
      son una simple píldora chica) — estos si se dejaran con su color claro
