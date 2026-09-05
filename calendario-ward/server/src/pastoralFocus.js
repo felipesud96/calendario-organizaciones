@@ -47,8 +47,17 @@ export function categoryFor(member) {
 }
 
 // El seguimiento por cuadrante (Enfoque Ministración) es, a propósito, solo
-// para hombres adultos (18+) — así lo pidió el Obispado.
+// para adultos (18+) — así lo pidió el Obispado. Arrancó siendo solo para
+// hombres (Cuórum de Élderes); después se extendió con el mismo modelo
+// para mujeres adultas (Sociedad de Socorro) — cada presidencia ve y edita
+// solo la mitad que le corresponde (ver isMinisteringFocusLeader /
+// isMinisteringFocusLeaderMujeres en routes/directory.js).
 export function isAdultMale(member) {
   const age = ageFromBirthDate(member.birthDate);
   return member.sex === 'V' && age !== null && age >= 18;
+}
+
+export function isAdultFemale(member) {
+  const age = ageFromBirthDate(member.birthDate);
+  return member.sex === 'M' && age !== null && age >= 18;
 }

@@ -81,6 +81,14 @@ const EMPTY_DB = {
   // (isMinisteringFocusLeader).
   directoryMembers: [],
   pastoralFocus: [],
+  // Marca qué combinaciones "trimestre que terminó + organización" ya se
+  // usaron para crear el compromiso automático de revisión de Enfoque
+  // Ministración (ver checkQuarterEndMinisteringFocusCommitments en
+  // reminders.js) — así, si el servidor se reinicia varias veces el mismo
+  // día, no se crea el mismo compromiso dos veces. Igual patrón que
+  // achievementClosures más arriba, pero mucho más simple (no hay premios
+  // que calcular, solo un compromiso fijo por organización).
+  ministeringFocusQuarterCommitmentsCreated: [],
   // Módulo "Crecimiento del Barrio" (Estadísticas del Barrio): un registro
   // por trimestre con los 26 indicadores oficiales (real/potencial) y el
   // detalle de conversos de ese trimestre, más una "instantánea" única

@@ -6,7 +6,7 @@
 // No usa ningún paquete de "cron" externo (no hay acceso a npm en este
 // entorno): un simple setInterval alcanza para este volumen de datos.
 
-import { load, withDb } from './db.js';
+import { load, withDb, nextId } from './db.js';
 import { isEmailConfigured } from './email.js';
 import { canSendWhatsApp } from './whatsapp.js';
 import {
@@ -16,6 +16,7 @@ import {
 import { isObispadoLeader } from './routes/stake.js';
 import { computeBishopricOverview } from './routes/dashboard.js';
 import { previousMeetingOfType } from './routes/meetings.js';
+import { quarterOf, quarterLabel } from './quarter.js';
 
 const CHECK_EVERY_MS = 15 * 60 * 1000; // revisa cada 15 minutos
 const TARGET_MS = 24 * 60 * 60 * 1000; // recordatorio 24 horas antes
@@ -215,6 +216,79 @@ async function checkDailyDigest() {
   lastDigestDate = today;
 }
 
+// Punto pedido explícitamente: "que automáticamente al terminar el
+// trimestre haya un compromiso del presidente del cuórum y presidenta de la
+// Soc. Socorro de revisar el modelo de enfoque para actualizar los
+// estados" — y, sobre cuándo exactamente: "el día siguiente del término del
+// trimestre". Se detecta comparando el trimestre de HOY con el de AYER: si
+// cambió, hoy es el primer día de un trimestre nuevo (1 ene / 1 abr / 1 jul
+// / 1 oct), o sea "el día siguiente" del que acaba de terminar. El
+// compromiso se crea dentro de una acta nueva de "Reuniones y Consejos"
+// (tipo general, de la propia organización), exactamente como si la
+// presidencia se lo hubiera puesto a sí misma — así aparece en "Mis
+// Asignaciones" igual que cualquier otro compromiso, con recordatorios por
+// email/WhatsApp incluidos (ver checkCommitmentReminders /
+// checkCommitmentDueTodayWhatsApp más arriba, que no distinguen de dónde
+// vino el compromiso). ministeringFocusQuarterCommitmentsCreated evita
+// crearlo dos veces si el servidor se reinicia el mismo día.
+const MINISTERING_FOCUS_QUARTER_COMMITMENT_ORGS = ['Cuórum de Élderes', 'Sociedad de Socorro'];
+// Plazo para revisar y actualizar los estados del trimestre recién
+// terminado — no pedido explícitamente por el usuario; se asume un margen
+// razonable de 2 semanas (se puede ajustar si el Obispado prefiere otro).
+const MINISTERING_FOCUS_COMMITMENT_DUE_DAYS = 14;
+
+async function checkQuarterEndMinisteringFocusCommitments() {
+  const data = load();
+  const todayStr = todayISO();
+  const justEndedQuarter = quarterOf(addDaysISO(-1));
+  if (justEndedQuarter === quarterOf(todayStr)) return; // hoy no es el primer día de un trimestre nuevo
+  const alreadyDone = new Set(data.ministeringFocusQuarterCommitmentsCreated || []);
+  for (const orgName of MINISTERING_FOCUS_QUARTER_COMMITMENT_ORGS) {
+    const org = data.organizations.find((o) => o.name === orgName);
+    if (!org) continue;
+    const doneKey = `${justEndedQuarter}:${org.id}`;
+    if (alreadyDone.has(doneKey)) continue;
+    const president = data.users.find((u) => u.role === 'leader' && u.isPresident && Number(u.organizationId) === Number(org.id));
+    // Si todavía no hay presidente cargado para esta organización, se
+    // reintenta en el próximo ciclo (cada 15 min) hasta que lo haya — no se
+    // marca `alreadyDone` en ese caso.
+    if (!president) continue;
+    const dueDate = addDaysISO(MINISTERING_FOCUS_COMMITMENT_DUE_DAYS);
+    const label = quarterLabel(justEndedQuarter);
+    await withDb((d) => {
+      const commitment = {
+        id: nextId(d, 'commitments'),
+        description: `Revisar el modelo de Enfoque Ministración de ${orgName} y actualizar los estados de cada persona — ${label}, que acaba de terminar.`,
+        dueDate,
+        assignedToUserId: president.id,
+        confidential: false,
+        status: 'pending',
+        completedAt: null,
+        completionComment: '',
+        whatsappDueTodaySent: false,
+      };
+      d.meetings.push({
+        id: nextId(d, 'meetings'),
+        title: `Revisión trimestral de Enfoque Ministración — ${orgName} (${label})`,
+        date: todayStr,
+        type: 'general',
+        confidential: false,
+        organizationId: org.id,
+        status: 'active',
+        createdBy: president.id,
+        createdAt: new Date().toISOString(),
+        archivedAt: null,
+        agendaItems: [],
+        commitments: [commitment],
+        councilPrepReminderSent: false,
+      });
+      d.ministeringFocusQuarterCommitmentsCreated = d.ministeringFocusQuarterCommitmentsCreated || [];
+      d.ministeringFocusQuarterCommitmentsCreated.push(doneKey);
+    });
+    console.log(`[enfoque-ministracion] compromiso trimestral creado para ${orgName} (${president.name}) — ${label}, vence ${dueDate}`);
+  }
+}
+
 // A diferencia de antes, este planificador YA NO depende de que el correo
 // (Gmail) esté configurado: las notificaciones por WhatsApp son por cuenta
 // propia de cada persona (su teléfono + su clave de CallMeBot en "Mi
@@ -236,6 +310,7 @@ export function startReminderScheduler() {
     checkDailyDigest(),
     checkInterviewTodayWhatsApp(),
     checkCommitmentDueTodayWhatsApp(),
+    checkQuarterEndMinisteringFocusCommitments(),
   ]);
   runAll().catch((err) => console.error('[recordatorios] error inicial:', err));
   setInterval(() => {

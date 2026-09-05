@@ -1051,8 +1051,23 @@ tr.wg-cat-row td {
 
 @media (max-width: 640px) {
   .ranking-grid { grid-template-columns: 1fr; }
-  .cal-cell { min-height: 78px; }
+  .cal-cell { min-height: 78px; padding: 3px 2px; }
   .cal-month-label { min-width: 0; font-size: 15px; }
+  /* Pedido explícito: en celular se quiere ver el mes ENTERO sin tener que
+     deslizar hacia el costado. El min-width:700px de .cal-grid (pensado
+     para que las columnas no se compriman tanto en pantallas grandes que
+     el texto se corte raro — ver comentario junto a esa regla) es
+     justamente lo que obligaba a .cal-grid-wrap a desplazarse en celular.
+     Acá se anula: las 7 columnas pasan a repartirse el ancho real de la
+     pantalla (1fr cada una, sin piso), apoyándose en el min-width:0 +
+     overflow:hidden + ellipsis que .cal-cell/.cal-event ya tenían para
+     este caso — el texto largo se trunca en vez de forzar scroll.
+     .cal-dow (los nombres de los días) y .cal-event bajan un poco de
+     tamaño para que entre más antes de truncar. */
+  .cal-grid { min-width: 0; }
+  .cal-dow { font-size: 9.5px; padding: 6px 2px; }
+  .cal-event { font-size: 9px; padding: 1px 3px; }
+  .cal-daynum { font-size: 10.5px; }
   /* Punto 98: la fila de pestañas de arriba se reemplaza por la barra de
      abajo (más cómoda para el pulgar) — main.view reserva espacio abajo
      para que la barra fija y el botón "+" flotante no tapen el final del

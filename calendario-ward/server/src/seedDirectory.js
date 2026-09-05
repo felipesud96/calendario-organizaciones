@@ -1,13 +1,13 @@
-// Script de respaldo SOLO para "Directorio y Enfoque Pastoral": carga la
-// lista de miembros del barrio (reporte oficial "Lista de miembros",
-// exportado el 5 sept 2026) y el Enfoque Pastoral inicial (los 43 hombres
+// Script de respaldo SOLO para "Directorio" / "Enfoque Ministración": carga
+// la lista de miembros del barrio (reporte oficial "Lista de miembros",
+// exportado el 5 sept 2026) y el Enfoque Ministración inicial (los hombres
 // adultos del análisis de Excel que se pudieron enlazar sin ambigüedad),
 // SIN tocar usuarios, organizaciones ni ninguna otra colección.
 //
 // Igual que seedWardGrowthOnly.js: es seguro correrlo más de una vez —
 // solo agrega el Directorio si todavía está vacío, y solo agrega el
-// Enfoque Pastoral de una persona si esa persona no tenía ya uno cargado
-// (así no pisa evaluaciones que el Obispado ya haya actualizado a mano
+// Enfoque Ministración de una persona si esa persona no tenía ya uno
+// cargado (así no pisa evaluaciones que ya se hayan actualizado a mano
 // desde la app).
 import { load, save, nextId } from './db.js';
 import { DIRECTORY_SEED, PASTORAL_FOCUS_SEED } from './directorySeedData.js';
@@ -56,7 +56,7 @@ for (const p of PASTORAL_FOCUS_SEED) {
   focusAdded += 1;
   changed = true;
 }
-console.log(`Enfoque Pastoral: ${focusAdded} agregados, ${focusSkippedExisting} ya existían, ${focusSkippedNoMatch} sin coincidencia en el Directorio.`);
+console.log(`Enfoque Ministración: ${focusAdded} agregados, ${focusSkippedExisting} ya existían, ${focusSkippedNoMatch} sin coincidencia en el Directorio.`);
 
 if (changed) {
   save(data);

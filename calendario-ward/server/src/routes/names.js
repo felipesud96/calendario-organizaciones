@@ -42,6 +42,18 @@ export function registerNamesRoutes(router) {
     const presenters = dedupByFrequency(data.meetings.flatMap((m) => (m.agendaItems || []).map((a) => a.presenter)));
     const welfareMembers = dedupByFrequency((data.welfareCases || []).map((c) => c.memberName));
     const interviewers = dedupByFrequency(data.interviews.map((iv) => iv.interviewerName));
-    sendJson(res, 200, { supervisingAdults, presenters, welfareMembers, interviewers });
+    // Punto pedido explícitamente: "ya teniendo el directorio usar esos
+    // nombres para las entrevistas o discursos" — se agregan acá, junto al
+    // resto de sugerencias de nombre libre, en vez de exponer un endpoint
+    // aparte que replique el Directorio completo (que quedó restringido a
+    // Obispado/Administrador — ver routes/directory.js). Solo el NOMBRE es
+    // realmente necesario para autocompletar, así que cualquier líder que ya
+    // pueda agendar una entrevista o registrar un discurso puede recibir
+    // estas sugerencias sin que eso implique poder ver el Directorio
+    // completo (sexo, fecha de nacimiento, categoría). Se dejó afuera del
+    // módulo de Aseo a pedido explícito (el Aseo funciona por FAMILIA, no
+    // por persona, así que el Directorio individual no calza ahí).
+    const directoryNames = dedupByFrequency((data.directoryMembers || []).map((m) => m.name));
+    sendJson(res, 200, { supervisingAdults, presenters, welfareMembers, interviewers, directoryNames });
   }));
 }

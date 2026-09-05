@@ -38,6 +38,7 @@ const state = {
   assignmentsSubtab: 'cleaning',
   directoryCategoryFilter: 'Todos',
   directorySearch: '',
+  ministracionOpenQuadrantes: {}, // Enfoque Ministración: qué cuadrantes están expandidos (todos arrancan colapsados)
   talksHistoryOpen: false, // Discursos: el histórico de meses pasados arranca colapsado
   interviewsHistoryOpen: false, // Entrevistas: el historial de ya verificadas arranca colapsado
   interviewRequestsHistoryOpen: false, // Entrevistas → Solicitudes: historial de ya decididas arranca colapsado
@@ -1622,18 +1623,21 @@ function canSeeWelfareTab() {
   if (state.user.role !== 'leader' || !state.user.isPresident) return false;
   return !!(state.user.organization && WELFARE_COMMITTEE_ORGS.includes(state.user.organization.name));
 }
-// "Enfoque Ministración" (cuadrantes, dentro de Estadísticas): a pedido
-// explícito del Obispado, por ahora se prueba SOLO con los líderes de
-// Cuórum de Élderes (toda la presidencia — presidente, consejeros,
-// secretario — no solo el presidente, a diferencia de canSeeWelfareTab que
-// exige isPresident). Ni el resto del Obispado ni Sociedad de Socorro lo
-// ven todavía. Mismo criterio que isMinisteringFocusLeader en
-// routes/directory.js — si más adelante se abre a otras organizaciones,
-// este es el único lugar del cliente que hay que tocar.
+// "Enfoque Ministración" (cuadrantes, dentro de Estadísticas): arrancó
+// SOLO con los líderes de Cuórum de Élderes (toda la presidencia —
+// presidente, consejeros, secretario — no solo el presidente, a diferencia
+// de canSeeWelfareTab que exige isPresident) y se extendió con el mismo
+// modelo a Sociedad de Socorro (cada presidencia ve, del lado servidor,
+// solo su propia mitad — hombres o mujeres adultas — ver
+// isMinisteringFocusLeaderHombres / isMinisteringFocusLeaderMujeres en
+// routes/directory.js). Acá solo hace falta saber si la pestaña se
+// muestra o no; a quién exactamente ve dentro de ella lo filtra el propio
+// servidor en GET /api/pastoral-focus.
+const MINISTERING_FOCUS_ORGS = ['Cuórum de Élderes', 'Sociedad de Socorro'];
 function canSeeMinisteringFocusTab() {
   if (!state.user) return false;
   if (state.user.role === 'admin') return true;
-  return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.name === 'Cuórum de Élderes');
+  return state.user.role === 'leader' && !!(state.user.organization && MINISTERING_FOCUS_ORGS.includes(state.user.organization.name));
 }
 
 // Definición de cada pestaña posible del menú principal. El orden final
@@ -1652,13 +1656,14 @@ const TAB_DEFS = {
   interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
   meetings: { label: 'Reuniones y Consejos', icon: '📋', navLabel: 'Reuniones', visible: canSeeMeetingsTab },
   welfare: { label: '🤲 Bienestar', icon: '🤲', navLabel: 'Bienestar', visible: canSeeWelfareTab },
-  // Directorio del barrio (lista de miembros): mismo público que Bienestar,
-  // así que reutiliza exactamente canSeeWelfareTab en vez de un criterio
-  // paralelo (ver isWelfareCommitteeMember en routes/welfare.js, que
-  // routes/directory.js también reutiliza tal cual del lado servidor). El
-  // cuadrante "Enfoque Ministración" ya NO vive acá — es una sub-pestaña de
-  // Estadísticas, con un público más acotado (ver canSeeMinisteringFocusTab).
-  directory: { label: '👥 Directorio', icon: '👥', navLabel: 'Directorio', visible: canSeeWelfareTab },
+  // El Directorio del barrio (lista de miembros) YA NO es una pestaña
+  // propia — pasó a ser una sub-pestaña de "Crecimiento del Barrio", solo
+  // para Obispado/Administrador (ver renderWardGrowthView), a pedido
+  // explícito: "que la sección de directorio esté dentro de crecimiento
+  // para no tener tantos módulos (solo obispado puede verlo)". El
+  // cuadrante "Enfoque Ministración" tampoco vive acá — es una sub-pestaña
+  // de Estadísticas, con un público más acotado (ver
+  // canSeeMinisteringFocusTab).
   cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
   budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
   stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
@@ -1675,7 +1680,7 @@ function tabOrderFor() {
     // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
     // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
     // semanal) van primero, Estadísticas al final por ser lo más ocasional.
-    return ['calendar', 'meetings', 'welfare', 'directory', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
+    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
   }
   if (canSeeInterviewsTab()) {
     // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
@@ -1683,7 +1688,7 @@ function tabOrderFor() {
     // las más accionables día a día. Bienestar (Punto 51) va justo después
     // de Reuniones — solo la presidencia (isPresident) de estas mismas dos
     // organizaciones llega a verlo de verdad (canSeeWelfareTab lo filtra).
-    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'directory', 'budget', 'stats', 'wardGrowth'];
+    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats', 'wardGrowth'];
   }
   // Líder de una organización sin entrevistas, o Miembro (a este último le
   // queda filtrado solo Calendario + Mis Actividades de todas formas).
@@ -1908,9 +1913,12 @@ const QUICK_CREATE_ACTIONS = [
     view: 'welfare', visible: () => TAB_DEFS.welfare.visible(),
   },
   {
+    // El Directorio ahora es una sub-pestaña de Crecimiento del Barrio,
+    // exclusiva de Obispado/Administrador — ver renderWardGrowthView /
+    // renderDirectoryMembersView.
     id: 'dir-new', icon: '👥', label: 'Agregar persona al Directorio',
-    view: 'directory',
-    visible: () => TAB_DEFS.directory.visible(),
+    view: 'wardGrowth', extraState: { wardGrowthSubtab: 'directorio' },
+    visible: () => TAB_DEFS.wardGrowth.visible() && isObispadoUser(),
   },
   {
     id: 'cs-new', icon: '🧹', label: 'Nuevo turno de aseo',
@@ -2005,7 +2013,6 @@ function renderCurrentView() {
   if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
   if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
   if (state.view === 'welfare' && !canSeeWelfareTab()) state.view = 'calendar';
-  if (state.view === 'directory' && !canSeeWelfareTab()) state.view = 'calendar';
   if (state.view === 'cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   if (state.view === 'wardGrowth' && !canSeeWardGrowthTab()) state.view = 'calendar';
@@ -2040,7 +2047,6 @@ function renderCurrentView() {
   else if (state.view === 'budget') renderBudgetView();
   else if (state.view === 'meetings') renderMeetingsView();
   else if (state.view === 'welfare') renderWelfareView();
-  else if (state.view === 'directory') renderDirectoryView();
   else if (state.view === 'cleaning') renderAssignmentsView();
   else if (state.view === 'stats') renderStatsView();
   else if (state.view === 'wardGrowth') renderWardGrowthView();
@@ -2237,6 +2243,24 @@ async function renderCalendarView() {
   }));
   wireCalendarDragAndDrop(container);
   container.querySelectorAll('[data-more]').forEach((btn) => btn.addEventListener('click', () => openDayModal(btn.dataset.more)));
+  // Pedido explícito: tocar un día del calendario (celular o escritorio)
+  // abre directamente el formulario de nueva actividad con esa fecha ya
+  // puesta — sin tener que abrir el mes, tocar "+ Nueva actividad" y recién
+  // ahí elegir la fecha a mano. Se ignoran los toques que ya tienen su
+  // propio significado (abrir una actividad/entrevista existente, o "+N
+  // más") para no competir con esos — de ahí el closest() de abajo. Mismo
+  // permiso que ya exige el botón "+ Nueva actividad" de arriba
+  // (canManageAnyEvents): un Miembro sin organización asignada no ve nada
+  // clickeable acá, igual que antes.
+  if (canManageAnyEvents()) {
+    container.querySelectorAll('.cal-cell').forEach((cell) => {
+      cell.addEventListener('click', (e) => {
+        if (e.target.closest('.cal-event, [data-more]')) return;
+        openEventModal(null, { presetDate: cell.dataset.date });
+      });
+      cell.style.cursor = 'pointer';
+    });
+  }
   document.getElementById('cal-view-month').addEventListener('click', () => { state.calViewMode = 'month'; renderCalendarView(); });
   document.getElementById('cal-view-agenda').addEventListener('click', () => { state.calViewMode = 'agenda'; renderCalendarView(); });
   container.querySelectorAll('.agenda-list .list-card').forEach((row) => row.addEventListener('click', () => {
@@ -3332,11 +3356,15 @@ function updateSupervisingAdultsSection(orgId, existingAdults) {
 // desde cero. La fecha se adelanta 7 días como punto de partida razonable
 // (lo más común es duplicar algo semanal), pero queda editable como
 // cualquier otro campo antes de guardar.
-function openEventModal(existing = null, { duplicate = false } = {}) {
+function openEventModal(existing = null, { duplicate = false, presetDate = '' } = {}) {
   const options = editableOrgOptions('event');
   if (!existing && options.length === 0) { toast('No tienes una organización asignada para crear actividades', 'error'); return; }
   const isEdit = !!existing && !duplicate;
-  const prefillDate = duplicate && existing?.date ? addDaysToISO(existing.date, 7) : (existing?.date || '');
+  // `presetDate`: al tocar un día vacío del calendario para crear una
+  // actividad ahí mismo (ver wireCalendarDayTapToCreate) — solo aplica
+  // para una actividad nueva de cero, nunca pisa la fecha de una que ya
+  // existe (editar) ni la de "duplicar" (que ya calcula la suya propia).
+  const prefillDate = duplicate && existing?.date ? addDaysToISO(existing.date, 7) : (existing?.date || presetDate || '');
   // Si ya trae algo cargado en un campo "avanzado" (es una Reunión, es de
   // todo el Barrio, o ya tiene organizaciones involucradas), la sección
   // arranca abierta — para no esconder de entrada una configuración que la
@@ -3979,7 +4007,16 @@ function memberPickerFieldHtml(idPrefix, selectedUserId, selectedName) {
     </div>`;
 }
 
-function wireMemberPicker(idPrefix, directory, onChange) {
+// `extraNamesFn` (opcional): función que devuelve nombres del Directorio
+// del barrio (185 personas, ver routes/directory.js) para sugerir además de
+// los usuarios registrados — pedido explícito: "ya teniendo el directorio
+// usar esos nombres para las entrevistas o discursos". A propósito NO
+// vincula memberUserId (esa persona puede no tener cuenta en la app
+// todavía): un clic sobre una sugerencia del Directorio solo completa el
+// nombre, igual que si se hubiera escrito a mano. Es una función (como
+// getNames en wireNameAutocomplete) porque las sugerencias llegan de un
+// fetch en segundo plano y pueden no estar listas todavía al engancharse.
+function wireMemberPicker(idPrefix, directory, onChange, extraNamesFn) {
   const nameInput = document.getElementById(`${idPrefix}-member-name`);
   const resultsBox = document.getElementById(`${idPrefix}-member-results`);
   const hiddenId = document.getElementById(`${idPrefix}-member-user-id`);
@@ -4008,28 +4045,49 @@ function wireMemberPicker(idPrefix, directory, onChange) {
     resultsBox.innerHTML = '';
     if (onChange) onChange();
   };
+  const selectPlainName = (name) => {
+    hiddenId.value = '';
+    nameInput.value = name;
+    resultsBox.style.display = 'none';
+    resultsBox.innerHTML = '';
+    if (onChange) onChange();
+  };
 
   // El mismo campo sirve para buscar y para escribir el nombre a mano: si al
-  // tipear aparece una coincidencia y se hace clic, queda vinculado; si nadie
-  // coincide (o no se hace clic en nada), lo escrito por el líder queda tal
-  // cual como nombre del miembro — no hay un campo aparte de respaldo.
+  // tipear aparece una coincidencia con un usuario registrado y se hace
+  // clic, queda vinculado; si coincide con alguien del Directorio (sin
+  // cuenta registrada todavía) se completa el nombre pero sin vincular; si
+  // nadie coincide (o no se hace clic en nada), lo escrito por el líder
+  // queda tal cual como nombre del miembro.
   nameInput.addEventListener('input', () => {
     hiddenId.value = '';
     const q = normalizeSearchText(nameInput.value);
     if (!q) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; return; }
-    const matches = directory.filter((u) => normalizeSearchText(u.name).includes(q)).slice(0, 8);
-    if (!matches.length) {
+    const userMatches = directory.filter((u) => normalizeSearchText(u.name).includes(q)).slice(0, 8);
+    const usedNorms = new Set(userMatches.map((u) => normalizeSearchText(u.name)));
+    const extraNames = (extraNamesFn && extraNamesFn()) || [];
+    const nameMatches = extraNames
+      .filter((n) => normalizeSearchText(n).includes(q) && !usedNorms.has(normalizeSearchText(n)))
+      .slice(0, Math.max(0, 8 - userMatches.length));
+    if (!userMatches.length && !nameMatches.length) {
       resultsBox.innerHTML = `<div style="padding:8px 10px; color:var(--ink-soft, #888); font-size:13px;">Sin coincidencias — se guardará el nombre tal como lo escribas</div>`;
       resultsBox.style.display = '';
       return;
     }
-    resultsBox.innerHTML = matches.map((u) => `<div class="ac-item" data-id="${u.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(u.name)}</div>`).join('');
+    resultsBox.innerHTML = [
+      ...userMatches.map((u) => `<div class="ac-item" data-kind="user" data-id="${u.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(u.name)}</div>`),
+      ...nameMatches.map((n) => `<div class="ac-item" data-kind="name" data-name="${esc(n)}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(n)} <span style="font-size:11px; color:var(--ink-soft, #888);">(Directorio)</span></div>`),
+    ].join('');
     resultsBox.style.display = '';
     resultsBox.querySelectorAll('.ac-item').forEach((el) => {
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        const u = directory.find((d) => String(d.id) === el.dataset.id);
-        if (u) selectUser(u);
+        if (el.dataset.kind === 'user') {
+          const u = directory.find((d) => String(d.id) === el.dataset.id);
+          if (u) selectUser(u);
+        } else {
+          selectPlainName(el.dataset.name);
+        }
       });
       el.addEventListener('mouseenter', () => { el.style.background = '#f0f4f8'; });
       el.addEventListener('mouseleave', () => { el.style.background = ''; });
@@ -4063,7 +4121,7 @@ function getNameSuggestions() {
   if (!nameSuggestionsPromise) {
     nameSuggestionsPromise = api('/names/suggestions')
       .then((r) => { nameSuggestionsCache = r; nameSuggestionsCacheAt = Date.now(); nameSuggestionsPromise = null; return r; })
-      .catch(() => { nameSuggestionsPromise = null; return nameSuggestionsCache || { supervisingAdults: [], presenters: [], welfareMembers: [], interviewers: [] }; });
+      .catch(() => { nameSuggestionsPromise = null; return nameSuggestionsCache || { supervisingAdults: [], presenters: [], welfareMembers: [], interviewers: [], directoryNames: [] }; });
   }
   return nameSuggestionsPromise;
 }
@@ -4332,7 +4390,7 @@ async function openInterviewModal(existing = null) {
         ? `Se le ha entrevistado ${match.timesInterviewed} ${match.timesInterviewed === 1 ? 'vez' : 'veces'}${match.lastInterviewDate ? ' · última vez: ' + fmtDateHuman(match.lastInterviewDate) : ''}`
         : 'Nunca ha sido entrevistado';
     };
-    wireMemberPicker(rowId, directory, () => { resetIvConflictCheck(); showRowStats(); });
+    wireMemberPicker(rowId, directory, () => { resetIvConflictCheck(); showRowStats(); }, () => nameSuggestionsCache?.directoryNames);
     nameInput.addEventListener('input', showRowStats);
     rowEl.querySelector('.iv-row-remove').addEventListener('click', () => {
       const box = rowEl.parentElement;
@@ -6700,21 +6758,24 @@ function openWelfareCaseDetailModal(c) {
 // ==================================================================
 // ---------------- Directorio ----------------
 // ==================================================================
-// Mismo público restringido que Bienestar (ver canSeeWelfareTab) — incluye
-// datos sensibles. El directorio completo del barrio (185 personas del
-// reporte oficial), con la organización probable (por sexo/edad) para
-// ubicar rápido a quién pertenece a Primaria, Cuórum, Soc. Socorro, etc.
+// El Directorio (lista completa de miembros del barrio, 185 personas del
+// reporte oficial, con la organización probable por sexo/edad para ubicar
+// rápido a quién pertenece a Primaria, Cuórum, Soc. Socorro, etc.) es
+// exclusivo de Obispado/Administrador — ver isObispadoUser — y vive como
+// sub-pestaña DENTRO de "Crecimiento del Barrio" (renderWardGrowthView),
+// no como pestaña propia, a pedido explícito de acotar público y reducir
+// módulos. El código de esta vista (renderDirectoryMembersView y todo lo
+// que usa) sigue viviendo acá abajo por historia del archivo.
 //
-// "Enfoque Ministración" (antes "Enfoque Pastoral": los hombres adultos
-// 18+ clasificados en los 4 cuadrantes Rescatar/Enfoque/Retener/Actividad,
-// con historial fechado de cada cambio) vive ahora como sub-pestaña DENTRO
-// de Estadísticas — no acá — y con un público más acotado todavía: por
-// ahora, solo los líderes de Cuórum de Élderes (ver
-// canSeeMinisteringFocusTab e isMinisteringFocusLeader en
-// routes/directory.js, el mismo criterio del lado servidor). El código de
-// esa vista (renderPastoralFocusView y todo lo que usa) sigue viviendo acá
-// abajo junto al resto del módulo, solo que ahora se invoca desde
-// renderStatsView() en vez de desde acá.
+// "Enfoque Ministración" (los adultos 18+ clasificados en los 4 cuadrantes
+// Rescatar/Enfoque/Retener/Actividad, con historial fechado de cada
+// cambio) vive dentro de Estadísticas — no acá — con un público propio:
+// los líderes de Cuórum de Élderes ven solo a los hombres, los de
+// Sociedad de Socorro solo a las mujeres (ver canSeeMinisteringFocusTab e
+// isMinisteringFocusLeaderHombres/Mujeres en routes/directory.js, el mismo
+// criterio del lado servidor). El código de esa vista (renderPastoralFocusView
+// y todo lo que usa) también sigue viviendo acá, invocado desde
+// renderStatsView().
 
 const CUADRANTE_INFO = {
   Enfoque: { emoji: '🎯', pill: 'status-amber', desc: 'Asisten, pero les falta algo (convenio, recomendación o llamamiento) — el foco principal: ayudarlos a llegar a Retener.' },
@@ -6734,15 +6795,6 @@ function computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio, r
   return cumpleTodo ? 'Retener' : 'Enfoque';
 }
 
-async function renderDirectoryView() {
-  const container = document.getElementById('view-root');
-  container.innerHTML = `
-    <div class="section-header"><div><h2>👥 Directorio</h2><p>Lista de miembros del barrio — visible solo para el Obispado, el presidente de Cuórum de Élderes y la presidenta de Sociedad de Socorro</p></div></div>
-    <div id="directory-content">${skeletonCardsHtml(4)}</div>
-  `;
-  await renderDirectoryMembersView();
-}
-
 // ---------------- Enfoque Ministración (cuadrantes) ----------------
 // Vive dentro de Estadísticas (ver renderStatsView) — no es su propia
 // pestaña. Escribe en #stats-content, el mismo contenedor que el resto de
@@ -6756,7 +6808,7 @@ async function renderPastoralFocusView() {
   const sinEvaluar = items.filter((x) => !x.cuadrante);
   const groups = CUADRANTE_DISPLAY_ORDER.map((key) => ({ key, items: items.filter((x) => x.cuadrante === key) }));
   content.innerHTML = `
-    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">🔒 Cuadrante de enfoque para hombres adultos del barrio — por ahora, habilitado solo para los líderes de Cuórum de Élderes.</p>
+    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">🔒 Cuadrante de enfoque para adultos del barrio — el presidente de Cuórum de Élderes ve a los hombres y la presidenta de Sociedad de Socorro ve a las mujeres (el Obispado ve ambos).</p>
     <div class="stats-cards" style="margin-bottom:18px;">
       ${sinEvaluar.length ? `<div class="stat-card"><div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase;">Sin evaluar</div><div style="font-size:22px; font-weight:700;">${sinEvaluar.length}</div></div>` : ''}
       ${CUADRANTE_DISPLAY_ORDER.map((key) => `
@@ -6770,14 +6822,19 @@ async function renderPastoralFocusView() {
       <div class="card-list" style="margin-bottom:18px;">
         ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
       </div>` : ''}
-    ${groups.map((g) => `
-      <div style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px;">
+    ${groups.map((g) => {
+      const isOpen = !!(state.ministracionOpenQuadrantes || {})[g.key];
+      return `
+      <div class="quadrante-header" data-quadrante="${g.key}" style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;">
+        <span class="quadrante-chevron" style="font-size:11px; width:12px; display:inline-block; color:var(--ink-soft);">${isOpen ? '▾' : '▸'}</span>
         <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
+        <span style="font-weight:700; font-size:12.5px; color:var(--ink-soft);">(${g.items.length})</span>
         <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
       </div>
-      <div class="card-list">
+      <div class="card-list" data-quadrante-list="${g.key}" ${isOpen ? '' : 'hidden'}>
         ${g.items.length ? g.items.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
-      </div>`).join('')}
+      </div>`;
+    }).join('')}
   `;
   content.querySelectorAll('.pastoral-focus-card').forEach((card) => {
     card.addEventListener('click', () => {
@@ -6785,12 +6842,35 @@ async function renderPastoralFocusView() {
       if (it) openPastoralFocusModal(it);
     });
   });
+  // Los 4 cuadrantes arrancan colapsados (el conteo ya se ve en las
+  // tarjetas de arriba y en el "(N)" del título) — con 58 hombres adultos
+  // la lista completa siempre expandida era demasiado larga para navegar.
+  // Se expande/colapsa sin volver a pedir al servidor, solo togglea el
+  // `hidden` de la lista ya renderizada.
+  content.querySelectorAll('.quadrante-header').forEach((h) => {
+    h.addEventListener('click', () => {
+      const key = h.dataset.quadrante;
+      state.ministracionOpenQuadrantes = state.ministracionOpenQuadrantes || {};
+      const nowOpen = !state.ministracionOpenQuadrantes[key];
+      state.ministracionOpenQuadrantes[key] = nowOpen;
+      const list = content.querySelector(`[data-quadrante-list="${key}"]`);
+      if (list) list.hidden = !nowOpen;
+      const chevron = h.querySelector('.quadrante-chevron');
+      if (chevron) chevron.textContent = nowOpen ? '▾' : '▸';
+    });
+  });
 }
 
 function pastoralFocusCardHtml(it) {
-  const sub = it.cuadrante
+  // Se muestra la organización (Cuórum de Élderes / Sociedad de Socorro)
+  // adelante del resto de los datos porque, desde que hay dos géneros
+  // mezclados en la misma lista (para quien ve ambos, es decir el
+  // Obispado/Administrador), ya no alcanza con el nombre para saber a qué
+  // presidencia le corresponde cada persona.
+  const detail = it.cuadrante
     ? `Asistencia ${it.asistencia} · ${it.tieneLlamamiento ? 'con llamamiento' : 'sin llamamiento'} · ${it.faltaConvenio ? 'convenio pendiente' : 'convenios al día'} · recomendación ${it.recomendacionVigente ? 'vigente' : 'vencida'}`
     : 'Todavía no se ha evaluado';
+  const sub = `${it.member.category} · ${detail}`;
   return `
     <div class="list-card pastoral-focus-card" data-id="${it.member.id}" style="cursor:pointer;">
       <div class="lc-main">
@@ -6807,10 +6887,10 @@ function openPastoralFocusModal(it) {
   const currentPreview = () => {
     const asistencia = document.querySelector('#pf-form [name="asistencia"]')?.value;
     const tieneLlamamiento = document.querySelector('#pf-form [name="tieneLlamamiento"]')?.checked;
-    const faltaConvenio = document.querySelector('#pf-form [name="faltaConvenio"]')?.checked;
+    const conveniosAlDia = document.querySelector('#pf-form [name="conveniosAlDia"]')?.checked;
     const recomendacionVigente = document.querySelector('#pf-form [name="recomendacionVigente"]')?.checked;
     if (!asistencia) return null;
-    return computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio, recomendacionVigente });
+    return computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio: !conveniosAlDia, recomendacionVigente });
   };
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="pf-modal-backdrop">
@@ -6818,7 +6898,7 @@ function openPastoralFocusModal(it) {
         <div class="modal-header"><h3>${esc(it.member.name)}</h3><button class="modal-close" id="pf-modal-close">×</button></div>
         <div class="modal-body">
           <div id="pf-error"></div>
-          <div class="hint-box" style="margin-top:0;">🔒 Información confidencial — por ahora, solo visible para los líderes de Cuórum de Élderes.</div>
+          <div class="hint-box" style="margin-top:0;">🔒 Información confidencial — visible solo para el Obispado y la presidencia (Cuórum de Élderes o Sociedad de Socorro, según corresponda) de la persona.</div>
           <form id="pf-form">
             <div class="field"><label>Asistencia a la capilla</label>
               <select name="asistencia" required>
@@ -6827,7 +6907,7 @@ function openPastoralFocusModal(it) {
               </select>
             </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="tieneLlamamiento" style="width:auto;" ${it.tieneLlamamiento ? 'checked' : ''} /> Tiene llamamiento o asignación</label>
-            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="faltaConvenio" style="width:auto;" ${it.faltaConvenio ? 'checked' : ''} /> Le falta algún convenio por efectuar</label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="conveniosAlDia" style="width:auto;" ${!it.faltaConvenio ? 'checked' : ''} /> Tiene sus convenios al día</label>
             <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="recomendacionVigente" style="width:auto;" ${it.recomendacionVigente ? 'checked' : ''} /> Tiene su recomendación vigente</label>
           </form>
           <div id="pf-preview" style="margin:10px 0;"></div>
@@ -6868,7 +6948,7 @@ function openPastoralFocusModal(it) {
     const body = {
       asistencia: fd.get('asistencia'),
       tieneLlamamiento: fd.get('tieneLlamamiento') === 'on',
-      faltaConvenio: fd.get('faltaConvenio') === 'on',
+      faltaConvenio: fd.get('conveniosAlDia') !== 'on', // checkbox en positivo: marcado = convenios al día
       recomendacionVigente: fd.get('recomendacionVigente') === 'on',
     };
     try {
@@ -6886,7 +6966,11 @@ const ASISTENCIA_VALUES_CLIENT = ['Alto', 'Medio', 'Bajo'];
 // ---------------- Miembros (directorio completo) ----------------
 
 async function renderDirectoryMembersView() {
-  const content = document.getElementById('directory-content');
+  // Vive dentro de "Crecimiento del Barrio" (ver renderWardGrowthView),
+  // que ya solo pinta esta sub-pestaña para isObispadoUser() — por eso acá
+  // no hace falta un chequeo de permisos aparte del lado cliente; el
+  // servidor igual lo vuelve a exigir en cada endpoint /api/directory/*.
+  const content = document.getElementById('wg-content');
   let members;
   try { members = await api('/directory/members'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -6896,6 +6980,7 @@ async function renderDirectoryMembersView() {
   if (filter !== 'Todos') items = items.filter((m) => m.category === filter);
   if (search) items = items.filter((m) => m.name.toLowerCase().includes(search));
   content.innerHTML = `
+    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">👥 Lista de miembros del barrio — solo Obispado/Administrador; los nombres son editables acá mismo por si algo se cargó mal (por ejemplo, sin apellido).</p>
     <div class="section-header" style="margin-top:0; flex-wrap:wrap; gap:10px;">
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input type="text" id="dir-search" placeholder="Buscar por nombre…" value="${esc(state.directorySearch || '')}" style="max-width:220px;" />
@@ -6903,14 +6988,20 @@ async function renderDirectoryMembersView() {
           ${DIRECTORY_CATEGORY_FILTERS.map((c) => `<option value="${esc(c)}" ${filter === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
         </select>
       </div>
-      <button class="btn btn-primary" id="dir-new">+ Agregar persona</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-secondary" id="dir-import">📄 Importar PDF</button>
+        <button class="btn btn-primary" id="dir-new">+ Agregar persona</button>
+      </div>
     </div>
     <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">${items.length} de ${members.length} personas</p>
     <div class="card-list">
       ${items.length ? items.map(directoryMemberCardHtml).join('') : emptyStateHtml('Sin resultados para este filtro', null, '🔍', true)}
     </div>
   `;
-  document.getElementById('dir-new').addEventListener('click', () => openDirectoryMemberModal());
+  const dirNewBtn = document.getElementById('dir-new');
+  if (dirNewBtn) dirNewBtn.addEventListener('click', () => openDirectoryMemberModal());
+  const dirImportBtn = document.getElementById('dir-import');
+  if (dirImportBtn) dirImportBtn.addEventListener('click', () => openDirectoryImportModal());
   document.getElementById('dir-search').addEventListener('input', (e) => { state.directorySearch = e.target.value; renderDirectoryMembersView(); });
   document.getElementById('dir-category-filter').addEventListener('change', (e) => { state.directoryCategoryFilter = e.target.value; renderDirectoryMembersView(); });
   content.querySelectorAll('.directory-member-card').forEach((card) => {
@@ -6952,7 +7043,7 @@ function openDirectoryMemberModal(existing) {
           </form>
         </div>
         <div class="modal-footer">
-          <div>${isEdit ? `<button class="btn btn-danger" id="dm-delete">${icon('trash')} Eliminar</button>` : '<div></div>'}</div>
+          <div>${isEdit && isObispadoUser() ? `<button class="btn btn-danger" id="dm-delete">${icon('trash')} Eliminar</button>` : '<div></div>'}</div>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-secondary" id="dm-cancel">Cancelar</button>
             <button class="btn btn-primary" id="dm-save">Guardar</button>
@@ -6971,7 +7062,7 @@ function openDirectoryMemberModal(existing) {
       await api(`/directory/members/${existing.id}`, { method: 'DELETE' });
       closeModal();
       toast('Persona eliminada');
-      renderDirectoryView();
+      renderDirectoryMembersView();
     } catch (e) { toast(e.message, 'error'); }
   });
   document.getElementById('dm-save').addEventListener('click', async () => {
@@ -6984,9 +7075,115 @@ function openDirectoryMemberModal(existing) {
       else await api('/directory/members', { method: 'POST', body });
       closeModal();
       toast(isEdit ? 'Persona actualizada' : 'Persona agregada');
-      renderDirectoryView();
+      renderDirectoryMembersView();
     } catch (e) {
       document.getElementById('dm-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Reimportar el Directorio desde un PDF nuevo (a pedido explícito: "subir
+// un nuevo PDF y sumar o depurar cual fuere el caso"). Mismo espíritu que
+// wgPdfUploadHtml/wireWgPdfUpload en Crecimiento del Barrio: el servidor
+// SOLO devuelve un borrador (POST /directory/import/preview) — acá se
+// muestran los altas y bajas propuestas como checklists (las altas
+// arrancan todas tildadas porque agregar es reversible; las bajas arrancan
+// TODAS destildadas a propósito, porque borrar a alguien real por un
+// nombre mal leído en el PDF sería grave — el Obispado tiene que tildar a
+// mano a quién de verdad se va). Nada se guarda hasta tocar "Aplicar
+// cambios seleccionados", que manda solo lo que quedó marcado a
+// POST /directory/import/apply.
+function openDirectoryImportModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="di-modal-backdrop">
+      <div class="modal" style="max-width:640px;">
+        <div class="modal-header"><h3>📄 Importar Directorio desde PDF</h3><button class="modal-close" id="di-modal-close">×</button></div>
+        <div class="modal-body">
+          <div class="hint-box" style="margin-top:0;">Subí el export oficial "Lista de miembros" del barrio. La app compara los nombres del PDF contra el Directorio actual y te muestra quién es nuevo y quién ya no aparece — vos decidís qué aplicar, nada se guarda solo.</div>
+          <div class="field"><label>Archivo PDF</label><input type="file" accept="application/pdf" id="di-pdf-input" /></div>
+          <div id="di-status"></div>
+          <div id="di-results"></div>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="di-cancel">Cerrar</button>
+            <button class="btn btn-primary" id="di-apply" hidden>Aplicar cambios seleccionados</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('di-modal-close').addEventListener('click', closeModal);
+  document.getElementById('di-cancel').addEventListener('click', closeModal);
+  document.getElementById('di-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'di-modal-backdrop') closeModal(); });
+
+  let preview = null; // { toAdd, toRemove, ... } tal como vino del servidor
+
+  const renderResults = () => {
+    const resultsEl = document.getElementById('di-results');
+    const applyBtn = document.getElementById('di-apply');
+    if (!preview) { resultsEl.innerHTML = ''; applyBtn.hidden = true; return; }
+    applyBtn.hidden = false;
+    const countMismatch = preview.expectedCount !== null && preview.expectedCount !== preview.totalInPdf;
+    resultsEl.innerHTML = `
+      ${countMismatch ? `<div class="error-msg">⚠️ El PDF dice ${preview.expectedCount} personas pero se leyeron ${preview.totalInPdf} — revisá con cuidado antes de aplicar.</div>` : ''}
+      ${preview.warnings.length ? `<div class="hint-box"><strong>⚠️ Avisos (${preview.warnings.length}):</strong><ul style="margin:6px 0 0 18px; padding:0;">${preview.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+      <p style="font-size:12.5px; color:var(--ink-soft);">${preview.unchangedCount} personas sin cambios · ${preview.toAdd.length} nuevas · ${preview.toRemove.length} ya no aparecen en el PDF</p>
+      <div style="font-weight:600; font-size:13px; margin:10px 0 4px;">➕ Nuevas en el PDF (${preview.toAdd.length})</div>
+      ${preview.toAdd.length ? `
+        <div style="max-height:220px; overflow-y:auto; border:1px solid var(--border-color, #ddd); border-radius:8px; padding:6px 10px;">
+          ${preview.toAdd.map((p, i) => `<label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0;"><input type="checkbox" class="di-add-check" data-idx="${i}" checked style="width:auto;" /> ${esc(p.name)} <span style="color:var(--ink-soft); font-size:11.5px;">(${p.sex === 'V' ? 'Varón' : 'Mujer'}${p.birthDate ? `, ${esc(p.birthDate)}` : ', sin fecha'})</span></label>`).join('')}
+        </div>` : '<p style="font-size:12.5px; color:var(--ink-soft);">Nadie nuevo.</p>'}
+      <div style="font-weight:600; font-size:13px; margin:14px 0 4px;">➖ Ya no aparecen en el PDF (${preview.toRemove.length}) — posibles bajas</div>
+      ${preview.toRemove.length ? `
+        <div class="hint-box" style="margin-top:0;">Arrancan SIN marcar a propósito — tildá solo a quienes de verdad ya no pertenecen al barrio.</div>
+        <div style="max-height:220px; overflow-y:auto; border:1px solid var(--border-color, #ddd); border-radius:8px; padding:6px 10px;">
+          ${preview.toRemove.map((p) => `<label style="display:flex; align-items:center; gap:8px; font-size:13px; padding:4px 0;"><input type="checkbox" class="di-remove-check" data-id="${p.id}" style="width:auto;" /> ${esc(p.name)}</label>`).join('')}
+        </div>` : '<p style="font-size:12.5px; color:var(--ink-soft);">Nadie dejó de aparecer.</p>'}
+    `;
+  };
+
+  document.getElementById('di-pdf-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById('di-status');
+    statusEl.innerHTML = '<span class="wg-pdf-status-loading">Analizando PDF… puede tardar unos segundos.</span>';
+    preview = null;
+    renderResults();
+    try {
+      const fd = new FormData();
+      fd.append('pdf', file, file.name);
+      const headers = {};
+      if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+      const res = await fetch(API + '/directory/import/preview', { method: 'POST', headers, body: fd });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((result && result.error) || `Error ${res.status}`);
+      preview = result;
+      statusEl.innerHTML = '<span class="wg-pdf-status-ok">✓ PDF analizado.</span>';
+      renderResults();
+    } catch (err) {
+      statusEl.innerHTML = `<span class="wg-pdf-status-error">⚠️ No se pudo procesar el PDF (${esc(err.message)}).</span>`;
+    } finally {
+      e.target.value = '';
+    }
+  });
+
+  document.getElementById('di-apply').addEventListener('click', async () => {
+    if (!preview) return;
+    const addIdxChecked = Array.from(document.querySelectorAll('.di-add-check:checked')).map((el) => Number(el.dataset.idx));
+    const toAdd = preview.toAdd.filter((_, i) => addIdxChecked.includes(i));
+    const toRemoveIds = Array.from(document.querySelectorAll('.di-remove-check:checked')).map((el) => Number(el.dataset.id));
+    if (!toAdd.length && !toRemoveIds.length) { toast('No marcaste ningún cambio para aplicar', 'error'); return; }
+    const msg = `¿Aplicar ${toAdd.length} alta${toAdd.length === 1 ? '' : 's'} y ${toRemoveIds.length} baja${toRemoveIds.length === 1 ? '' : 's'} en el Directorio?`;
+    if (!(await confirmModal(msg, { title: 'Confirmar importación', confirmText: 'Aplicar', danger: toRemoveIds.length > 0 }))) return;
+    try {
+      const result = await api('/directory/import/apply', { method: 'POST', body: { toAdd, toRemoveIds } });
+      closeModal();
+      toast(`Directorio actualizado: ${result.added} agregados, ${result.removed} eliminados`);
+      renderDirectoryMembersView();
+    } catch (err) {
+      toast(err.message, 'error');
     }
   });
 }
@@ -7409,6 +7606,9 @@ async function openTalkModal(presetDate) {
   let allTalks = [];
   try { directory = await api('/users/directory'); } catch (e) { directory = []; }
   try { allTalks = await api('/talks'); } catch (e) { allTalks = []; }
+  // Igual que en Entrevistas: sugiere también nombres del Directorio del
+  // barrio (no solo usuarios registrados) para elegir discursante.
+  getNameSuggestions();
   const isAdd = !!presetDate;
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
@@ -7474,7 +7674,7 @@ async function openTalkModal(presetDate) {
         ? `Ha discursado ${match.timesSpoken} ${match.timesSpoken === 1 ? 'vez' : 'veces'} · última vez: ${fmtDateHuman(match.lastSpokenDate)}`
         : 'Nunca ha discursado';
     };
-    wireMemberPicker(rowId, directory, showStatsFor);
+    wireMemberPicker(rowId, directory, showStatsFor, () => nameSuggestionsCache?.directoryNames);
     nameInput.addEventListener('input', showStatsFor);
     rowEl.querySelector('.tk-row-remove').addEventListener('click', () => {
       const box = rowEl.parentElement;
@@ -8381,6 +8581,13 @@ async function loadWardGrowthData() {
 }
 
 async function renderWardGrowthView() {
+  // El Directorio (lista de miembros del barrio) se movió acá adentro,
+  // como sub-pestaña, a pedido explícito: "que la sección de directorio
+  // esté dentro de crecimiento para no tener tantos módulos (solo
+  // obispado puede verlo)" — por eso la sub-pestaña ni siquiera se pinta
+  // para el resto de los perfiles.
+  if (state.wardGrowthSubtab === 'directorio' && !isObispadoUser()) state.wardGrowthSubtab = 'resumen';
+  const showDirectorio = isObispadoUser();
   const container = document.getElementById('view-root');
   container.innerHTML = `
     <div class="section-header">
@@ -8396,6 +8603,7 @@ async function renderWardGrowthView() {
       <button class="subtab-btn ${state.wardGrowthSubtab === 'tabla' ? 'active' : ''}" data-tab="tabla">Tabla completa</button>
       <button class="subtab-btn ${state.wardGrowthSubtab === 'conversos' ? 'active' : ''}" data-tab="conversos">Seguimiento de Conversos</button>
       <button class="subtab-btn ${state.wardGrowthSubtab === 'instantanea' ? 'active' : ''}" data-tab="instantanea">Instantánea del Barrio</button>
+      ${showDirectorio ? `<button class="subtab-btn ${state.wardGrowthSubtab === 'directorio' ? 'active' : ''}" data-tab="directorio">👥 Directorio</button>` : ''}
     </div>
     <div id="wg-content"><div class="empty-state">Cargando…</div></div>
   `;
@@ -8404,6 +8612,15 @@ async function renderWardGrowthView() {
   if (newQuarterBtn) newQuarterBtn.addEventListener('click', () => openWardGrowthQuarterModal());
   const editSnapshotBtn = document.getElementById('wg-edit-snapshot');
   if (editSnapshotBtn) editSnapshotBtn.addEventListener('click', () => openWardSnapshotModal());
+
+  // El Directorio no depende para nada de que haya trimestres cargados, así
+  // que se resuelve ACÁ, antes de loadWardGrowthData() — si no, el guard de
+  // "todavía no hay ningún trimestre cargado" de más abajo taparía esta
+  // sub-pestaña en un barrio que recién está empezando a cargar Crecimiento.
+  if (state.wardGrowthSubtab === 'directorio' && showDirectorio) {
+    await renderDirectoryMembersView();
+    return;
+  }
 
   const content = document.getElementById('wg-content');
   let data;
