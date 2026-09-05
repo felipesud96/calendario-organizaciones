@@ -36,6 +36,8 @@ const state = {
   loading: false,
   meetingsSubtab: 'mine',
   assignmentsSubtab: 'cleaning',
+  directoryCategoryFilter: 'Todos',
+  directorySearch: '',
   talksHistoryOpen: false, // Discursos: el histórico de meses pasados arranca colapsado
   interviewsHistoryOpen: false, // Entrevistas: el historial de ya verificadas arranca colapsado
   interviewRequestsHistoryOpen: false, // Entrevistas → Solicitudes: historial de ya decididas arranca colapsado
@@ -1620,6 +1622,19 @@ function canSeeWelfareTab() {
   if (state.user.role !== 'leader' || !state.user.isPresident) return false;
   return !!(state.user.organization && WELFARE_COMMITTEE_ORGS.includes(state.user.organization.name));
 }
+// "Enfoque Ministración" (cuadrantes, dentro de Estadísticas): a pedido
+// explícito del Obispado, por ahora se prueba SOLO con los líderes de
+// Cuórum de Élderes (toda la presidencia — presidente, consejeros,
+// secretario — no solo el presidente, a diferencia de canSeeWelfareTab que
+// exige isPresident). Ni el resto del Obispado ni Sociedad de Socorro lo
+// ven todavía. Mismo criterio que isMinisteringFocusLeader en
+// routes/directory.js — si más adelante se abre a otras organizaciones,
+// este es el único lugar del cliente que hay que tocar.
+function canSeeMinisteringFocusTab() {
+  if (!state.user) return false;
+  if (state.user.role === 'admin') return true;
+  return state.user.role === 'leader' && !!(state.user.organization && state.user.organization.name === 'Cuórum de Élderes');
+}
 
 // Definición de cada pestaña posible del menú principal. El orden final
 // para cada perfil lo decide tabOrderFor() más abajo — no hay un único
@@ -1637,6 +1652,13 @@ const TAB_DEFS = {
   interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
   meetings: { label: 'Reuniones y Consejos', icon: '📋', navLabel: 'Reuniones', visible: canSeeMeetingsTab },
   welfare: { label: '🤲 Bienestar', icon: '🤲', navLabel: 'Bienestar', visible: canSeeWelfareTab },
+  // Directorio del barrio (lista de miembros): mismo público que Bienestar,
+  // así que reutiliza exactamente canSeeWelfareTab en vez de un criterio
+  // paralelo (ver isWelfareCommitteeMember en routes/welfare.js, que
+  // routes/directory.js también reutiliza tal cual del lado servidor). El
+  // cuadrante "Enfoque Ministración" ya NO vive acá — es una sub-pestaña de
+  // Estadísticas, con un público más acotado (ver canSeeMinisteringFocusTab).
+  directory: { label: '👥 Directorio', icon: '👥', navLabel: 'Directorio', visible: canSeeWelfareTab },
   cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
   budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
   stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
@@ -1653,7 +1675,7 @@ function tabOrderFor() {
     // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
     // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
     // semanal) van primero, Estadísticas al final por ser lo más ocasional.
-    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
+    return ['calendar', 'meetings', 'welfare', 'directory', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
   }
   if (canSeeInterviewsTab()) {
     // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
@@ -1661,7 +1683,7 @@ function tabOrderFor() {
     // las más accionables día a día. Bienestar (Punto 51) va justo después
     // de Reuniones — solo la presidencia (isPresident) de estas mismas dos
     // organizaciones llega a verlo de verdad (canSeeWelfareTab lo filtra).
-    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats', 'wardGrowth'];
+    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'directory', 'budget', 'stats', 'wardGrowth'];
   }
   // Líder de una organización sin entrevistas, o Miembro (a este último le
   // queda filtrado solo Calendario + Mis Actividades de todas formas).
@@ -1886,6 +1908,11 @@ const QUICK_CREATE_ACTIONS = [
     view: 'welfare', visible: () => TAB_DEFS.welfare.visible(),
   },
   {
+    id: 'dir-new', icon: '👥', label: 'Agregar persona al Directorio',
+    view: 'directory',
+    visible: () => TAB_DEFS.directory.visible(),
+  },
+  {
     id: 'cs-new', icon: '🧹', label: 'Nuevo turno de aseo',
     view: 'cleaning', extraState: { assignmentsSubtab: 'cleaning' },
     visible: () => TAB_DEFS.cleaning.visible(),
@@ -1978,6 +2005,7 @@ function renderCurrentView() {
   if (state.view === 'budget' && !canSeeBudgetTab()) state.view = 'calendar';
   if (state.view === 'meetings' && !canSeeMeetingsTab()) state.view = 'calendar';
   if (state.view === 'welfare' && !canSeeWelfareTab()) state.view = 'calendar';
+  if (state.view === 'directory' && !canSeeWelfareTab()) state.view = 'calendar';
   if (state.view === 'cleaning' && !canSeeAssignmentsTab()) state.view = 'calendar';
   if (state.view === 'stats' && !canSeeStatsTab()) state.view = 'calendar';
   if (state.view === 'wardGrowth' && !canSeeWardGrowthTab()) state.view = 'calendar';
@@ -2012,6 +2040,7 @@ function renderCurrentView() {
   else if (state.view === 'budget') renderBudgetView();
   else if (state.view === 'meetings') renderMeetingsView();
   else if (state.view === 'welfare') renderWelfareView();
+  else if (state.view === 'directory') renderDirectoryView();
   else if (state.view === 'cleaning') renderAssignmentsView();
   else if (state.view === 'stats') renderStatsView();
   else if (state.view === 'wardGrowth') renderWardGrowthView();
@@ -6669,6 +6698,300 @@ function openWelfareCaseDetailModal(c) {
 }
 
 // ==================================================================
+// ---------------- Directorio ----------------
+// ==================================================================
+// Mismo público restringido que Bienestar (ver canSeeWelfareTab) — incluye
+// datos sensibles. El directorio completo del barrio (185 personas del
+// reporte oficial), con la organización probable (por sexo/edad) para
+// ubicar rápido a quién pertenece a Primaria, Cuórum, Soc. Socorro, etc.
+//
+// "Enfoque Ministración" (antes "Enfoque Pastoral": los hombres adultos
+// 18+ clasificados en los 4 cuadrantes Rescatar/Enfoque/Retener/Actividad,
+// con historial fechado de cada cambio) vive ahora como sub-pestaña DENTRO
+// de Estadísticas — no acá — y con un público más acotado todavía: por
+// ahora, solo los líderes de Cuórum de Élderes (ver
+// canSeeMinisteringFocusTab e isMinisteringFocusLeader en
+// routes/directory.js, el mismo criterio del lado servidor). El código de
+// esa vista (renderPastoralFocusView y todo lo que usa) sigue viviendo acá
+// abajo junto al resto del módulo, solo que ahora se invoca desde
+// renderStatsView() en vez de desde acá.
+
+const CUADRANTE_INFO = {
+  Enfoque: { emoji: '🎯', pill: 'status-amber', desc: 'Asisten, pero les falta algo (convenio, recomendación o llamamiento) — el foco principal: ayudarlos a llegar a Retener.' },
+  Rescatar: { emoji: '🌱', pill: 'status-gray', desc: 'Asistencia baja y además les falta algo — el grupo menos fructífero en el corto plazo.' },
+  Actividad: { emoji: '📈', pill: 'status-blue', desc: 'Asistencia baja, pero tienen todo en regla — falta que vuelvan a asistir seguido.' },
+  Retener: { emoji: '💪', pill: 'status-green', desc: 'Asisten y tienen todo en regla — los más fuertes; mantenerlos así.' },
+};
+const CUADRANTE_DISPLAY_ORDER = ['Enfoque', 'Rescatar', 'Actividad', 'Retener'];
+const DIRECTORY_CATEGORY_FILTERS = ['Todos', 'Primaria', 'Hombres Jóvenes', 'Mujeres Jóvenes', 'Cuórum de Élderes', 'Sociedad de Socorro', 'Sin clasificar'];
+
+// Replica exacta de computeCuadrante() en server/src/pastoralFocus.js — solo
+// para la vista previa en vivo dentro del formulario. El valor que de
+// verdad se guarda siempre lo calcula el servidor.
+function computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio, recomendacionVigente }) {
+  const cumpleTodo = !faltaConvenio && !!recomendacionVigente && !!tieneLlamamiento;
+  if (asistencia === 'Bajo') return cumpleTodo ? 'Actividad' : 'Rescatar';
+  return cumpleTodo ? 'Retener' : 'Enfoque';
+}
+
+async function renderDirectoryView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = `
+    <div class="section-header"><div><h2>👥 Directorio</h2><p>Lista de miembros del barrio — visible solo para el Obispado, el presidente de Cuórum de Élderes y la presidenta de Sociedad de Socorro</p></div></div>
+    <div id="directory-content">${skeletonCardsHtml(4)}</div>
+  `;
+  await renderDirectoryMembersView();
+}
+
+// ---------------- Enfoque Ministración (cuadrantes) ----------------
+// Vive dentro de Estadísticas (ver renderStatsView) — no es su propia
+// pestaña. Escribe en #stats-content, el mismo contenedor que el resto de
+// las sub-pestañas de Estadísticas.
+
+async function renderPastoralFocusView() {
+  const content = document.getElementById('stats-content');
+  let items;
+  try { items = await api('/pastoral-focus'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const sinEvaluar = items.filter((x) => !x.cuadrante);
+  const groups = CUADRANTE_DISPLAY_ORDER.map((key) => ({ key, items: items.filter((x) => x.cuadrante === key) }));
+  content.innerHTML = `
+    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">🔒 Cuadrante de enfoque para hombres adultos del barrio — por ahora, habilitado solo para los líderes de Cuórum de Élderes.</p>
+    <div class="stats-cards" style="margin-bottom:18px;">
+      ${sinEvaluar.length ? `<div class="stat-card"><div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase;">Sin evaluar</div><div style="font-size:22px; font-weight:700;">${sinEvaluar.length}</div></div>` : ''}
+      ${CUADRANTE_DISPLAY_ORDER.map((key) => `
+        <div class="stat-card">
+          <div style="font-size:11px; color:var(--ink-soft); text-transform:uppercase;">${CUADRANTE_INFO[key].emoji} ${key}</div>
+          <div style="font-size:22px; font-weight:700;">${items.filter((x) => x.cuadrante === key).length}</div>
+        </div>`).join('')}
+    </div>
+    ${sinEvaluar.length ? `
+      <div class="hint-box" style="margin-top:0;">📝 Todavía faltan ${sinEvaluar.length} ${sinEvaluar.length === 1 ? 'persona' : 'personas'} por evaluar por primera vez.</div>
+      <div class="card-list" style="margin-bottom:18px;">
+        ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
+      </div>` : ''}
+    ${groups.map((g) => `
+      <div style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px;">
+        <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
+        <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
+      </div>
+      <div class="card-list">
+        ${g.items.length ? g.items.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
+      </div>`).join('')}
+  `;
+  content.querySelectorAll('.pastoral-focus-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const it = items.find((x) => x.member.id === Number(card.dataset.id));
+      if (it) openPastoralFocusModal(it);
+    });
+  });
+}
+
+function pastoralFocusCardHtml(it) {
+  const sub = it.cuadrante
+    ? `Asistencia ${it.asistencia} · ${it.tieneLlamamiento ? 'con llamamiento' : 'sin llamamiento'} · ${it.faltaConvenio ? 'convenio pendiente' : 'convenios al día'} · recomendación ${it.recomendacionVigente ? 'vigente' : 'vencida'}`
+    : 'Todavía no se ha evaluado';
+  return `
+    <div class="list-card pastoral-focus-card" data-id="${it.member.id}" style="cursor:pointer;">
+      <div class="lc-main">
+        <div class="lc-title">${esc(it.member.name)}</div>
+        <div class="lc-sub">${esc(sub)}</div>
+      </div>
+      ${it.cuadrante ? `<span class="status-pill ${CUADRANTE_INFO[it.cuadrante].pill}">${CUADRANTE_INFO[it.cuadrante].emoji} ${it.cuadrante}</span>` : '<span class="status-pill status-gray">Sin evaluar</span>'}
+    </div>`;
+}
+
+function openPastoralFocusModal(it) {
+  const modalRoot = document.getElementById('modal-root');
+  const sortedHistory = [...(it.history || [])];
+  const currentPreview = () => {
+    const asistencia = document.querySelector('#pf-form [name="asistencia"]')?.value;
+    const tieneLlamamiento = document.querySelector('#pf-form [name="tieneLlamamiento"]')?.checked;
+    const faltaConvenio = document.querySelector('#pf-form [name="faltaConvenio"]')?.checked;
+    const recomendacionVigente = document.querySelector('#pf-form [name="recomendacionVigente"]')?.checked;
+    if (!asistencia) return null;
+    return computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio, recomendacionVigente });
+  };
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="pf-modal-backdrop">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h3>${esc(it.member.name)}</h3><button class="modal-close" id="pf-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="pf-error"></div>
+          <div class="hint-box" style="margin-top:0;">🔒 Información confidencial — por ahora, solo visible para los líderes de Cuórum de Élderes.</div>
+          <form id="pf-form">
+            <div class="field"><label>Asistencia a la capilla</label>
+              <select name="asistencia" required>
+                <option value="" ${!it.asistencia ? 'selected' : ''} disabled>Elegir…</option>
+                ${ASISTENCIA_VALUES_CLIENT.map((v) => `<option value="${v}" ${it.asistencia === v ? 'selected' : ''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="tieneLlamamiento" style="width:auto;" ${it.tieneLlamamiento ? 'checked' : ''} /> Tiene llamamiento o asignación</label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="faltaConvenio" style="width:auto;" ${it.faltaConvenio ? 'checked' : ''} /> Le falta algún convenio por efectuar</label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="recomendacionVigente" style="width:auto;" ${it.recomendacionVigente ? 'checked' : ''} /> Tiene su recomendación vigente</label>
+          </form>
+          <div id="pf-preview" style="margin:10px 0;"></div>
+          ${it.updatedAt ? `<div style="font-size:11.5px; color:var(--ink-soft);">Última actualización: ${esc(fmtDateHuman(it.updatedAt.slice(0, 10)))}${it.updatedByName ? ` · ${esc(it.updatedByName)}` : ''}</div>` : ''}
+          <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin:14px 0 6px;">📜 Historial de cambios de cuadrante</div>
+          <div id="pf-history">
+            ${sortedHistory.length ? sortedHistory.map((h) => `
+              <div class="commitment-detail-row">
+                <div style="font-weight:600; font-size:12.5px;">${esc(fmtDateHuman(h.changedAt.slice(0, 10)))} — antes: <span class="status-pill ${CUADRANTE_INFO[h.cuadrante]?.pill || 'status-gray'}">${CUADRANTE_INFO[h.cuadrante]?.emoji || ''} ${esc(h.cuadrante)}</span></div>
+                <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Asistencia ${esc(h.asistencia)} · ${h.tieneLlamamiento ? 'con' : 'sin'} llamamiento · ${h.faltaConvenio ? 'convenio pendiente' : 'convenios al día'} · recomendación ${h.recomendacionVigente ? 'vigente' : 'vencida'}${h.changedByName ? ` · ${esc(h.changedByName)}` : ''}</div>
+              </div>`).join('') : emptyStateHtml('Sin cambios registrados todavía', null, '📝', true)}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="pf-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="pf-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('pf-modal-close').addEventListener('click', closeModal);
+  document.getElementById('pf-cancel').addEventListener('click', closeModal);
+  document.getElementById('pf-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'pf-modal-backdrop') closeModal(); });
+  const updatePreview = () => {
+    const c = currentPreview();
+    document.getElementById('pf-preview').innerHTML = c
+      ? `<span class="status-pill ${CUADRANTE_INFO[c].pill}">${CUADRANTE_INFO[c].emoji} Quedaría en: ${c}</span>`
+      : '<span style="font-size:12px; color:var(--ink-soft);">Elegí la asistencia para ver el cuadrante</span>';
+  };
+  const form = document.getElementById('pf-form');
+  form.addEventListener('change', updatePreview);
+  updatePreview();
+  document.getElementById('pf-save').addEventListener('click', async () => {
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = {
+      asistencia: fd.get('asistencia'),
+      tieneLlamamiento: fd.get('tieneLlamamiento') === 'on',
+      faltaConvenio: fd.get('faltaConvenio') === 'on',
+      recomendacionVigente: fd.get('recomendacionVigente') === 'on',
+    };
+    try {
+      await api(`/pastoral-focus/${it.member.id}`, { method: 'PUT', body });
+      closeModal();
+      toast('Enfoque Ministración actualizado');
+      renderStatsView();
+    } catch (e) {
+      document.getElementById('pf-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+const ASISTENCIA_VALUES_CLIENT = ['Alto', 'Medio', 'Bajo'];
+
+// ---------------- Miembros (directorio completo) ----------------
+
+async function renderDirectoryMembersView() {
+  const content = document.getElementById('directory-content');
+  let members;
+  try { members = await api('/directory/members'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const filter = state.directoryCategoryFilter || 'Todos';
+  const search = (state.directorySearch || '').trim().toLowerCase();
+  let items = members;
+  if (filter !== 'Todos') items = items.filter((m) => m.category === filter);
+  if (search) items = items.filter((m) => m.name.toLowerCase().includes(search));
+  content.innerHTML = `
+    <div class="section-header" style="margin-top:0; flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="dir-search" placeholder="Buscar por nombre…" value="${esc(state.directorySearch || '')}" style="max-width:220px;" />
+        <select id="dir-category-filter" style="max-width:200px;">
+          ${DIRECTORY_CATEGORY_FILTERS.map((c) => `<option value="${esc(c)}" ${filter === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary" id="dir-new">+ Agregar persona</button>
+    </div>
+    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">${items.length} de ${members.length} personas</p>
+    <div class="card-list">
+      ${items.length ? items.map(directoryMemberCardHtml).join('') : emptyStateHtml('Sin resultados para este filtro', null, '🔍', true)}
+    </div>
+  `;
+  document.getElementById('dir-new').addEventListener('click', () => openDirectoryMemberModal());
+  document.getElementById('dir-search').addEventListener('input', (e) => { state.directorySearch = e.target.value; renderDirectoryMembersView(); });
+  document.getElementById('dir-category-filter').addEventListener('change', (e) => { state.directoryCategoryFilter = e.target.value; renderDirectoryMembersView(); });
+  content.querySelectorAll('.directory-member-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const m = members.find((x) => x.id === Number(card.dataset.id));
+      if (m) openDirectoryMemberModal(m);
+    });
+  });
+}
+
+function directoryMemberCardHtml(m) {
+  return `
+    <div class="list-card directory-member-card" data-id="${m.id}" style="cursor:pointer;">
+      <div class="lc-main">
+        <div class="lc-title">${esc(m.name)}</div>
+        <div class="lc-sub">${m.sex === 'V' ? 'Varón' : 'Mujer'} · ${m.age !== null && m.age !== undefined ? `${m.age} años` : 'edad desconocida'} · ${esc(m.category)}</div>
+      </div>
+    </div>`;
+}
+
+function openDirectoryMemberModal(existing) {
+  const isEdit = !!existing;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="dm-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>${isEdit ? 'Editar persona' : 'Agregar persona al Directorio'}</h3><button class="modal-close" id="dm-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="dm-error"></div>
+          <form id="dm-form">
+            <div class="field"><label>Nombre completo</label><input type="text" name="name" required value="${esc(existing?.name || '')}" /></div>
+            <div class="field"><label>Sexo</label>
+              <select name="sex">
+                <option value="V" ${existing?.sex === 'V' ? 'selected' : ''}>Varón</option>
+                <option value="M" ${!existing || existing?.sex === 'M' ? 'selected' : ''}>Mujer</option>
+              </select>
+            </div>
+            <div class="field"><label>Fecha de nacimiento</label><input type="date" name="birthDate" value="${esc(existing?.birthDate || '')}" /></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${isEdit ? `<button class="btn btn-danger" id="dm-delete">${icon('trash')} Eliminar</button>` : '<div></div>'}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="dm-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="dm-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const guardedClose = wireUnsavedChangesGuard(document.getElementById('dm-form'));
+  document.getElementById('dm-modal-close').addEventListener('click', guardedClose);
+  document.getElementById('dm-cancel').addEventListener('click', guardedClose);
+  document.getElementById('dm-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'dm-modal-backdrop') guardedClose(); });
+  const deleteBtn = document.getElementById('dm-delete');
+  if (deleteBtn) deleteBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('¿Eliminar a esta persona del Directorio? Si tenía un Enfoque Ministración cargado, también se borra.', { title: 'Eliminar persona', confirmText: 'Eliminar', danger: true }))) return;
+    try {
+      await api(`/directory/members/${existing.id}`, { method: 'DELETE' });
+      closeModal();
+      toast('Persona eliminada');
+      renderDirectoryView();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('dm-save').addEventListener('click', async () => {
+    const form = document.getElementById('dm-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const body = Object.fromEntries(fd.entries());
+    try {
+      if (isEdit) await api(`/directory/members/${existing.id}`, { method: 'PUT', body });
+      else await api('/directory/members', { method: 'POST', body });
+      closeModal();
+      toast(isEdit ? 'Persona actualizada' : 'Persona agregada');
+      renderDirectoryView();
+    } catch (e) {
+      document.getElementById('dm-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// ==================================================================
 // ---------------- Asignaciones (Aseo del Edificio + Discursos) ----------------
 // ==================================================================
 // Estrictamente oculto salvo Administrador o líder de Obispado (ver
@@ -7275,12 +7598,14 @@ async function renderStatsView() {
       <button class="subtab-btn ${state.statsSubtab === 'pending' ? 'active' : ''}" data-tab="pending">Bandeja de Evaluación</button>
       <button class="subtab-btn ${state.statsSubtab === 'dashboard' ? 'active' : ''}" data-tab="dashboard">Panel de Control</button>
       ${isObispadoUser() ? `<button class="subtab-btn ${state.statsSubtab === 'rankings' ? 'active' : ''}" data-tab="rankings">Rachas y Logros</button>` : ''}
+      ${canSeeMinisteringFocusTab() ? `<button class="subtab-btn ${state.statsSubtab === 'ministracion' ? 'active' : ''}" data-tab="ministracion">Enfoque Ministración</button>` : ''}
     </div>
     <div id="stats-content"></div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.statsSubtab = b.dataset.tab; renderStatsView(); }));
   if (state.statsSubtab === 'pending') await renderStatsPending();
   else if (state.statsSubtab === 'rankings' && isObispadoUser()) await renderStatsRankings();
+  else if (state.statsSubtab === 'ministracion' && canSeeMinisteringFocusTab()) await renderPastoralFocusView();
   else await renderStatsDashboard();
 }
 

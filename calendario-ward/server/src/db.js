@@ -69,6 +69,18 @@ const EMPTY_DB = {
   // presidenta de Sociedad de Socorro, Manual General 22). Ver
   // routes/welfare.js.
   welfareCases: [],
+  // Módulo "Directorio" (lista de miembros del barrio, importada una vez
+  // desde el reporte oficial "Lista de miembros" — ver seedDirectory.js — y
+  // editable a mano después) + "Enfoque Ministración" (dentro de
+  // Estadísticas: seguimiento por cuadrante Rescatar/Enfoque/Retener/
+  // Actividad, ver pastoralFocus.js, de los hombres adultos, con historial
+  // de cambios en el tiempo). Dos permisos independientes — ver
+  // routes/directory.js: el Directorio usa el mismo público restringido que
+  // Bienestar (isWelfareCommitteeMember en welfare.js); Enfoque Ministración
+  // está acotado, por ahora, solo a los líderes de Cuórum de Élderes
+  // (isMinisteringFocusLeader).
+  directoryMembers: [],
+  pastoralFocus: [],
   // Módulo "Crecimiento del Barrio" (Estadísticas del Barrio): un registro
   // por trimestre con los 26 indicadores oficiales (real/potencial) y el
   // detalle de conversos de ese trimestre, más una "instantánea" única
