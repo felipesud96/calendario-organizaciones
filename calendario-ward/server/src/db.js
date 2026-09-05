@@ -266,6 +266,20 @@ export function load() {
   for (const iv of data.interviews) {
     if (iv.groupId === undefined) { iv.groupId = iv.id; migrated = true; }
   }
+  // migración: casos de Bienestar creados antes de que existiera el flujo de
+  // "otorgar ayuda" (única vez o por un período) con adjunto del formulario
+  // de autosuficiencia y evaluación mensual automática vía un compromiso en
+  // Reuniones y Consejos — ver routes/welfare.js.
+  for (const c of data.welfareCases) {
+    if (c.aidType === undefined) { c.aidType = null; migrated = true; }
+    if (c.aidMonths === undefined) { c.aidMonths = null; migrated = true; }
+    if (c.aidGrantedAt === undefined) { c.aidGrantedAt = null; migrated = true; }
+    if (c.selfRelianceForm === undefined) { c.selfRelianceForm = null; migrated = true; }
+    if (c.reviewCommitmentId === undefined) { c.reviewCommitmentId = null; migrated = true; }
+    if (c.nextReviewDate === undefined) { c.nextReviewDate = null; migrated = true; }
+    if (!Array.isArray(c.reviews)) { c.reviews = []; migrated = true; }
+    if (c.closedAt === undefined) { c.closedAt = null; migrated = true; }
+  }
   if (migrated) save(data);
   return data;
 }

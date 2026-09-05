@@ -4126,6 +4126,27 @@ function getNameSuggestions() {
   return nameSuggestionsPromise;
 }
 
+// Junta varias listas de nombres en una sola, sin duplicar (mayúsculas o
+// tildes distintas no cuentan como nombres distintos) — se queda con la
+// primera forma de escritura que encuentra. Se usa para sumar los nombres
+// del Directorio del barrio a un campo que ya tenía sus propias sugerencias
+// por historial (ver Bienestar más abajo — mismo pedido explícito que ya
+// se hizo para Entrevistas y Discursos: "ya teniendo el directorio usar
+// esos nombres").
+function mergeUniqueNames(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const n of (list || [])) {
+      const norm = normalizeSearchText(n);
+      if (!norm || seen.has(norm)) continue;
+      seen.add(norm);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
 // `getNames` es una función (no un arreglo fijo) porque las sugerencias
 // llegan de un fetch en segundo plano: al momento de enganchar el campo
 // puede que todavía no hayan llegado, y así igual quedan disponibles apenas
@@ -6590,6 +6611,136 @@ async function openAddCommitmentModal(m) {
 const WELFARE_CATEGORY_LABELS = { alimento: '🍞 Alimento', vivienda: '🏠 Vivienda', empleo: '💼 Empleo', otro: '📋 Otro' };
 const WELFARE_STATUS_LABELS = { abierto: 'Abierto', en_seguimiento: 'En seguimiento', cerrado: 'Cerrado' };
 const WELFARE_STATUS_PILL = { abierto: 'status-amber', en_seguimiento: 'status-blue', cerrado: 'status-gray' };
+const WELFARE_AID_TYPE_LABELS = { unica_vez: 'Única vez', periodo: 'Por un período' };
+
+// ---------------- Otorgar ayuda + formulario de autosuficiencia ----------------
+// Flujo pedido explícitamente: se habla con la persona, llena el formulario
+// oficial de autosuficiencia de la Iglesia EN PAPEL (no se replica acá — se
+// adjunta como foto o PDF), se analiza en conjunto y se otorga la ayuda
+// (única vez o por un período de varios meses). El servidor crea solo, al
+// otorgar la ayuda y en cada evaluación posterior, el compromiso mensual de
+// seguimiento en Reuniones y Consejos — ver server/src/routes/welfare.js.
+
+// A diferencia de compressImageFile (usada para la foto de perfil, que
+// recorta al centro para dejarla cuadrada), una foto de un documento no se
+// puede recortar sin arriesgarse a perder texto — así que esta variante solo
+// reduce el lado más largo si excede `maxSide`, preservando la proporción
+// original, e igual la reexporta como JPEG para no subir un archivo enorme
+// (foto de celular sin comprimir).
+function compressDocumentImageFile(file, maxSide = 1600) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('No se pudo leer la imagen'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        canvas.toBlob((blob) => {
+          if (!blob) return reject(new Error('No se pudo procesar la imagen'));
+          resolve(new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.85);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Sube el archivo (imagen redimensionada sin deformar, o PDF tal cual) al
+// caso de Bienestar indicado. Mismo patrón multipart que ya usa el
+// asistente de PDF de Crecimiento del Barrio (ver wgPdfUploadHtml más
+// abajo): fetch directo con FormData, sin pasar por api() (que siempre
+// manda JSON).
+async function uploadSelfRelianceForm(caseId, file) {
+  const toUpload = file.type.startsWith('image/') ? await compressDocumentImageFile(file) : file;
+  const fd = new FormData();
+  fd.append('form', toUpload, toUpload.name);
+  const headers = {};
+  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+  const res = await fetch(`${API}/welfare-cases/${caseId}/self-reliance-form`, { method: 'POST', headers, body: fd });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* sin cuerpo */ }
+  if (!res.ok) throw new Error((data && data.error) || `Error ${res.status}`);
+  return data;
+}
+
+// Aclaración pedida explícitamente: llenar el formulario oficial (en papel,
+// a mano, por la propia persona) SIEMPRE es parte del proceso — pero
+// ADJUNTARLO acá en la app es opcional y se puede hacer en cualquier
+// momento después (no bloquea otorgar la ayuda ni ninguna otra acción del
+// caso). Por eso este input nunca tiene `required` ni depende de ningún
+// formulario con botón "Guardar": subir el archivo es una acción suelta,
+// independiente, que se dispara sola al elegir el archivo.
+function welfareSelfRelianceFormHtml(c) {
+  const f = c.selfRelianceForm;
+  if (!f) {
+    return `
+      <div class="hint-box" style="margin:0 0 8px;">📋 El formulario oficial de la Iglesia (autosuficiencia) siempre debe llenarse a mano con la persona. Adjuntar acá la foto o el PDF ya firmado es <strong>opcional</strong> — puedes hacerlo ahora o más adelante, sin que esto detenga el resto del proceso.</div>
+      <input type="file" id="wfd-form-input" accept="image/*,application/pdf" />
+      <div id="wfd-form-status" style="font-size:12.5px; margin-top:6px;"></div>`;
+  }
+  const isImage = f.mime.startsWith('image/');
+  return `
+    <div class="list-card" style="align-items:center;">
+      <div class="lc-main">
+        <div class="lc-title">${isImage ? '🖼️' : '📄'} ${esc(f.filename)}</div>
+        <div class="lc-sub">Adjuntado por ${esc(f.uploadedByName)} — ${esc(fmtDateHuman(f.uploadedAt.slice(0, 10)))}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <a href="${f.dataUri}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">Ver</a>
+        <button class="btn btn-danger btn-sm" id="wfd-form-remove" type="button">${icon('trash')}</button>
+      </div>
+    </div>`;
+}
+
+// Sección "Ayuda otorgada": antes de otorgar, un formulario corto
+// (única vez / por un período); después, el estado actual y, si hay una
+// evaluación pendiente, el formulario para registrarla (extender un mes más
+// o dar el caso por solucionado) — pedido explícito: "la persona que
+// extiende la ayuda tiene el compromiso de evaluar cómo sigue esa persona,
+// y si se debe extender la ayuda o se da por solucionado".
+function welfareAidSectionHtml(c) {
+  if (!c.aidGrantedAt) {
+    if (c.status === 'cerrado') return '<div class="hint-box" style="margin:0;">Este caso se cerró sin registrar una ayuda formal.</div>';
+    return `
+      <form id="wfd-aid-form">
+        <div class="field"><label>Tipo de ayuda</label>
+          <select name="aidType" id="wfd-aid-type">
+            <option value="unica_vez">Única vez</option>
+            <option value="periodo">Por un período (varios meses)</option>
+          </select>
+        </div>
+        <div class="field" id="wfd-aid-months-field" style="display:none;"><label>¿Por cuántos meses?</label><input type="number" name="aidMonths" min="1" step="1" value="1" /></div>
+        <button type="submit" class="btn btn-primary btn-sm">Otorgar ayuda</button>
+      </form>`;
+  }
+  const parts = [`<div class="hint-box" style="margin:0 0 8px;">${WELFARE_AID_TYPE_LABELS[c.aidType] || c.aidType}${c.aidMonths ? ` — ${c.aidMonths} mes${c.aidMonths === 1 ? '' : 'es'}` : ''} · otorgada el ${esc(fmtDateHuman(c.aidGrantedAt.slice(0, 10)))}</div>`];
+  if (c.status === 'cerrado') {
+    parts.push(`<span class="status-pill status-gray">✅ Solucionado el ${esc(fmtDateHuman((c.closedAt || c.updatedAt).slice(0, 10)))}</span>`);
+  } else if (c.nextReviewDate) {
+    const overdue = c.nextReviewDate < toISODate(new Date());
+    parts.push(`<span class="status-pill ${overdue ? 'status-red' : 'status-amber'}" style="display:inline-block; margin-bottom:10px;">⏰ Próxima evaluación: ${esc(fmtDateHuman(c.nextReviewDate))}${overdue ? ' (atrasada)' : ''}</span>`);
+    parts.push(`
+      <form id="wfd-review-form">
+        <div class="field"><label>¿Cómo sigue esta persona/familia?</label>
+          <select name="decision">
+            <option value="extender">Se extiende la ayuda un mes más</option>
+            <option value="solucionado">Se da por solucionado</option>
+          </select>
+        </div>
+        <div class="field"><label>Notas (opcional)</label><textarea name="notes" rows="2"></textarea></div>
+        <button type="submit" class="btn btn-secondary btn-sm">Registrar evaluación</button>
+      </form>`);
+  }
+  return parts.join('');
+}
 
 async function renderWelfareView() {
   const container = document.getElementById('view-root');
@@ -6631,6 +6782,7 @@ async function renderWelfareView() {
 
 function welfareCaseCardHtml(c) {
   const lastAction = c.actions.length ? c.actions[c.actions.length - 1] : null;
+  const reviewOverdue = c.nextReviewDate && c.nextReviewDate < toISODate(new Date());
   return `
     <div class="list-card welfare-case-card" data-id="${c.id}" style="cursor:pointer;">
       <div class="lc-main">
@@ -6638,7 +6790,10 @@ function welfareCaseCardHtml(c) {
         <div class="lc-sub">${c.description ? esc(c.description).slice(0, 90) + (c.description.length > 90 ? '…' : '') : '<span style="font-style:italic;">Sin descripción</span>'}</div>
         ${lastAction ? `<div class="lc-sub" style="margin-top:2px;">👣 Última acción: ${esc(fmtDateHuman(lastAction.date))} — ${esc(lastAction.note).slice(0, 70)}${lastAction.note.length > 70 ? '…' : ''}</div>` : ''}
       </div>
-      <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span>
+      <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+        <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span>
+        ${c.nextReviewDate && c.status !== 'cerrado' ? `<span class="status-pill ${reviewOverdue ? 'status-red' : 'status-amber'}" style="font-size:10.5px;">⏰ ${esc(fmtDateHuman(c.nextReviewDate))}</span>` : ''}
+      </div>
     </div>`;
 }
 
@@ -6682,7 +6837,16 @@ function openWelfareCaseModal(existing) {
   document.getElementById('wf-cancel').addEventListener('click', wfGuardedClose);
   document.getElementById('wf-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wf-modal-backdrop') wfGuardedClose(); });
   getNameSuggestions();
-  wireNameAutocomplete(document.querySelector('#wf-form [name="memberName"]'), () => nameSuggestionsCache?.welfareMembers);
+  // Pedido explícito: "en caso de Bienestar también usar el Directorio" —
+  // mismo criterio que Entrevistas/Discursos, salvo que acá el campo ya
+  // tenía su propio autocompletado por historial (wireNameAutocomplete, no
+  // wireMemberPicker): alcanza con sumarle los nombres del Directorio del
+  // barrio a la misma lista de sugerencias, sin duplicar. A diferencia del
+  // Directorio (Miembros), que quedó exclusivo de Obispado/Administrador,
+  // el NOMBRE del Directorio ya se comparte para autocompletar en
+  // /api/names/suggestions (ver names.js) — por eso no hace falta ningún
+  // permiso especial acá tampoco.
+  wireNameAutocomplete(document.querySelector('#wf-form [name="memberName"]'), () => mergeUniqueNames(nameSuggestionsCache?.welfareMembers, nameSuggestionsCache?.directoryNames));
   const deleteBtn = document.getElementById('wf-delete');
   if (deleteBtn) deleteBtn.addEventListener('click', async () => {
     if (!(await confirmModal('¿Eliminar este caso de Bienestar? Se perderá todo su historial de seguimiento.', { title: 'Eliminar caso', confirmText: 'Eliminar', danger: true }))) return;
@@ -6720,6 +6884,10 @@ function openWelfareCaseDetailModal(c) {
         <div class="modal-body">
           <div class="hint-box" style="margin-top:0;">${WELFARE_CATEGORY_LABELS[c.category] || esc(c.category)} · <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span></div>
           ${c.description ? `<p style="font-size:13.5px; margin:10px 0;">${esc(c.description)}</p>` : ''}
+          <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin:14px 0 6px;">📎 Formulario de autosuficiencia</div>
+          <div id="wfd-form-attachment">${welfareSelfRelianceFormHtml(c)}</div>
+          <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin:14px 0 6px;">🤝 Ayuda otorgada</div>
+          <div id="wfd-aid-section">${welfareAidSectionHtml(c)}</div>
           <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin:14px 0 6px;">👣 Seguimiento</div>
           <div id="wfd-actions">
             ${sortedActions.length ? sortedActions.map((a) => `
@@ -6744,6 +6912,63 @@ function openWelfareCaseDetailModal(c) {
   document.getElementById('wfd-close').addEventListener('click', closeModal);
   document.getElementById('wfd-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wfd-modal-backdrop') closeModal(); });
   document.getElementById('wfd-edit').addEventListener('click', () => openWelfareCaseModal(c));
+
+  // Formulario de autosuficiencia: subir (foto/PDF) o quitar el adjunto.
+  const formInput = document.getElementById('wfd-form-input');
+  if (formInput) formInput.addEventListener('change', async () => {
+    const file = formInput.files[0];
+    if (!file) return;
+    const statusEl = document.getElementById('wfd-form-status');
+    statusEl.textContent = 'Subiendo…';
+    try {
+      const updated = await uploadSelfRelianceForm(c.id, file);
+      toast('Formulario adjuntado');
+      openWelfareCaseDetailModal(updated);
+    } catch (err) {
+      statusEl.innerHTML = `<span class="error-msg">${esc(err.message)}</span>`;
+    }
+  });
+  const formRemoveBtn = document.getElementById('wfd-form-remove');
+  if (formRemoveBtn) formRemoveBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('¿Quitar el formulario adjunto?', { title: 'Quitar adjunto', confirmText: 'Quitar', danger: true }))) return;
+    try {
+      const updated = await api(`/welfare-cases/${c.id}/self-reliance-form`, { method: 'DELETE' });
+      toast('Formulario quitado');
+      openWelfareCaseDetailModal(updated);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // Otorgar ayuda (única vez o por un período): crea el primer compromiso
+  // de evaluación mensual automáticamente del lado del servidor.
+  const aidForm = document.getElementById('wfd-aid-form');
+  if (aidForm) {
+    const aidTypeSel = document.getElementById('wfd-aid-type');
+    const monthsField = document.getElementById('wfd-aid-months-field');
+    aidTypeSel.addEventListener('change', () => { monthsField.style.display = aidTypeSel.value === 'periodo' ? '' : 'none'; });
+    aidForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(aidForm);
+      try {
+        const updated = await api(`/welfare-cases/${c.id}/grant-aid`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+        toast('Ayuda otorgada — se creó el compromiso de seguimiento');
+        openWelfareCaseDetailModal(updated);
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  // Registrar la evaluación mensual: extender un mes más (crea el próximo
+  // compromiso automáticamente) o dar el caso por solucionado (lo cierra).
+  const reviewForm = document.getElementById('wfd-review-form');
+  if (reviewForm) reviewForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(reviewForm);
+    try {
+      const updated = await api(`/welfare-cases/${c.id}/review`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+      toast('Evaluación registrada');
+      openWelfareCaseDetailModal(updated);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
   document.getElementById('wfd-action-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);

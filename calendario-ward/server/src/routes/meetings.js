@@ -91,7 +91,11 @@ export function assignableUsersFor(user, data) {
     .sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
-function findMeetingWithCommitment(data, commitmentId) {
+// Exportada para que welfare.js pueda ubicar y completar el compromiso de
+// evaluación mensual de un caso de Bienestar por su id global, con el mismo
+// mecanismo que ya usa este archivo para /api/commitments/:id/complete —
+// sin duplicar la búsqueda.
+export function findMeetingWithCommitment(data, commitmentId) {
   for (const m of data.meetings) {
     const c = (m.commitments || []).find((x) => x.id === commitmentId);
     if (c) return { meeting: m, commitment: c };
