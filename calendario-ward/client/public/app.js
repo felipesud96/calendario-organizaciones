@@ -1848,44 +1848,128 @@ function openBottomNavMoreSheet(overflowKeys) {
   });
 }
 
-// Punto 98: botón flotante "+" — en celular, además del botón "+ Nueva…" de
-// siempre arriba de cada pantalla (que puede quedar lejos del pulgar si la
-// lista es larga y hay que bajar a verla), un botón circular fijo abajo a
-// la derecha hace exactamente lo mismo con un solo toque, sin duplicar la
-// lógica de cada formulario: en vez de reimplementar "crear" para cada
-// módulo, el botón flotante simplemente busca cuál de los botones "+" de
-// siempre está presente en la pantalla actual y le hace clic él mismo. Si
-// la pantalla no tiene ninguna acción de "crear" (Estadísticas, por
-// ejemplo, o "Mis Asignaciones" que son compromisos que llegan solos, no se
-// crean a mano), el botón flotante se esconde solo.
-const FAB_TARGET_CANDIDATES = ['cal-new-event', 'my-act-new', 'iv-new', 'meeting-new', 'wf-new', 'cs-new', 'tk-new', 'budget-new-category', 'user-new'];
-let mobileFabObserver = null;
+// Punto 98 (rediseño): botón flotante "+" — en celular, un botón circular
+// fijo abajo a la derecha abre un menú con TODAS las opciones de "crear"
+// que le corresponden a esta persona según su perfil (rol, organización),
+// sin importar en qué pestaña esté parada en ese momento. Antes este botón
+// imitaba el botón "+" de la pantalla ACTUAL nada más: si esa pantalla no
+// tenía ninguno (Estadísticas, por ejemplo, o cualquier pestaña de solo
+// consulta), apretarlo no hacía nada — quedaba visible pero sin acción,
+// confuso. Ahora el botón siempre abre el mismo menú de opciones (o se
+// esconde del todo solo si la persona de verdad no tiene NINGUNA acción de
+// crear en ningún módulo de la app), y elegir una opción cambia de pestaña
+// sola si hace falta y hace clic ella misma en el botón "+" real de esa
+// pantalla — así se sigue reutilizando siempre la misma lógica de cada
+// formulario, sin reimplementar nada.
+const QUICK_CREATE_ACTIONS = [
+  {
+    id: 'cal-new-event', icon: '📅', label: 'Nueva actividad',
+    view: 'calendar', visible: () => canManageAnyEvents(),
+  },
+  {
+    // Mismo formulario que "cal-new-event" (ver arriba) — solo se ofrece
+    // esta variante cuando la persona NO puede crear desde Calendario
+    // (Miembro), para no mostrar "Nueva actividad" dos veces seguidas.
+    id: 'my-act-new', icon: '📌', label: 'Nueva actividad',
+    view: 'myActivities', visible: () => !canManageAnyEvents() && canSeeMyActivitiesTab(),
+  },
+  {
+    id: 'iv-new', icon: '👤', label: 'Agendar entrevista',
+    view: 'interviews', visible: () => TAB_DEFS.interviews.visible(),
+  },
+  {
+    id: 'meeting-new', icon: '📋', label: 'Nueva acta',
+    view: 'meetings', visible: () => TAB_DEFS.meetings.visible(),
+  },
+  {
+    id: 'wf-new', icon: '🤲', label: 'Nuevo caso de Bienestar',
+    view: 'welfare', visible: () => TAB_DEFS.welfare.visible(),
+  },
+  {
+    id: 'cs-new', icon: '🧹', label: 'Nuevo turno de aseo',
+    view: 'cleaning', extraState: { assignmentsSubtab: 'cleaning' },
+    visible: () => TAB_DEFS.cleaning.visible(),
+  },
+  {
+    id: 'tk-new', icon: '🎤', label: 'Nuevo registro de discurso',
+    view: 'cleaning', extraState: { assignmentsSubtab: 'talks' },
+    visible: () => TAB_DEFS.cleaning.visible(),
+  },
+  {
+    id: 'budget-new-category', icon: '💰', label: 'Nueva categoría de presupuesto',
+    view: 'budget', visible: () => TAB_DEFS.budget.visible() && (isObispadoUser() || (!!state.user && state.user.role === 'ward_clerk')),
+  },
+  {
+    id: 'wg-new-quarter', icon: '📈', label: 'Cargar trimestre (Crecimiento del Barrio)',
+    view: 'wardGrowth', visible: () => canEditWardGrowth(),
+  },
+  {
+    id: 'user-new', icon: '⚙️', label: 'Nuevo usuario',
+    view: 'admin', visible: () => !!state.user && state.user.role === 'admin',
+  },
+];
+
+// Espera (sin bloquear) a que el botón "+" real de la pantalla de destino
+// exista en el DOM, ya que renderCurrentView() puede tardar un instante en
+// terminar de pintar (algunas vistas cargan datos del servidor primero).
+function waitForElement(id, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const start = performance.now();
+    function check() {
+      const el = document.getElementById(id);
+      if (el) return resolve(el);
+      if (performance.now() - start > timeoutMs) return resolve(null);
+      requestAnimationFrame(check);
+    }
+    check();
+  });
+}
+
+async function runQuickCreateAction(action) {
+  if (action.extraState) Object.assign(state, action.extraState);
+  if (state.view !== action.view) state.view = action.view;
+  renderCurrentView();
+  const el = await waitForElement(action.id);
+  if (el) el.click();
+}
+
+// Hoja que sube desde abajo, igual que openBottomNavMoreSheet — mismo
+// patrón visual, para que el menú del "+" se sienta parte de la misma app.
+function openQuickCreateMenu(actions) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop bottom-sheet-backdrop" id="quick-create-backdrop">
+      <div class="bottom-sheet">
+        <div class="bottom-sheet-handle"></div>
+        <div class="bottom-sheet-list">
+          ${actions.map((a) => `
+            <button type="button" class="bottom-sheet-item" data-id="${a.id}">
+              <span class="bottom-nav-icon">${a.icon}</span>
+              <span>${esc(a.label)}</span>
+            </button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('quick-create-backdrop').addEventListener('click', (e) => { if (e.target.id === 'quick-create-backdrop') close(); });
+  modalRoot.querySelectorAll('.bottom-sheet-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      close();
+      const action = actions.find((a) => a.id === btn.dataset.id);
+      if (action) runQuickCreateAction(action);
+    });
+  });
+}
+
 function wireMobileFab() {
   const fab = document.getElementById('mobile-fab');
   if (!fab) return;
-  fab.addEventListener('click', () => {
-    const target = fab.dataset.targetId && document.getElementById(fab.dataset.targetId);
-    if (target) target.click();
+  const eligible = QUICK_CREATE_ACTIONS.filter((a) => {
+    try { return a.visible(); } catch { return false; }
   });
-  const update = () => {
-    const targetId = FAB_TARGET_CANDIDATES.find((id) => document.getElementById(id));
-    if (targetId) { fab.hidden = false; fab.dataset.targetId = targetId; }
-    else { fab.hidden = true; delete fab.dataset.targetId; }
-  };
-  update();
-  // #view-root se vuelve a crear en cada render() (login/logout), así que el
-  // observer de la vez anterior quedaría mirando un nodo ya desconectado —
-  // por eso se desconecta el anterior y se crea uno nuevo cada vez, en vez
-  // de "atarlo una sola vez" como wireSwipeNavigation (que sí puede atarse a
-  // `document`, que nunca cambia).
-  if (mobileFabObserver) mobileFabObserver.disconnect();
-  let scheduled = false;
-  mobileFabObserver = new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => { scheduled = false; update(); });
-  });
-  mobileFabObserver.observe(document.getElementById('view-root'), { childList: true, subtree: true });
+  if (!eligible.length) { fab.hidden = true; fab.onclick = null; return; }
+  fab.hidden = false;
+  fab.onclick = () => openQuickCreateMenu(eligible);
 }
 
 function renderCurrentView() {
