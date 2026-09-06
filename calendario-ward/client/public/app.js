@@ -5530,6 +5530,16 @@ async function renderAdminUsersByOrg() {
     const hasPresident = members.some((u) => u.isPresident || u.calling === 'Presidente');
     const warnings = [];
     if (!members.length) warnings.push('<span class="status-pill status-red">⚠️ Sin nadie asignado</span>');
+    // Aclaración explícita del Obispado: a diferencia de Cuórum de Élderes o
+    // Sociedad de Socorro, Hombres Jóvenes NO tiene presidente/titular
+    // propio — el Obispado lo dirige directamente (es, de hecho, el
+    // presidente del Sacerdocio Aarónico), y los adultos de esa
+    // organización son líderes/asesores que lo ayudan, no una presidencia
+    // aparte. Por eso acá no corresponde el mismo aviso de "falta
+    // presidente" que sí tiene sentido en una organización con presidencia
+    // propia — se avisa solo si de verdad no hay NADIE (ni un solo líder
+    // adulto) asignado.
+    else if (o.name === 'Hombres Jóvenes') warnings.push('<span class="status-pill status-gray" title="El Obispado dirige Hombres Jóvenes directamente — estos son sus líderes adultos, no una presidencia propia.">ℹ️ Dirigido por el Obispado</span>');
     else if (!hasPresident) warnings.push('<span class="status-pill status-amber">⚠️ Sin presidente/titular</span>');
     return `
       <div class="list-card" style="flex-direction:column; align-items:stretch; gap:8px;">
