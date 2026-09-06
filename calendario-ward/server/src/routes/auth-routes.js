@@ -1,8 +1,29 @@
+import crypto from 'crypto';
 import { sendJson } from '../router.js';
 import { load, withDb, resolveCallingAndPresident, unmarkOtherPresidents, PRESIDENT_ORGS } from '../db.js';
 import { hashPassword, verifyPassword, createSession, destroySession, publicUser } from '../auth.js';
 import { requireAuth, requireRole } from '../guard.js';
-import { sendWhatsApp, normalizeWhatsAppPhone } from '../whatsapp.js';
+import { sendWhatsApp, normalizeWhatsAppPhone, canSendWhatsApp } from '../whatsapp.js';
+
+// ---------------- Recuperación de contraseña, self-service por WhatsApp ----------------
+// Pedido explícito del Obispado: que una persona pueda recuperar su propia
+// contraseña sin depender de que un Administrador se la restablezca a mano
+// (lo que ya existe en Administración → Usuarios y sigue funcionando igual
+// como respaldo). Se eligió WhatsApp y no correo porque acá el "Usuario" de
+// login casi nunca es un correo real (puede ser algo como
+// "sociedad.socorro", ver openUserModal en el cliente) y, además, el correo
+// (Gmail) puede estar sin configurar en el servidor — ver email.js. WhatsApp
+// usa el mismo CallMeBot que ya usa esta app para recordatorios: solo sirve
+// para quien YA vinculó su teléfono + clave en "Mi Perfil" mientras todavía
+// tenía acceso (ver whatsapp.js) — quien nunca lo vinculó sigue sin más
+// alternativa que pedirle a un Administrador que se la restablezca.
+const PASSWORD_RESET_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutos
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+
+function maskPhoneForDisplay(rawPhone) {
+  const digits = normalizeWhatsAppPhone(rawPhone);
+  return digits.length >= 4 ? `••• ${digits.slice(-4)}` : '•••';
+}
 
 export function registerAuthRoutes(router) {
   router.post('/api/auth/login', async (req, res, params, body) => {
@@ -117,6 +138,83 @@ export function registerAuthRoutes(router) {
       sendJson(res, 400, { error: `No se pudo enviar: ${err.message}` });
     }
   }));
+
+  // Paso 1 de la recuperación: pide un código de 6 dígitos y lo manda por
+  // WhatsApp — SIN requerir sesión (justamente porque la persona no puede
+  // entrar). Nunca revela si el "usuario" que escribieron existe o no de
+  // forma distinta a como ya lo hace /auth/login (que tampoco lo distingue
+  // de una contraseña incorrecta), salvo por el mensaje explícito de "esta
+  // cuenta no tiene WhatsApp vinculado", que es información que la propia
+  // persona (dueña de la cuenta) necesita para saber que debe pedirle a un
+  // Administrador que se la restablezca en vez de seguir esperando un
+  // mensaje que nunca va a llegar.
+  router.post('/api/auth/request-password-reset', async (req, res, params, body) => {
+    const normalizedEmail = String(body?.email || '').toLowerCase().trim();
+    if (!normalizedEmail) return sendJson(res, 400, { error: 'Escribe tu usuario' });
+    const data0 = load();
+    const user = data0.users.find((u) => u.email === normalizedEmail);
+    if (!user) return sendJson(res, 404, { error: 'No encontramos ninguna cuenta con ese usuario' });
+    if (!canSendWhatsApp(user)) {
+      return sendJson(res, 400, { error: 'Esta cuenta no tiene un WhatsApp vinculado — pide a un Administrador que te restablezca la contraseña desde Administración → Usuarios' });
+    }
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    try {
+      await sendWhatsApp({
+        phone: normalizeWhatsAppPhone(user.whatsappPhone),
+        apikey: user.whatsappApiKey,
+        text: `Tu código para recuperar tu contraseña en OrganizaSion es: ${code}\nVence en 10 minutos. Si no lo pediste tú, ignora este mensaje.`,
+      });
+    } catch (err) {
+      return sendJson(res, 400, { error: `No se pudo enviar el código por WhatsApp: ${err.message}` });
+    }
+    await withDb((data) => {
+      const u = data.users.find((x) => x.id === user.id);
+      u.passwordReset = { code, expiresAt: Date.now() + PASSWORD_RESET_CODE_TTL_MS, attempts: 0 };
+    });
+    sendJson(res, 200, { ok: true, maskedPhone: maskPhoneForDisplay(user.whatsappPhone) });
+  });
+
+  // Paso 2: valida el código y define la contraseña nueva. Igual que arriba,
+  // sin sesión. `attempts` limita los intentos de adivinar el código dentro
+  // de su ventana de 10 minutos; al agotarse (o vencer el código) hay que
+  // volver a pedir uno nuevo desde el paso 1.
+  router.post('/api/auth/reset-password', async (req, res, params, body) => {
+    const normalizedEmail = String(body?.email || '').toLowerCase().trim();
+    const code = String(body?.code || '').trim();
+    const newPassword = String(body?.newPassword || '');
+    if (!normalizedEmail || !code) return sendJson(res, 400, { error: 'Faltan datos' });
+    if (newPassword.length < 6) return sendJson(res, 400, { error: 'La contraseña debe tener al menos 6 caracteres' });
+    const data0 = load();
+    const user = data0.users.find((u) => u.email === normalizedEmail);
+    if (!user || !user.passwordReset) {
+      return sendJson(res, 400, { error: 'Primero solicita un código por WhatsApp' });
+    }
+    if (Date.now() > user.passwordReset.expiresAt) {
+      await withDb((data) => { data.users.find((x) => x.id === user.id).passwordReset = null; });
+      return sendJson(res, 400, { error: 'El código venció — solicita uno nuevo' });
+    }
+    if (user.passwordReset.attempts >= PASSWORD_RESET_MAX_ATTEMPTS) {
+      await withDb((data) => { data.users.find((x) => x.id === user.id).passwordReset = null; });
+      return sendJson(res, 400, { error: 'Demasiados intentos — solicita un código nuevo' });
+    }
+    if (user.passwordReset.code !== code) {
+      await withDb((data) => { data.users.find((x) => x.id === user.id).passwordReset.attempts += 1; });
+      return sendJson(res, 400, { error: 'Código incorrecto' });
+    }
+    await withDb((data) => {
+      const u = data.users.find((x) => x.id === user.id);
+      u.passwordHash = hashPassword(newPassword);
+      u.passwordReset = null;
+    });
+    // Igual que al iniciar sesión normal: entrega un token de una vez, para
+    // que la persona quede adentro de la app sin tener que volver a escribir
+    // la contraseña recién elegida.
+    const token = await createSession(user.id);
+    const data = load();
+    const org = user.organizationId ? data.organizations.find((o) => o.id === user.organizationId) : null;
+    const freshUser = data.users.find((u) => u.id === user.id);
+    sendJson(res, 200, { token, user: { ...publicUser(freshUser), organization: org || null } });
+  });
 
   // Agenda semanal de entrevistas (Punto 4, ampliación): un líder declara en
   // qué días/horas de la semana recibe entrevistas normalmente (p. ej.

@@ -152,6 +152,7 @@ export function registerRegistrationRoutes(router) {
         interviewAvailability: [],
         whatsappPhone: null,
         whatsappApiKey: null,
+        passwordReset: null,
         createdAt: new Date().toISOString(),
       };
       if (isPresident) unmarkOtherPresidents(d, u.organizationId, u.id);

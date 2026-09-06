@@ -270,6 +270,11 @@ export function load() {
   // "otorgar ayuda" (única vez o por un período) con adjunto del formulario
   // de autosuficiencia y evaluación mensual automática vía un compromiso en
   // Reuniones y Consejos — ver routes/welfare.js.
+  // migración: usuarios creados antes de que existiera la recuperación de
+  // contraseña self-service por WhatsApp — ver routes/auth-routes.js.
+  for (const u of data.users) {
+    if (u.passwordReset === undefined) { u.passwordReset = null; migrated = true; }
+  }
   for (const c of data.welfareCases) {
     if (c.aidType === undefined) { c.aidType = null; migrated = true; }
     if (c.aidMonths === undefined) { c.aidMonths = null; migrated = true; }

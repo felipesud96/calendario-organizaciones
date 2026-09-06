@@ -94,6 +94,9 @@ export function registerUserRoutes(router) {
         // ver "Mi Perfil" en el cliente y whatsapp.js en el servidor.
         whatsappPhone: null,
         whatsappApiKey: null,
+        // Recuperación de contraseña self-service por WhatsApp — ver
+        // routes/auth-routes.js.
+        passwordReset: null,
         createdAt: new Date().toISOString(),
       };
       if (isPresident) unmarkOtherPresidents(d, u.organizationId, u.id);

@@ -33,6 +33,7 @@ const state = {
   interviewsOrgTab: null, // Entrevistas: qué organización se muestra cuando el Obispado/Administrador ven más de una (null = por defecto, se recalcula al renderizar)
   adminSubtab: 'users',
   adminUsers: [],
+  adminUsersSearch: '',
   loading: false,
   meetingsSubtab: 'mine',
   assignmentsSubtab: 'cleaning',
@@ -1354,6 +1355,9 @@ function renderLogin() {
           </div>
           <button class="btn btn-primary btn-block" type="submit">Ingresar</button>
         </form>
+        <div class="hint-box" style="margin-top:0;">
+          <a href="#" id="go-forgot-password">¿Olvidaste tu contraseña?</a>
+        </div>
         <div class="hint-box">
           ¿No tienes cuenta? <a href="#" id="go-register">Solicita una aquí</a> — un administrador la debe aprobar antes de que puedas ingresar.
         </div>
@@ -1375,6 +1379,101 @@ function renderLogin() {
     }
   });
   document.getElementById('go-register').addEventListener('click', (e) => { e.preventDefault(); renderRegister(); });
+  document.getElementById('go-forgot-password').addEventListener('click', (e) => { e.preventDefault(); renderForgotPassword(); });
+}
+
+// ---------------- Recuperar contraseña (self-service por WhatsApp) ----------------
+// Pedido explícito: que una persona pueda recuperarla sola, sin depender de
+// que un Administrador se la restablezca a mano (esa opción sigue existiendo
+// igual, en Administración → Usuarios). Se eligió WhatsApp — no correo —
+// porque el "Usuario" de esta app casi nunca es un correo real, y porque el
+// envío de correo (Gmail) puede no estar configurado en el servidor; ver la
+// nota completa en server/src/routes/auth-routes.js. Solo funciona para
+// quien ya vinculó su WhatsApp en "Mi Perfil" mientras todavía tenía acceso
+// — si no lo hizo, el paso 1 se lo dice claramente en vez de dejarlo
+// esperando un mensaje que nunca va a llegar.
+function renderForgotPassword() {
+  root.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        <img class="login-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+        <h1 class="brand-wordmark">${BRAND_WORDMARK_HTML}</h1>
+        <p class="subtitle">Recuperar contraseña por WhatsApp</p>
+        <div id="fp-error"></div>
+        <div id="fp-step1">
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 12px;">Escribe tu usuario — si tienes un WhatsApp vinculado en tu perfil, te mandamos ahí un código de 6 dígitos.</p>
+          <form id="fp-form-1">
+            <div class="field">
+              <label>Usuario</label>
+              <input type="text" name="email" required autocomplete="username" placeholder="ej: primaria.presidenta" />
+            </div>
+            <button class="btn btn-primary btn-block" type="submit">Enviar código por WhatsApp</button>
+          </form>
+        </div>
+        <div id="fp-step2" style="display:none;">
+          <div id="fp-sent-hint" class="hint-box" style="margin-top:0;"></div>
+          <form id="fp-form-2">
+            <div class="field">
+              <label>Código recibido por WhatsApp</label>
+              <input type="text" name="code" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" />
+            </div>
+            <div class="field">
+              <label>Contraseña nueva</label>
+              <input type="password" name="newPassword" required minlength="6" autocomplete="new-password" placeholder="mínimo 6 caracteres" />
+            </div>
+            <button class="btn btn-primary btn-block" type="submit">Cambiar contraseña e ingresar</button>
+          </form>
+          <button type="button" class="btn btn-ghost btn-block" id="fp-resend" style="margin-top:8px;">Pedir un código nuevo</button>
+        </div>
+        <div class="hint-box">
+          <a href="#" id="fp-go-login">Volver a ingresar</a>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('fp-go-login').addEventListener('click', (e) => { e.preventDefault(); renderLogin(); });
+  let currentEmail = '';
+  const showError = (msg) => { document.getElementById('fp-error').innerHTML = `<div class="error-msg">${esc(msg)}</div>`; };
+  const clearError = () => { document.getElementById('fp-error').innerHTML = ''; };
+  document.getElementById('fp-form-1').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const fd = new FormData(e.target);
+    currentEmail = String(fd.get('email') || '').trim();
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Enviando…';
+    try {
+      const r = await api('/auth/request-password-reset', { method: 'POST', body: { email: currentEmail } });
+      document.getElementById('fp-step1').style.display = 'none';
+      document.getElementById('fp-step2').style.display = '';
+      document.getElementById('fp-sent-hint').textContent = `📲 Te enviamos un código al WhatsApp terminado en ${r.maskedPhone} — vence en 10 minutos.`;
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Enviar código por WhatsApp';
+    }
+  });
+  document.getElementById('fp-form-2').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const fd = new FormData(e.target);
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Cambiando…';
+    try {
+      const { token } = await api('/auth/reset-password', { method: 'POST', body: { email: currentEmail, code: fd.get('code'), newPassword: fd.get('newPassword') } });
+      setToken(token);
+      toast('Contraseña actualizada');
+      await boot();
+    } catch (err) {
+      showError(err.message);
+      btn.disabled = false; btn.textContent = 'Cambiar contraseña e ingresar';
+    }
+  });
+  document.getElementById('fp-resend').addEventListener('click', () => {
+    clearError();
+    document.getElementById('fp-step1').style.display = '';
+    document.getElementById('fp-step2').style.display = 'none';
+  });
 }
 
 // ---------------- Solicitar cuenta (autorregistro) ----------------
@@ -5126,6 +5225,7 @@ async function renderAdminView() {
     <div class="section-header"><div><h2>Administración</h2><p>Gestiona usuarios, organizaciones y solicitudes de cuenta</p></div></div>
     <div class="subtabs">
       <button class="subtab-btn ${state.adminSubtab === 'users' ? 'active' : ''}" data-tab="users">Usuarios</button>
+      <button class="subtab-btn ${state.adminSubtab === 'usersByOrg' ? 'active' : ''}" data-tab="usersByOrg">👥 Por organización</button>
       <button class="subtab-btn ${state.adminSubtab === 'orgs' ? 'active' : ''}" data-tab="orgs">Organizaciones</button>
       <button class="subtab-btn ${state.adminSubtab === 'requests' ? 'active' : ''}" data-tab="requests">Solicitudes${pendingCount > 0 ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingCount}</span>` : ''}</button>
       <button class="subtab-btn ${state.adminSubtab === 'stake' ? 'active' : ''}" data-tab="stake">🏛️ Estaca</button>
@@ -5134,6 +5234,7 @@ async function renderAdminView() {
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.adminSubtab = b.dataset.tab; renderAdminView(); }));
   if (state.adminSubtab === 'users') await renderAdminUsers();
+  else if (state.adminSubtab === 'usersByOrg') await renderAdminUsersByOrg();
   else if (state.adminSubtab === 'orgs') await renderAdminOrgs();
   else if (state.adminSubtab === 'stake') await renderAdminStake();
   else await renderAdminRequests();
@@ -5337,20 +5438,12 @@ function openApproveModal(reqItem) {
   });
 }
 
-async function renderAdminUsers() {
-  const content = document.getElementById('admin-content');
-  let users;
-  try { users = await api('/users'); } catch (e) { toast(e.message, 'error'); users = []; }
-  state.adminUsers = users;
-  content.innerHTML = `
-    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
-      <button class="btn btn-primary btn-sm" id="user-new">+ Nuevo usuario</button>
-    </div>
-    <div class="table-scroll">
-    <table class="data-table">
-      <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
-      <tbody>
-        ${users.map((u) => `
+// Fila de la tabla de un usuario — factorizada para que la reutilicen tanto
+// la lista plana de Usuarios como la vista agrupada "Por organización" (así
+// ambas se ven exactamente igual y no hay que mantener el mismo HTML dos
+// veces).
+function adminUserRowHtml(u) {
+  return `
           <tr>
             <td>${esc(u.name)}</td>
             <td>${esc(u.email)}</td>
@@ -5360,16 +5453,121 @@ async function renderAdminUsers() {
               <button class="btn btn-secondary btn-sm" data-edit-user="${u.id}">Editar</button>
               ${u.id !== state.user.id ? `<button class="btn btn-danger btn-sm" data-del-user="${u.id}">Eliminar</button>` : ''}
             </td>
-          </tr>`).join('')}
-      </tbody>
+          </tr>`;
+}
+
+// Pedido explícito: "no hay un buscador de nombre, tengo que buscar de
+// forma difícil" — filtra por nombre, usuario, rol u organización, sin
+// distinguir mayúsculas/tildes (normalizeSearchText, mismo criterio que ya
+// usa el resto de la app). Solo se reconstruye el <tbody> y el contador en
+// cada tecla — nunca el <input> mismo — para que el cursor y el foco no se
+// pierdan mientras se escribe (a diferencia de un re-render completo).
+function adminUsersMatchesSearch(u, search) {
+  if (!search) return true;
+  const haystack = [u.name, u.email, ROLE_LABELS[u.role], u.organizationName, u.calling ? callingLabel(u.organizationName, u.calling) : ''].join(' ');
+  return normalizeSearchText(haystack).includes(search);
+}
+
+async function renderAdminUsers() {
+  const content = document.getElementById('admin-content');
+  let users;
+  try { users = await api('/users'); } catch (e) { toast(e.message, 'error'); users = []; }
+  state.adminUsers = users;
+  content.innerHTML = `
+    <div class="section-header" style="margin-top:0; flex-wrap:wrap; gap:10px;">
+      <input type="text" id="au-search" placeholder="Buscar por nombre, usuario, rol u organización…" value="${esc(state.adminUsersSearch || '')}" style="max-width:320px;" />
+      <button class="btn btn-primary btn-sm" id="user-new">+ Nuevo usuario</button>
+    </div>
+    <p id="au-count" style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;"></p>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
+      <tbody id="au-tbody"></tbody>
     </table>
     </div>
   `;
+  const tbody = document.getElementById('au-tbody');
+  const countEl = document.getElementById('au-count');
+  const renderRows = () => {
+    const search = normalizeSearchText(state.adminUsersSearch || '');
+    const items = users.filter((u) => adminUsersMatchesSearch(u, search));
+    tbody.innerHTML = items.length
+      ? items.map(adminUserRowHtml).join('')
+      : `<tr><td colspan="5">${emptyStateHtml('Nadie coincide con esa búsqueda', null, '🔍', true)}</td></tr>`;
+    countEl.textContent = search ? `${items.length} de ${users.length} usuarios` : `${users.length} usuario${users.length === 1 ? '' : 's'}`;
+    tbody.querySelectorAll('[data-edit-user]').forEach((b) => b.addEventListener('click', () => openUserModal(users.find((u) => u.id === Number(b.dataset.editUser)))));
+    tbody.querySelectorAll('[data-del-user]').forEach((b) => b.addEventListener('click', async () => {
+      if (!(await confirmModal('¿Eliminar este usuario?', { title: 'Eliminar usuario', confirmText: 'Eliminar', danger: true }))) return;
+      try { await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' }); toast('Usuario eliminado'); renderAdminUsers(); }
+      catch (e) { toast(e.message, 'error'); }
+    }));
+  };
+  renderRows();
   document.getElementById('user-new').addEventListener('click', () => openUserModal());
+  document.getElementById('au-search').addEventListener('input', (e) => { state.adminUsersSearch = e.target.value; renderRows(); });
+}
+
+// ---------------- Administración: usuarios agrupados por organización ----------------
+// Pedido explícito: "que haya otra sub pestaña para poder ver cada
+// organización y qué usuarios tiene, para saber quién falta" — a diferencia
+// de la pestaña "Organizaciones" (que solo edita color/nombre/si agenda
+// entrevistas), esta es puramente de lectura: agrupa a los mismos usuarios
+// de la pestaña "Usuarios" por organización, para detectar de un vistazo
+// organizaciones con pocas o ninguna persona, o sin presidente/titular
+// asignado (el aviso ⚠️ usa el mismo dato — isPresident/calling — que ya
+// muestra la pestaña Usuarios, no un cálculo nuevo).
+async function renderAdminUsersByOrg() {
+  const content = document.getElementById('admin-content');
+  let users;
+  try { users = await api('/users'); } catch (e) { toast(e.message, 'error'); users = []; }
+  const byOrg = new Map(state.organizations.map((o) => [o.id, []]));
+  const noOrg = [];
+  for (const u of users) {
+    if (u.organizationId && byOrg.has(u.organizationId)) byOrg.get(u.organizationId).push(u);
+    else noOrg.push(u);
+  }
+  const orgSectionHtml = (o, members) => {
+    const hasPresident = members.some((u) => u.isPresident || u.calling === 'Presidente');
+    const warnings = [];
+    if (!members.length) warnings.push('<span class="status-pill status-red">⚠️ Sin nadie asignado</span>');
+    else if (!hasPresident) warnings.push('<span class="status-pill status-amber">⚠️ Sin presidente/titular</span>');
+    return `
+      <div class="list-card" style="flex-direction:column; align-items:stretch; gap:8px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px; font-weight:600;">
+            <span class="org-dot" style="background:${o.color}; display:inline-block;"></span>
+            ${esc(o.name)}
+            <span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">— ${members.length} persona${members.length === 1 ? '' : 's'}</span>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">${warnings.join(' ')}</div>
+        </div>
+        ${members.length ? `
+        <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
+          <tbody>${members.map(adminUserRowHtml).join('')}</tbody>
+        </table>
+        </div>` : ''}
+      </div>`;
+  };
+  content.innerHTML = `
+    <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 12px;">Los mismos usuarios de la pestaña "Usuarios", agrupados por organización — para detectar rápido a quién le falta gente o presidente/titular.</p>
+    ${state.organizations.map((o) => orgSectionHtml(o, byOrg.get(o.id) || [])).join('')}
+    ${noOrg.length ? `
+      <div class="list-card" style="flex-direction:column; align-items:stretch; gap:8px;">
+        <div style="font-weight:600;">Sin organización asignada <span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">— ${noOrg.length} persona${noOrg.length === 1 ? '' : 's'}</span></div>
+        <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Organización</th><th></th></tr></thead>
+          <tbody>${noOrg.map(adminUserRowHtml).join('')}</tbody>
+        </table>
+        </div>
+      </div>` : ''}
+  `;
   content.querySelectorAll('[data-edit-user]').forEach((b) => b.addEventListener('click', () => openUserModal(users.find((u) => u.id === Number(b.dataset.editUser)))));
   content.querySelectorAll('[data-del-user]').forEach((b) => b.addEventListener('click', async () => {
     if (!(await confirmModal('¿Eliminar este usuario?', { title: 'Eliminar usuario', confirmText: 'Eliminar', danger: true }))) return;
-    try { await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' }); toast('Usuario eliminado'); renderAdminUsers(); }
+    try { await api(`/users/${b.dataset.delUser}`, { method: 'DELETE' }); toast('Usuario eliminado'); renderAdminUsersByOrg(); }
     catch (e) { toast(e.message, 'error'); }
   }));
 }
