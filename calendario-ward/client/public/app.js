@@ -6983,6 +6983,19 @@ function welfareSelfRelianceFormHtml(c) {
 // o dar el caso por solucionado) — pedido explícito: "la persona que
 // extiende la ayuda tiene el compromiso de evaluar cómo sigue esa persona,
 // y si se debe extender la ayuda o se da por solucionado".
+// Meses completos transcurridos entre dos fechas ISO (YYYY-MM-DD) — usado
+// para el contador "X/Y meses" de una ayuda por período (Punto pedido
+// explícitamente). Cuenta meses calendario completos, no "30 días": si
+// empezó el 10 y hoy es el 9 del mes siguiente, todavía no se completó ese
+// mes.
+function welfareMonthsBetween(fromISO, toISO) {
+  const from = new Date(`${fromISO}T00:00:00`);
+  const to = new Date(`${toISO}T00:00:00`);
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() < from.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+
 function welfareAidSectionHtml(c) {
   if (!c.aidGrantedAt) {
     if (c.status === 'cerrado') return '<div class="hint-box" style="margin:0;">Este caso se cerró sin registrar una ayuda formal.</div>';
@@ -6995,10 +7008,23 @@ function welfareAidSectionHtml(c) {
           </select>
         </div>
         <div class="field" id="wfd-aid-months-field" style="display:none;"><label>¿Por cuántos meses?</label><input type="number" name="aidMonths" min="1" step="1" value="1" /></div>
+        <div class="field"><label>Fecha de inicio <span style="font-weight:400; color:var(--ink-soft);">(si ya se está ayudando desde antes, indica cuándo empezó)</span></label><input type="date" name="aidGrantedAt" value="${toISODate(new Date())}" max="${toISODate(new Date())}" /></div>
         <button type="submit" class="btn btn-primary btn-sm">Otorgar ayuda</button>
       </form>`;
   }
-  const parts = [`<div class="hint-box" style="margin:0 0 8px;">${WELFARE_AID_TYPE_LABELS[c.aidType] || c.aidType}${c.aidMonths ? ` — ${c.aidMonths} mes${c.aidMonths === 1 ? '' : 'es'}` : ''} · otorgada el ${esc(fmtDateHuman(c.aidGrantedAt.slice(0, 10)))}</div>`];
+  const startDate = c.aidGrantedAt.slice(0, 10);
+  const monthsElapsed = (c.aidType === 'periodo' && c.aidMonths) ? Math.min(welfareMonthsBetween(startDate, toISODate(new Date())), c.aidMonths) : null;
+  const parts = [`
+    <div class="hint-box" style="margin:0 0 8px;">
+      ${WELFARE_AID_TYPE_LABELS[c.aidType] || c.aidType}${c.aidMonths ? ` — ${c.aidMonths} mes${c.aidMonths === 1 ? '' : 'es'}` : ''} · otorgada el <span id="wfd-aid-start-display">${esc(fmtDateHuman(startDate))}</span>
+      ${c.status !== 'cerrado' ? `<button type="button" class="btn btn-ghost btn-sm" id="wfd-aid-start-edit" title="Corregir fecha de inicio" style="padding:0 4px; vertical-align:middle;">${icon('edit')}</button>` : ''}
+      ${monthsElapsed !== null ? ` · <strong>${monthsElapsed}/${c.aidMonths} meses</strong>` : ''}
+      <div id="wfd-aid-start-form" style="display:none; margin-top:8px; gap:6px; align-items:center;">
+        <input type="date" id="wfd-aid-start-input" value="${startDate}" max="${toISODate(new Date())}" />
+        <button type="button" class="btn btn-primary btn-sm" id="wfd-aid-start-save">Guardar</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="wfd-aid-start-cancel">Cancelar</button>
+      </div>
+    </div>`];
   if (c.status === 'cerrado') {
     parts.push(`<span class="status-pill status-gray">✅ Solucionado el ${esc(fmtDateHuman((c.closedAt || c.updatedAt).slice(0, 10)))}</span>`);
   } else if (c.nextReviewDate) {
@@ -7152,6 +7178,12 @@ function welfareCaseCardHtml(c) {
   const lastAction = c.actions.length ? c.actions[c.actions.length - 1] : null;
   const reviewOverdue = c.nextReviewDate && c.nextReviewDate < toISODate(new Date());
   const hasPendingReview = !!c.nextReviewDate && c.status !== 'cerrado';
+  // Contador "X/Y meses" (Punto pedido explícitamente) — también visible
+  // acá, en la tarjeta, para no tener que abrir el detalle solo para ver
+  // en qué mes de la ayuda va cada caso.
+  const monthsElapsed = (c.status !== 'cerrado' && c.aidType === 'periodo' && c.aidMonths)
+    ? Math.min(welfareMonthsBetween(c.aidGrantedAt.slice(0, 10), toISODate(new Date())), c.aidMonths)
+    : null;
   return `
     <div class="list-card welfare-case-card" data-id="${c.id}" style="cursor:pointer;">
       <div class="lc-main">
@@ -7161,6 +7193,7 @@ function welfareCaseCardHtml(c) {
       </div>
       <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
         <span class="status-pill ${WELFARE_STATUS_PILL[c.status] || 'status-gray'}">${WELFARE_STATUS_LABELS[c.status] || c.status}</span>
+        ${monthsElapsed !== null ? `<span class="status-pill status-blue" style="font-size:10.5px;">📅 ${monthsElapsed}/${c.aidMonths} meses</span>` : ''}
         ${hasPendingReview ? `<span class="status-pill ${reviewOverdue ? 'status-red' : 'status-amber'}" style="font-size:10.5px;">${reviewOverdue ? '⏰ Revisión vencida' : `⏰ ${esc(fmtDateHuman(c.nextReviewDate))}`}</span>` : ''}
         ${hasPendingReview ? `<button type="button" class="btn btn-secondary btn-sm" data-quick-review="${c.id}" style="padding:2px 8px; font-size:11.5px;">✓ Revisar</button>` : ''}
       </div>
@@ -7448,6 +7481,26 @@ function openWelfareCaseDetailModal(c) {
       try {
         const updated = await api(`/welfare-cases/${c.id}/grant-aid`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
         toast('Ayuda otorgada — se creó el compromiso de seguimiento');
+        openWelfareCaseDetailModal(updated);
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  // Corregir la fecha de inicio de una ayuda ya otorgada (Punto pedido
+  // explícitamente: "tenemos algunas personas que llevamos ayudando hace
+  // un tiempo") — no toca la evaluación mensual en curso, solo la fecha
+  // que se muestra y el contador de meses (welfareMonthsBetween).
+  const aidStartEditBtn = document.getElementById('wfd-aid-start-edit');
+  if (aidStartEditBtn) {
+    const startForm = document.getElementById('wfd-aid-start-form');
+    aidStartEditBtn.addEventListener('click', () => { startForm.style.display = 'flex'; });
+    document.getElementById('wfd-aid-start-cancel').addEventListener('click', () => { startForm.style.display = 'none'; });
+    document.getElementById('wfd-aid-start-save').addEventListener('click', async () => {
+      const dateVal = document.getElementById('wfd-aid-start-input').value;
+      if (!dateVal) return;
+      try {
+        const updated = await api(`/welfare-cases/${c.id}/aid-start-date`, { method: 'PUT', body: { aidGrantedAt: dateVal } });
+        toast('Fecha de inicio actualizada');
         openWelfareCaseDetailModal(updated);
       } catch (err) { toast(err.message, 'error'); }
     });

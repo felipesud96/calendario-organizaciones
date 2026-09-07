@@ -400,6 +400,19 @@ export function registerWelfareRoutes(router) {
     if (!responsible) {
       return sendJson(res, 400, { error: 'Quien registró este caso ya no existe como usuario — no se puede crear el compromiso de evaluación automático' });
     }
+    // Fecha de inicio de la ayuda (Punto pedido explícitamente: "tenemos
+    // algunas personas que llevamos ayudando hace un tiempo") — por defecto
+    // hoy, pero se puede indicar una fecha pasada para que el contador de
+    // meses (ver welfareAidMonthsElapsed en el cliente) refleje desde
+    // cuándo se está ayudando de verdad, aunque recién se registre en la
+    // app ahora. Nunca una fecha futura.
+    let aidGrantedAt = todayISO();
+    if (body?.aidGrantedAt !== undefined && body.aidGrantedAt !== '') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.aidGrantedAt) || body.aidGrantedAt > todayISO()) {
+        return sendJson(res, 400, { error: 'La fecha de inicio de la ayuda no es válida (no puede ser futura)' });
+      }
+      aidGrantedAt = body.aidGrantedAt;
+    }
     const nextReviewDate = addMonthsISO(todayISO(), WELFARE_REVIEW_INTERVAL_MONTHS);
     const now = new Date().toISOString();
     const updated = await withDb((data) => {
@@ -409,7 +422,7 @@ export function registerWelfareRoutes(router) {
       Object.assign(c, {
         aidType,
         aidMonths,
-        aidGrantedAt: now,
+        aidGrantedAt,
         status: 'en_seguimiento',
         reviewCommitmentId: commitment.id,
         nextReviewDate,
@@ -418,10 +431,51 @@ export function registerWelfareRoutes(router) {
       c.actions.push({
         id: nextId(data, 'welfareActions'),
         date: todayISO(),
-        note: `🤝 Se otorgó ayuda (${aidType === 'unica_vez' ? 'única vez' : `por ${aidMonths} mes${aidMonths === 1 ? '' : 'es'}`}). Próxima evaluación: ${nextReviewDate}.`,
+        note: `🤝 Se otorgó ayuda (${aidType === 'unica_vez' ? 'única vez' : `por ${aidMonths} mes${aidMonths === 1 ? '' : 'es'}`})${aidGrantedAt !== todayISO() ? `, con inicio el ${aidGrantedAt}` : ''}. Próxima evaluación: ${nextReviewDate}.`,
         createdBy: req.user.id,
         createdAt: now,
       });
+      return c;
+    });
+    const data = load();
+    sendJson(res, 200, withCaseInfo(data.welfareCases.find((c) => c.id === updated.id), data));
+  }));
+
+  // Corrige la fecha de inicio de una ayuda ya otorgada (Punto pedido
+  // explícitamente) — separado de grant-aid porque puede necesitarse
+  // corregir después (se registró con la fecha de hoy por error, o se
+  // quiere ajustar una vez que se conversa mejor desde cuándo se está
+  // ayudando). Nunca toca `nextReviewDate` ni el compromiso de evaluación
+  // — la fecha de inicio solo afecta el contador de meses (X/Y) que
+  // calcula el cliente, no el calendario de evaluaciones ya en curso.
+  router.put('/api/welfare-cases/:id/aid-start-date', requireRole(['admin', 'leader'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    if (!isWelfareCommitteeMember(req.user, data0)) {
+      return sendJson(res, 403, { error: 'El módulo de Bienestar es solo para el Obispado, el presidente de Cuórum de Élderes y la presidenta de Sociedad de Socorro' });
+    }
+    const existing = data0.welfareCases.find((c) => c.id === id);
+    if (!existing) return sendJson(res, 404, { error: 'Caso no encontrado' });
+    if (!existing.aidGrantedAt) return sendJson(res, 400, { error: 'Este caso todavía no tiene una ayuda otorgada' });
+    const dateStr = body?.aidGrantedAt;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || dateStr > todayISO()) {
+      return sendJson(res, 400, { error: 'La fecha de inicio no es válida (no puede ser futura)' });
+    }
+    const now = new Date().toISOString();
+    const updated = await withDb((data) => {
+      const c = data.welfareCases.find((x) => x.id === id);
+      const previous = c.aidGrantedAt.slice(0, 10);
+      c.aidGrantedAt = dateStr;
+      c.updatedAt = now;
+      if (previous !== dateStr) {
+        c.actions.push({
+          id: nextId(data, 'welfareActions'),
+          date: todayISO(),
+          note: `✏️ Se corrigió la fecha de inicio de la ayuda: ${previous} → ${dateStr}.`,
+          createdBy: req.user.id,
+          createdAt: now,
+        });
+      }
       return c;
     });
     const data = load();
