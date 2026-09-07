@@ -28,7 +28,7 @@ export function isWelfareCommitteeMember(user, data) {
   return !!org && WELFARE_COMMITTEE_ORGS.includes(org.name);
 }
 
-export const WELFARE_CATEGORIES = ['alimento', 'vivienda', 'empleo', 'medico', 'otro'];
+export const WELFARE_CATEGORIES = ['alimento', 'vivienda', 'empleo', 'otro'];
 export const WELFARE_STATUSES = ['abierto', 'en_seguimiento', 'cerrado'];
 
 // Pedido explícito: "que se pueda seleccionar más de 1 categoría, a veces las
@@ -155,7 +155,7 @@ function createWelfareReviewCommitment(data, welfareCase, assignee, dueDate) {
   return commitment;
 }
 function WELFARE_CATEGORY_LABEL_ES(cat) {
-  return { alimento: 'alimento', vivienda: 'vivienda', empleo: 'empleo', medico: 'médico', otro: 'otro' }[cat] || cat;
+  return { alimento: 'alimento', vivienda: 'vivienda', empleo: 'empleo', otro: 'otro' }[cat] || cat;
 }
 
 export function registerWelfareRoutes(router) {

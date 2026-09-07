@@ -6816,7 +6816,7 @@ async function openAddCommitmentModal(m) {
 // replica el mismo criterio del lado del cliente solo para no mostrar la
 // pestaña, nunca como la verdadera barrera de seguridad.
 
-const WELFARE_CATEGORY_LABELS = { alimento: '🍞 Alimento', vivienda: '🏠 Vivienda', empleo: '💼 Empleo', medico: '🩺 Médico', otro: '📋 Otro' };
+const WELFARE_CATEGORY_LABELS = { alimento: '🍞 Alimento', vivienda: '🏠 Vivienda', empleo: '💼 Empleo', otro: '📋 Otro' };
 // Mismo orden que WELFARE_CATEGORIES en el servidor (routes/welfare.js) —
 // se replica acá el arreglo, no solo el mapa de etiquetas, porque ahora un
 // caso puede tener MÁS DE UNA categoría a la vez (pedido explícito: "a
@@ -6824,7 +6824,7 @@ const WELFARE_CATEGORY_LABELS = { alimento: '🍞 Alimento', vivienda: '🏠 Viv
 // iterar las categorías en un orden fijo (checkboxes, chips de filtro,
 // barras del resumen).
 const WELFARE_CATEGORIES = Object.keys(WELFARE_CATEGORY_LABELS);
-const WELFARE_CATEGORY_COLORS = { alimento: '#d97706', vivienda: '#2563eb', empleo: '#16a34a', medico: '#dc2626', otro: '#64748b' };
+const WELFARE_CATEGORY_COLORS = { alimento: '#d97706', vivienda: '#2563eb', empleo: '#16a34a', otro: '#64748b' };
 const WELFARE_STATUS_LABELS = { abierto: 'Abierto', en_seguimiento: 'En seguimiento', cerrado: 'Cerrado' };
 const WELFARE_STATUS_PILL = { abierto: 'status-amber', en_seguimiento: 'status-blue', cerrado: 'status-gray' };
 const WELFARE_AID_TYPE_LABELS = { unica_vez: 'Única vez', periodo: 'Por un período' };
