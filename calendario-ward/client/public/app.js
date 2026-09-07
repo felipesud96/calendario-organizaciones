@@ -7358,15 +7358,15 @@ async function renderPastoralFocusView() {
   const evaluados = items.filter((x) => !!x.cuadrante);
   const groups = CUADRANTE_DISPLAY_ORDER.map((key) => ({ key, items: items.filter((x) => x.cuadrante === key) }));
 
-  // Filtro por "qué le falta" (Punto pedido explícitamente) — corta
-  // transversalmente los 4 cuadrantes, así que cuando está activo se
-  // reemplaza la agrupación por cuadrante por una sola lista plana con
-  // todos los que matchean, sin importar en qué cuadrante estén.
+  // Filtro por "qué le falta" (Punto pedido explícitamente). Antes cortaba
+  // transversalmente los 4 cuadrantes reemplazando la agrupación por una
+  // sola lista plana — pero eso impedía ver, por ejemplo, "dentro de
+  // Enfoque, quiénes tienen la recomendación vencida" (pedido explícito).
+  // Ahora el filtro se aplica DENTRO de cada cuadrante: la agrupación se
+  // mantiene siempre, y cada grupo muestra solo a quienes matchean el
+  // filtro activo (o a todos, si no hay ninguno activo).
   const activeFilterKey = state.ministracionMissingFilter || null;
   const activeFilterDef = MINISTERING_MISSING_FILTERS.find((f) => f.key === activeFilterKey) || null;
-  const filteredItems = activeFilterDef
-    ? evaluados.filter(activeFilterDef.match).sort((a, b) => a.member.name.localeCompare(b.member.name, 'es'))
-    : null;
 
   const movement = computeMinisteringMovementStats(items);
   const monthly = computeMinisteringMonthlySeries(items);
@@ -7394,30 +7394,28 @@ async function renderPastoralFocusView() {
         <button type="button" class="status-pill status-red ministracion-filter-chip ${activeFilterKey === f.key ? 'ministracion-filter-active' : ''}" data-filter="${f.key}" style="cursor:pointer; border:none; font:inherit; font-weight:700; text-transform:uppercase; font-size:11px; letter-spacing:.3px;">${f.label} (${evaluados.filter(f.match).length})</button>
       `).join('')}
     </div>
-    ${activeFilterDef ? `
-      <div class="card-list">
-        ${filteredItems.length ? filteredItems.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie con este filtro por ahora', null, '🔍', true)}
+    ${(!activeFilterDef && sinEvaluar.length) ? `
+      <div class="hint-box" style="margin-top:0;">📝 Todavía faltan ${sinEvaluar.length} ${sinEvaluar.length === 1 ? 'persona' : 'personas'} por evaluar por primera vez.</div>
+      <div class="card-list" style="margin-bottom:18px;">
+        ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
+      </div>` : ''}
+    ${groups.map((g) => {
+      // Con un filtro activo el grupo se muestra siempre expandido (para
+      // que los resultados se vean sin tener que tocar el encabezado) y
+      // solo contiene a quienes matchean ese filtro dentro de ese cuadrante.
+      const groupItems = activeFilterDef ? g.items.filter(activeFilterDef.match) : g.items;
+      const isOpen = activeFilterDef ? true : !!(state.ministracionOpenQuadrantes || {})[g.key];
+      return `
+      <div class="quadrante-header" data-quadrante="${g.key}" style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;">
+        <span class="quadrante-chevron" style="font-size:11px; width:12px; display:inline-block; color:var(--ink-soft);">${isOpen ? '▾' : '▸'}</span>
+        <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
+        <span style="font-weight:700; font-size:12.5px; color:var(--ink-soft);">${activeFilterDef ? `(${groupItems.length} de ${g.items.length})` : `(${g.items.length})`}</span>
+        <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
       </div>
-    ` : `
-      ${sinEvaluar.length ? `
-        <div class="hint-box" style="margin-top:0;">📝 Todavía faltan ${sinEvaluar.length} ${sinEvaluar.length === 1 ? 'persona' : 'personas'} por evaluar por primera vez.</div>
-        <div class="card-list" style="margin-bottom:18px;">
-          ${sinEvaluar.map(pastoralFocusCardHtml).join('')}
-        </div>` : ''}
-      ${groups.map((g) => {
-        const isOpen = !!(state.ministracionOpenQuadrantes || {})[g.key];
-        return `
-        <div class="quadrante-header" data-quadrante="${g.key}" style="font-weight:600; font-size:13.5px; color:var(--celeste-darker); margin:16px 0 6px; display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;">
-          <span class="quadrante-chevron" style="font-size:11px; width:12px; display:inline-block; color:var(--ink-soft);">${isOpen ? '▾' : '▸'}</span>
-          <span class="status-pill ${CUADRANTE_INFO[g.key].pill}">${CUADRANTE_INFO[g.key].emoji} ${g.key}</span>
-          <span style="font-weight:700; font-size:12.5px; color:var(--ink-soft);">(${g.items.length})</span>
-          <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">${esc(CUADRANTE_INFO[g.key].desc)}</span>
-        </div>
-        <div class="card-list" data-quadrante-list="${g.key}" ${isOpen ? '' : 'hidden'}>
-          ${g.items.length ? g.items.map(pastoralFocusCardHtml).join('') : emptyStateHtml('Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
-        </div>`;
-      }).join('')}
-    `}
+      <div class="card-list" data-quadrante-list="${g.key}" ${isOpen ? '' : 'hidden'}>
+        ${groupItems.length ? groupItems.map(pastoralFocusCardHtml).join('') : emptyStateHtml(activeFilterDef ? 'Nadie en este cuadrante con este filtro' : 'Nadie en este cuadrante todavía', null, CUADRANTE_INFO[g.key].emoji, true)}
+      </div>`;
+    }).join('')}
   `;
   content.querySelectorAll('.pastoral-focus-card').forEach((card) => {
     card.addEventListener('click', () => {
