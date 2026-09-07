@@ -21,9 +21,17 @@
 </head>
 <body>
   <div id="offline-banner" class="offline-banner" style="display:none;">📡 Sin conexión a internet — reconectando… los cambios no se guardarán hasta que vuelvas a estar en línea.</div>
+  <div id="install-banner" class="install-banner" style="display:none;">
+    <span class="install-banner-text">📲 Instala OrganizaSion en tu celular para un acceso más rápido</span>
+    <span class="install-banner-actions">
+      <button type="button" id="install-banner-yes" class="install-banner-btn install-banner-btn-primary">Instalar</button>
+      <button type="button" id="install-banner-no" class="install-banner-btn">Ahora no</button>
+    </span>
+  </div>
   <div id="app">
     <div class="loading-screen"><div class="spinner"></div></div>
   </div>
+  <button type="button" id="scroll-top-btn" class="scroll-top-btn" style="display:none;" title="Volver arriba" aria-label="Volver arriba">↑</button>
   <!-- Lee fotos de la pizarra para armar compromisos de una acta (ver
        "📷 Leer pizarra" en Nueva Acta) — corre entera en el navegador de la
        persona, no se manda ninguna foto a nuestro servidor ni a nadie. Si el

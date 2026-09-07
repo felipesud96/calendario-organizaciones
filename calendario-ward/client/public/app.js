@@ -88,6 +88,27 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
+// Punto 12 — en una conexión lenta, tocar "Guardar" y no ver ningún cambio
+// invita a volver a tocarlo (y mandar la acción duplicada). Este helper
+// envuelve el handler de clic de un botón de guardar: mientras espera la
+// respuesta del servidor lo deja deshabilitado y con un texto "Guardando…"
+// bien visible, y al terminar (haya ido bien o mal) lo devuelve a su texto
+// original. Uso: btn.addEventListener('click', withSavingState(btn, async () => { ... }));
+function withSavingState(btn, fn, savingLabel = 'Guardando…') {
+  return async (...args) => {
+    if (!btn || btn.disabled) return;
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-spinner"></span>${esc(savingLabel)}`;
+    try {
+      await fn(...args);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
+    }
+  };
+}
+
 // Estado vacío con una acción directa opcional (ej: "+ Agregar turno") —
 // evita que la persona tenga que ir a buscar el botón correspondiente en
 // otra parte de la pantalla. `cta` es opcional: { id, label }. Después de
@@ -733,6 +754,8 @@ function setFontScale(scale) { localStorage.setItem(FONT_SCALE_KEY, scale); appl
 async function boot() {
   applyFontScale(getFontScale());
   wireOfflineBanner();
+  wireInstallPrompt();
+  wireScrollTopButton();
   wireSwipeNavigation();
   if (!state.token) { renderLogin(); return; }
   try {
@@ -857,6 +880,88 @@ function wireOfflineBanner() {
   window.addEventListener('online', () => { update(); toast('Conexión recuperada'); });
   window.addEventListener('offline', update);
   update();
+}
+
+// ---------------- Punto 7: botón "volver arriba" ----------------
+// Genérico para toda la app (Directorio con sus ~185 personas, la lista de
+// Usuarios, etc.): la página entera es la que hace scroll (main.view no
+// tiene su propio overflow), así que basta con escuchar el scroll de la
+// ventana — no hace falta cablear esto por cada vista.
+const SCROLL_TOP_SHOW_AT = 400;
+function wireScrollTopButton() {
+  const btn = document.getElementById('scroll-top-btn');
+  if (!btn) return;
+  const update = () => {
+    btn.style.display = window.scrollY > SCROLL_TOP_SHOW_AT ? 'flex' : 'none';
+  };
+  window.addEventListener('scroll', update, { passive: true });
+  btn.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  update();
+}
+
+// ---------------- Instalar en pantalla de inicio (PWA) ----------------
+// Chrome/Android (y otros navegadores basados en Chromium) disparan el
+// evento "beforeinstallprompt" cuando la app cumple los requisitos del
+// manifest y todavía no está instalada. Lo interceptamos para mostrar nuestro
+// propio aviso (en vez de depender de que la persona encuentre la opción
+// escondida en el menú del navegador) y solo entonces disparamos el prompt
+// nativo. iOS Safari nunca dispara este evento, así que ahí el aviso
+// simplemente nunca aparece (no hay forma de instalar programáticamente).
+let deferredInstallPrompt = null;
+const INSTALL_DISMISS_KEY = 'organizasion_install_dismissed_at';
+const INSTALL_DISMISS_DAYS = 14;
+
+function installBannerWasRecentlyDismissed() {
+  const raw = localStorage.getItem(INSTALL_DISMISS_KEY);
+  if (!raw) return false;
+  const dismissedAt = Number(raw);
+  if (!dismissedAt) return false;
+  const daysSince = (Date.now() - dismissedAt) / (1000 * 60 * 60 * 24);
+  return daysSince < INSTALL_DISMISS_DAYS;
+}
+
+function maybeShowInstallBanner() {
+  const banner = document.getElementById('install-banner');
+  if (!banner || !deferredInstallPrompt) return;
+  if (installBannerWasRecentlyDismissed()) return;
+  banner.style.display = 'flex';
+}
+
+function hideInstallBanner() {
+  const banner = document.getElementById('install-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function wireInstallPrompt() {
+  const banner = document.getElementById('install-banner');
+  if (!banner) return;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    maybeShowInstallBanner();
+  });
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    hideInstallBanner();
+    localStorage.setItem(INSTALL_DISMISS_KEY, String(Date.now()));
+  });
+  const yesBtn = document.getElementById('install-banner-yes');
+  const noBtn = document.getElementById('install-banner-no');
+  if (yesBtn) yesBtn.addEventListener('click', async () => {
+    hideInstallBanner();
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    try {
+      await deferredInstallPrompt.userChoice;
+    } catch (e) { /* ignorar */ }
+    deferredInstallPrompt = null;
+  });
+  if (noBtn) noBtn.addEventListener('click', () => {
+    hideInstallBanner();
+    localStorage.setItem(INSTALL_DISMISS_KEY, String(Date.now()));
+  });
 }
 
 // ---------------- Recorrido guiado (primera vez) ----------------
@@ -2238,8 +2343,15 @@ async function renderCalendarView() {
           // que decide si al hacer clic se abre el formulario de editar o la
           // ficha de solo lectura (ver openItemModal).
           const draggableEvent = it.kind === 'event' && canEditEventsFor(it.organizationId);
+          // Punto 30: las de Estaca no tienen organizationColor (no pertenecen
+          // a ninguna organización del barrio) — antes eso dejaba el fondo
+          // sin definir y el texto blanco casi invisible sobre la celda. Ahora
+          // usan siempre un morado fijo (mismo tono que el anillo de
+          // .is-stake), para que de un vistazo se note que es de Estaca y no
+          // una actividad del barrio.
+          const calEventBg = it.kind === 'stake' ? '#7c3aed' : it.organizationColor;
           return `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''} ${draggableEvent ? 'cal-event-draggable' : ''}" style="background:${it.organizationColor}" data-kind="${it.kind}" data-id="${it.id}" ${draggableEvent ? 'draggable="true"' : ''} title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}${draggableEvent ? ' (arrástrala a otro día para moverla)' : ''}">
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''} ${draggableEvent ? 'cal-event-draggable' : ''}" style="background:${calEventBg}" data-kind="${it.kind}" data-id="${it.id}" ${draggableEvent ? 'draggable="true"' : ''} title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}${draggableEvent ? ' (arrástrala a otro día para moverla)' : ''}">
             ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it))}${esc(truncateTitle(it.title))}
           </button>`;
         }).join('')}
@@ -2253,10 +2365,10 @@ async function renderCalendarView() {
       <div class="card-list">
         ${day.items.map((it) => `
           <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
-            <span class="org-dot" style="background:${it.organizationColor}"></span>
+            <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
             <div class="lc-main">
               <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-              <div class="lc-sub">${esc(it.organizationName || '')}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+              <div class="lc-sub">${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName || '')}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
             </div>
             <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
           </div>`).join('')}
@@ -2570,10 +2682,10 @@ function openDayModal(iso) {
           <div class="card-list">
             ${items.length ? items.map((it) => `
               <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
-                <span class="org-dot" style="background:${it.organizationColor}"></span>
+                <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                  <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                  <div class="lc-sub">${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : emptyStateHtml('Sin actividades este día', null, '📆')}
@@ -3661,6 +3773,13 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
     }
     document.getElementById('ev-conflict-warning').innerHTML = '';
     const dates = !isEdit ? computeRecurrenceDates('ev', body.date) : [body.date];
+    // Punto 12: recién de acá para abajo es la escritura real al servidor
+    // (antes eran solo chequeos de choques que pueden volver a pedir un
+    // segundo clic con otro texto en el botón, como "Agendar de todas
+    // formas" — no queremos pisar ese texto con el estado de "Guardando…").
+    const evSaveOriginalHTML = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = `<span class="btn-spinner"></span>Guardando…`;
     try {
       if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body });
       else if (dates.length > 1) await api('/events/recurring', { method: 'POST', body: { ...body, dates } });
@@ -3694,6 +3813,9 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
         }
       }
       document.getElementById('ev-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = evSaveOriginalHTML;
     }
   });
 }
@@ -4874,7 +4996,7 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
       </div>
       ${canAllocate ? `
         <div class="budget-alloc-row">
-          <input type="number" min="0" step="1" class="budget-alloc-input" value="${cat.assigned}" />
+          <input type="number" min="0" step="1" inputmode="numeric" class="budget-alloc-input" value="${cat.assigned}" />
           <button type="button" class="btn btn-secondary btn-sm budget-alloc-save">Guardar asignación</button>
         </div>` : ''}
       <div class="budget-actions-row">
@@ -4970,7 +5092,7 @@ async function openBudgetExpenseModal(cat, existing = null) {
           <form id="be-form">
             <div class="field">
               <label>Monto</label>
-              <input type="number" name="amount" min="1" step="1" required placeholder="0" value="${existing ? existing.amount : ''}" />
+              <input type="number" name="amount" min="1" step="1" inputmode="numeric" required placeholder="0" value="${existing ? existing.amount : ''}" />
             </div>
             <div class="field">
               <label>Descripción</label>
@@ -5120,7 +5242,7 @@ async function openExpenseRequestModal(cat) {
           <form id="ber-form">
             <div class="field">
               <label>Monto</label>
-              <input type="number" name="amount" min="1" step="1" required placeholder="0" />
+              <input type="number" name="amount" min="1" step="1" inputmode="numeric" required placeholder="0" />
             </div>
             <div class="field">
               <label>Descripción</label>
@@ -5229,6 +5351,7 @@ async function renderAdminView() {
       <button class="subtab-btn ${state.adminSubtab === 'orgs' ? 'active' : ''}" data-tab="orgs">Organizaciones</button>
       <button class="subtab-btn ${state.adminSubtab === 'requests' ? 'active' : ''}" data-tab="requests">Solicitudes${pendingCount > 0 ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${pendingCount}</span>` : ''}</button>
       <button class="subtab-btn ${state.adminSubtab === 'stake' ? 'active' : ''}" data-tab="stake">🏛️ Estaca</button>
+      <button class="subtab-btn ${state.adminSubtab === 'backups' ? 'active' : ''}" data-tab="backups">💾 Respaldos</button>
     </div>
     <div id="admin-content"></div>
   `;
@@ -5237,7 +5360,79 @@ async function renderAdminView() {
   else if (state.adminSubtab === 'usersByOrg') await renderAdminUsersByOrg();
   else if (state.adminSubtab === 'orgs') await renderAdminOrgs();
   else if (state.adminSubtab === 'stake') await renderAdminStake();
+  else if (state.adminSubtab === 'backups') await renderAdminBackups();
   else await renderAdminRequests();
+}
+
+// ---------------- Administración: respaldos automáticos de la base de datos ----------------
+// Punto pedido explícitamente: "en caso de que algo se corrompa" — copias
+// diarias automáticas (ver backup.js del servidor) más la posibilidad de
+// bajar una copia a mano en cualquier momento. Se explica con honestidad la
+// limitación real: las copias viven en el mismo disco que la base de datos
+// real, así que no reemplazan bajar una copia de vez en cuando aparte.
+async function renderAdminBackups() {
+  const content = document.getElementById('admin-content');
+  content.innerHTML = skeletonCardsHtml(2);
+  let data;
+  try { data = await api('/admin/backups'); } catch (e) { content.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`; return; }
+  const backups = data.backups || [];
+  const fmtSize = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  content.innerHTML = `
+    <div class="hint-box" style="margin-bottom:14px;">
+      🛡️ Se guarda una copia automática de toda la base de datos una vez al día (se mantienen las últimas ${30}).
+      Esto protege ante un archivo que se corrompe o un borrado accidental — pero las copias quedan en el mismo
+      servidor que los datos reales, así que de vez en cuando conviene además descargar una copia a otro lugar
+      (por ejemplo tu computadora) con el botón de abajo.
+    </div>
+    <button class="btn btn-primary" id="backup-run-now" style="margin-bottom:14px;">💾 Crear copia ahora</button>
+    <div id="backup-run-error"></div>
+    ${backups.length ? `
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Tamaño</th><th></th></tr></thead>
+        <tbody>
+          ${backups.map((b) => `
+            <tr>
+              <td>${esc(fmtDateHuman(b.createdAt.slice(0, 10)))} ${esc(b.createdAt.slice(11, 16))}</td>
+              <td>${esc(fmtSize(b.sizeBytes))}</td>
+              <td><button type="button" class="btn btn-secondary btn-sm" data-download-backup="${esc(b.filename)}">⬇️ Descargar</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>` : emptyStateHtml('Todavía no hay ninguna copia registrada', null, '💾')}
+  `;
+  const runBtn = document.getElementById('backup-run-now');
+  runBtn.addEventListener('click', withSavingState(runBtn, async () => {
+    try {
+      await api('/admin/backups/run', { method: 'POST' });
+      toast('Copia creada');
+      renderAdminBackups();
+    } catch (e) {
+      document.getElementById('backup-run-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  }));
+  content.querySelectorAll('[data-download-backup]').forEach((btn) => {
+    btn.addEventListener('click', withSavingState(btn, async () => {
+      const filename = btn.dataset.downloadBackup;
+      try {
+        // No se usa el helper api() porque este endpoint no devuelve JSON
+        // para consumir sino el archivo mismo — se pide con fetch directo
+        // (mandando igual el token de sesión en el header) y se arma la
+        // descarga en el navegador a partir del blob, mismo mecanismo que
+        // ya usa la exportación a CSV (ver downloadCsv).
+        const res = await fetch(`${API}/admin/backups/${encodeURIComponent(filename)}/download`, {
+          headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+        });
+        if (!res.ok) throw new Error('No se pudo descargar el respaldo');
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }));
+  });
 }
 
 // ---------------- Administración: enlace del calendario de Estaca ----------------
@@ -7007,7 +7202,7 @@ function welfareAidSectionHtml(c) {
             <option value="periodo">Por un período (varios meses)</option>
           </select>
         </div>
-        <div class="field" id="wfd-aid-months-field" style="display:none;"><label>¿Por cuántos meses?</label><input type="number" name="aidMonths" min="1" step="1" value="1" /></div>
+        <div class="field" id="wfd-aid-months-field" style="display:none;"><label>¿Por cuántos meses?</label><input type="number" name="aidMonths" min="1" step="1" inputmode="numeric" value="1" /></div>
         <div class="field"><label>Fecha de inicio <span style="font-weight:400; color:var(--ink-soft);">(si ya se está ayudando desde antes, indica cuándo empezó)</span></label><input type="date" name="aidGrantedAt" value="${toISODate(new Date())}" max="${toISODate(new Date())}" /></div>
         <button type="submit" class="btn btn-primary btn-sm">Otorgar ayuda</button>
       </form>`;
@@ -7237,7 +7432,7 @@ function openWelfareQuickReviewModal(c) {
   document.getElementById('wfqr-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'wfqr-modal-backdrop') closeModal(); });
   const decisionSel = document.getElementById('wfqr-decision');
   decisionSel.addEventListener('change', () => toggleWelfareChecklist('wfqr', decisionSel.value === 'solucionado'));
-  document.getElementById('wfqr-save').addEventListener('click', async () => {
+  document.getElementById('wfqr-save').addEventListener('click', withSavingState(document.getElementById('wfqr-save'), async () => {
     const form = document.getElementById('wfqr-form');
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
@@ -7249,7 +7444,7 @@ function openWelfareQuickReviewModal(c) {
       toast('Evaluación registrada');
       renderWelfareView();
     } catch (err) { toast(err.message, 'error'); }
-  });
+  }));
 }
 
 // "📊 Resumen" (Puntos pedidos explícitamente: panel con totales y un
@@ -7364,7 +7559,7 @@ function openWelfareCaseModal(existing, allCases) {
       renderWelfareView();
     } catch (e) { toast(e.message, 'error'); }
   });
-  document.getElementById('wf-save').addEventListener('click', async () => {
+  document.getElementById('wf-save').addEventListener('click', withSavingState(document.getElementById('wf-save'), async () => {
     const form = document.getElementById('wf-form');
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
@@ -7401,7 +7596,7 @@ function openWelfareCaseModal(existing, allCases) {
     } catch (e) {
       document.getElementById('wf-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
-  });
+  }));
 }
 
 function openWelfareCaseDetailModal(c) {
@@ -7475,14 +7670,17 @@ function openWelfareCaseDetailModal(c) {
     const aidTypeSel = document.getElementById('wfd-aid-type');
     const monthsField = document.getElementById('wfd-aid-months-field');
     aidTypeSel.addEventListener('change', () => { monthsField.style.display = aidTypeSel.value === 'periodo' ? '' : 'none'; });
+    const aidFormSubmitBtn = aidForm.querySelector('button[type="submit"]');
     aidForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(aidForm);
-      try {
-        const updated = await api(`/welfare-cases/${c.id}/grant-aid`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
-        toast('Ayuda otorgada — se creó el compromiso de seguimiento');
-        openWelfareCaseDetailModal(updated);
-      } catch (err) { toast(err.message, 'error'); }
+      await withSavingState(aidFormSubmitBtn, async () => {
+        const fd = new FormData(aidForm);
+        try {
+          const updated = await api(`/welfare-cases/${c.id}/grant-aid`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+          toast('Ayuda otorgada — se creó el compromiso de seguimiento');
+          openWelfareCaseDetailModal(updated);
+        } catch (err) { toast(err.message, 'error'); }
+      })();
     });
   }
 
@@ -7495,7 +7693,8 @@ function openWelfareCaseDetailModal(c) {
     const startForm = document.getElementById('wfd-aid-start-form');
     aidStartEditBtn.addEventListener('click', () => { startForm.style.display = 'flex'; });
     document.getElementById('wfd-aid-start-cancel').addEventListener('click', () => { startForm.style.display = 'none'; });
-    document.getElementById('wfd-aid-start-save').addEventListener('click', async () => {
+    const aidStartSaveBtn = document.getElementById('wfd-aid-start-save');
+    aidStartSaveBtn.addEventListener('click', withSavingState(aidStartSaveBtn, async () => {
       const dateVal = document.getElementById('wfd-aid-start-input').value;
       if (!dateVal) return;
       try {
@@ -7503,7 +7702,7 @@ function openWelfareCaseDetailModal(c) {
         toast('Fecha de inicio actualizada');
         openWelfareCaseDetailModal(updated);
       } catch (err) { toast(err.message, 'error'); }
-    });
+    }));
   }
 
   // Registrar la evaluación mensual: extender un mes más (crea el próximo
@@ -7513,16 +7712,19 @@ function openWelfareCaseDetailModal(c) {
   if (reviewForm) {
     const decisionSel = document.getElementById('wfd-review-decision');
     decisionSel.addEventListener('change', () => toggleWelfareChecklist('wfd-review', decisionSel.value === 'solucionado'));
+    const reviewFormSubmitBtn = reviewForm.querySelector('button[type="submit"]');
     reviewForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(reviewForm);
-      const body = Object.fromEntries(fd.entries());
-      if (body.decision === 'solucionado') body.closureChecklist = collectWelfareClosureChecklist(reviewForm);
-      try {
-        const updated = await api(`/welfare-cases/${c.id}/review`, { method: 'POST', body });
-        toast('Evaluación registrada');
-        openWelfareCaseDetailModal(updated);
-      } catch (err) { toast(err.message, 'error'); }
+      await withSavingState(reviewFormSubmitBtn, async () => {
+        const fd = new FormData(reviewForm);
+        const body = Object.fromEntries(fd.entries());
+        if (body.decision === 'solucionado') body.closureChecklist = collectWelfareClosureChecklist(reviewForm);
+        try {
+          const updated = await api(`/welfare-cases/${c.id}/review`, { method: 'POST', body });
+          toast('Evaluación registrada');
+          openWelfareCaseDetailModal(updated);
+        } catch (err) { toast(err.message, 'error'); }
+      })();
     });
   }
 
@@ -8789,8 +8991,8 @@ async function openEvaluationModal(ev) {
           <div id="pe-error"></div>
           <form id="pe-form">
             <div class="two-col">
-              <div class="field"><label>Asistencia esperada</label><input type="number" name="expectedAttendance" min="0" step="1" required /></div>
-              <div class="field"><label>Asistencia real</label><input type="number" name="actualAttendance" min="0" step="1" required /></div>
+              <div class="field"><label>Asistencia esperada</label><input type="number" name="expectedAttendance" min="0" step="1" inputmode="numeric" required /></div>
+              <div class="field"><label>Asistencia real</label><input type="number" name="actualAttendance" min="0" step="1" inputmode="numeric" required /></div>
             </div>
             <div class="field"><label>Feedback</label><textarea name="feedback" placeholder="¿Cómo resultó la actividad?"></textarea></div>
           </form>
@@ -9335,7 +9537,7 @@ function bpWardCouncilAlertHtml(wc) {
         ${wc.overdue ? `<button type="button" class="btn btn-secondary btn-sm" id="bp-create-council">📋 Crear acta de Consejo de Barrio</button>` : ''}
         <form class="council-alert-freq-form" id="bp-council-freq-form">
           <label for="bp-council-freq" style="font-weight:600; font-size:12.5px;">Frecuencia esperada (días):</label>
-          <input type="number" id="bp-council-freq" min="1" max="90" value="${wc.frequencyDays}" />
+          <input type="number" id="bp-council-freq" min="1" max="90" inputmode="numeric" value="${wc.frequencyDays}" />
           <button type="submit" class="btn btn-ghost btn-sm">Guardar</button>
         </form>
       </div>
@@ -9993,11 +10195,11 @@ function wgIndicatorFieldsHtml(categories, indicatorDefs, existingIndicators) {
         <div class="two-col wg-indicator-row">
           <div class="field">
             <label>${d.number}. ${esc(d.label)} — Real</label>
-            <input type="number" min="0" step="1" class="wg-ind-real" data-number="${d.number}" required value="${esc(realVal)}" />
+            <input type="number" min="0" step="1" inputmode="numeric" class="wg-ind-real" data-number="${d.number}" required value="${esc(realVal)}" />
           </div>
           <div class="field">
             <label>Potencial${d.hasPotential ? '' : ' (no aplica)'}</label>
-            <input type="number" min="0" step="1" class="wg-ind-pot" data-number="${d.number}" value="${esc(potVal)}" ${d.hasPotential ? '' : 'disabled placeholder="—"'} />
+            <input type="number" min="0" step="1" inputmode="numeric" class="wg-ind-pot" data-number="${d.number}" value="${esc(potVal)}" ${d.hasPotential ? '' : 'disabled placeholder="—"'} />
           </div>
         </div>`;
       }).join('')}
@@ -10020,7 +10222,7 @@ function wgConvertRowHtml(c) {
         </div>
       </div>
       <div class="two-col">
-        <div class="field"><label>Edad</label><input type="number" min="0" step="1" class="wg-cv-age" required value="${c?.age ?? ''}" /></div>
+        <div class="field"><label>Edad</label><input type="number" min="0" step="1" inputmode="numeric" class="wg-cv-age" required value="${c?.age ?? ''}" /></div>
         <div class="field"><label>¿Asistió?</label>
           <select class="wg-cv-attended">
             <option value="true" ${attendedVal === 'true' ? 'selected' : ''}>Sí</option>
@@ -10055,7 +10257,7 @@ async function openWardGrowthQuarterModal(existing = null) {
           <div id="wgq-error"></div>
           <form id="wgq-form">
             <div class="two-col">
-              <div class="field"><label>Año</label><input type="number" name="year" required min="2000" max="2100" value="${existing?.year || new Date().getFullYear()}" /></div>
+              <div class="field"><label>Año</label><input type="number" name="year" required min="2000" max="2100" inputmode="numeric" value="${existing?.year || new Date().getFullYear()}" /></div>
               <div class="field"><label>Trimestre</label>
                 <select name="quarter" required>
                   ${[1, 2, 3, 4].map((q) => `<option value="${q}" ${existing?.quarter === q ? 'selected' : ''}>T${q}</option>`).join('')}
@@ -10191,7 +10393,7 @@ function wgSnapshotFieldsHtml(existing) {
       ${g.fields.map(([path, label]) => `
         <div class="field">
           <label>${esc(label)}</label>
-          <input type="number" min="0" step="1" class="wgs-field" data-path="${path}" required value="${wgGetPath(existing, path) ?? ''}" />
+          <input type="number" min="0" step="1" inputmode="numeric" class="wgs-field" data-path="${path}" required value="${wgGetPath(existing, path) ?? ''}" />
         </div>`).join('')}
     </div>
   `).join('');

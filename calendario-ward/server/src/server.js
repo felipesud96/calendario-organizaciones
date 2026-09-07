@@ -28,10 +28,12 @@ import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
 import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
 import { registerAdminBackupRoutes } from './routes/adminBackup.js';
+import { registerBackupRoutes } from './routes/backups.js';
 import { registerDirectoryRoutes } from './routes/directory.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 import { startAchievementsScheduler } from './achievements.js';
+import { startBackupScheduler } from './backup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -60,6 +62,7 @@ registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
 registerAdminBackupRoutes(router);
+registerBackupRoutes(router);
 registerDirectoryRoutes(router);
 
 const MIME = {
@@ -166,4 +169,5 @@ server.listen(PORT, () => {
   startReminderScheduler();
   startStakeSyncScheduler();
   startAchievementsScheduler();
+  startBackupScheduler();
 });

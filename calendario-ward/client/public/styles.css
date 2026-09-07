@@ -66,6 +66,17 @@ a { color: var(--celeste-dark); }
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* Punto 12: mini spinner dentro de un botón "Guardando…" (ver withSavingState
+   en app.js) — mismo giro que .spinner, pero chico para caber en línea con
+   el texto del botón. */
+.btn-spinner {
+  display: inline-block; width: 13px; height: 13px; vertical-align: -2px;
+  border: 2px solid rgba(255,255,255,0.5); border-top-color: #fff;
+  border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 5px;
+}
+.btn-secondary .btn-spinner, .btn-ghost .btn-spinner {
+  border-color: rgba(3,105,161,0.3); border-top-color: var(--celeste-darker);
+}
 
 /* ---------- Login ---------- */
 .login-wrap {
@@ -118,6 +129,36 @@ a { color: var(--celeste-dark); }
   font-size: 12.5px;
   font-weight: 600;
   padding: 8px 12px;
+}
+.install-banner {
+  background: var(--celeste);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+.install-banner-text { flex: 1 1 auto; min-width: 200px; }
+.install-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.install-banner-btn {
+  border: 1px solid rgba(255,255,255,0.7);
+  background: transparent;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.install-banner-btn-primary { background: #fff; color: var(--celeste-darker); border-color: #fff; }
+@media (max-width: 640px) {
+  .install-banner { font-size: 12px; padding: 8px 10px; }
+  .install-banner-text { min-width: 0; width: 100%; text-align: center; }
+  .install-banner-actions { width: 100%; justify-content: center; }
 }
 .bulk-actions-bar {
   display: flex;
@@ -393,6 +434,19 @@ a { color: var(--celeste-dark); }
   cursor: pointer;
 }
 .mobile-fab:active { background: var(--celeste-dark); }
+/* Punto 7: botón flotante "volver arriba" — aparece tras bajar un poco en
+   listas largas (Directorio, Usuarios, etc.) para no tener que deslizar todo
+   el camino de vuelta. Al lado opuesto del "+" flotante (izquierda vs.
+   derecha) para que nunca se superpongan, y con el mismo offset inferior
+   que .mobile-fab en celular para no quedar tapado por la barra de abajo. */
+.scroll-top-btn {
+  position: fixed; left: 24px; bottom: 24px; z-index: 91;
+  width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--white); color: var(--celeste-darker); font-size: 20px; font-weight: 700;
+  align-items: center; justify-content: center; box-shadow: var(--shadow-lg);
+  cursor: pointer;
+}
+.scroll-top-btn:active { background: var(--celeste-lighter); }
 /* Hoja de "Más" — sube desde el borde inferior en vez de aparecer centrada
    como el resto de los modales, porque "Más" vive en la barra de abajo. */
 .bottom-sheet-backdrop { align-items: flex-end; }
@@ -797,6 +851,10 @@ table.data-table tr:last-child td { border-bottom: none; }
 /* Punto 51: "en seguimiento" de un caso de Bienestar — ni verde (todavía
    no está resuelto) ni ámbar (ya se está actuando, no es "sin empezar"). */
 .status-blue { background: #dbeafe; color: #1d4ed8; }
+/* Punto 30: distinguir de un vistazo lo sincronizado desde el calendario de
+   Estaca (morado) de las actividades propias del barrio, tanto en las listas
+   (Agenda, detalle del día) como en la cuadrícula del mes (ver .cal-event.is-stake). */
+.status-stake { background: #ede9fe; color: #6d28d9; }
 
 /* Chips de filtro de "Enfoque Ministración" (qué le falta a cada persona):
    son .status-pill normales pero como <button>, así que necesitan su
@@ -1094,6 +1152,7 @@ tr.wg-cat-row td {
   .tabs#main-tabs { display: none; }
   .bottom-nav { display: flex; }
   .mobile-fab { display: flex; bottom: calc(64px + 16px + env(safe-area-inset-bottom)); }
+  .scroll-top-btn { left: 16px; bottom: calc(64px + 16px + env(safe-area-inset-bottom)); width: 40px; height: 40px; font-size: 18px; }
   main.view { padding: 12px 12px calc(64px + 16px + env(safe-area-inset-bottom)); }
   .topbar-title small { display: none; }
   .bp-grid { grid-template-columns: 1fr !important; }
@@ -1113,6 +1172,21 @@ tr.wg-cat-row td {
   #logout-btn { padding: 6px 10px; font-size: 12.5px; }
   .topbar-dropdown-panel { padding: 10px 12px; }
   .search-panel-row input[type="text"] { font-size: 16px; } /* evita zoom automático de iOS al enfocar */
+  /* Punto 8: en formularios largos (p.ej. un caso de Bienestar con varias
+     secciones) había que estirar/deslizar el modal entero para llegar a
+     "Guardar"/"Cancelar". En celular el modal pasa a columna con altura fija:
+     el encabezado y el pie quedan clavados arriba/abajo y solo el cuerpo
+     hace scroll, así el pulgar siempre alcanza los botones sin buscarlos. */
+  .modal {
+    display: flex; flex-direction: column; max-height: 88vh; overflow-y: hidden;
+  }
+  .modal-header { flex-shrink: 0; }
+  .modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+  .modal-footer {
+    flex-shrink: 0; padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border); background: var(--white);
+    border-radius: 0 0 18px 18px;
+  }
 }
 
 /* ==================================================================
