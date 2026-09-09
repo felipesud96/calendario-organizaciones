@@ -7795,6 +7795,20 @@ function pastoralFocusMissingTags(it) {
   return tags.join(' ');
 }
 
+// Punto pedido explícitamente: dentro de un mismo cuadrante (sobre todo
+// Retener, donde se mezclan personas con asistencia Media y Alta —  la
+// "Baja" nunca llega a Retener/Enfoque, ver computeCuadrante) costaba
+// distinguir de un vistazo quién asiste más seguido. La asistencia "Baja"
+// ya tiene su propia etiqueta roja bien visible (pastoralFocusMissingTags,
+// "📉 Asistencia baja"), así que acá solo se agrega una píldora para Media
+// y Alta — mismo semáforo de colores (verde/ámbar/rojo) que ya usa el
+// resto de la app.
+function pastoralFocusAsistenciaBadge(it) {
+  if (it.asistencia === 'Alto') return '<span class="status-pill status-green">🟢 Asistencia alta</span>';
+  if (it.asistencia === 'Medio') return '<span class="status-pill status-amber">🟡 Asistencia media</span>';
+  return '';
+}
+
 // Punto pedido explícitamente: avisar cuando una evaluación quedó vieja
 // (nadie la revisó hace rato) — para que un cuadrante no se sienta
 // "verdadero" para siempre aunque la realidad de esa persona ya cambió.
@@ -8009,7 +8023,10 @@ function pastoralFocusCardHtml(it) {
   // mezclados en la misma lista (para quien ve ambos, es decir el
   // Obispado/Administrador), ya no alcanza con el nombre para saber a qué
   // presidencia le corresponde cada persona.
-  const sub = it.cuadrante ? `${it.member.category} · Asistencia ${it.asistencia}` : `${it.member.category} · Todavía no se ha evaluado`;
+  // La asistencia ya no va como texto plano acá — ahora es una píldora de
+  // color (pastoralFocusAsistenciaBadge) en la fila de abajo, para que se
+  // note de un vistazo sin tener que leer.
+  const sub = it.cuadrante ? it.member.category : `${it.member.category} · Todavía no se ha evaluado`;
   // Punto pedido explícitamente: "donde esté cada persona debería aparecer
   // en rojo qué le falta, para que sea más visible" — en vez de una sola
   // línea de texto con todos los datos mezclados, cada cosa pendiente es
@@ -8020,7 +8037,7 @@ function pastoralFocusCardHtml(it) {
       <div class="lc-main">
         <div class="lc-title">${esc(it.member.name)}</div>
         <div class="lc-sub">${esc(sub)}</div>
-        ${it.cuadrante ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${pastoralFocusMissingTags(it)}${pastoralFocusStaleBadge(it)}</div>` : ''}
+        ${it.cuadrante ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">${pastoralFocusAsistenciaBadge(it)}${pastoralFocusMissingTags(it)}${pastoralFocusStaleBadge(it)}</div>` : ''}
       </div>
       ${it.cuadrante ? `<span class="status-pill ${CUADRANTE_INFO[it.cuadrante].pill}">${CUADRANTE_INFO[it.cuadrante].emoji} ${it.cuadrante}</span>` : '<span class="status-pill status-gray">Sin evaluar</span>'}
     </div>`;
