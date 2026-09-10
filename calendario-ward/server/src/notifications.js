@@ -6,16 +6,45 @@
 
 import { sendEmail, isEmailConfigured } from './email.js';
 import { sendUserWhatsApp } from './whatsapp.js';
+import { sendUserPush } from './webpush.js';
 
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Devuelve la lista de destinatarios (líder y/o miembro) que tengan email cargado.
-function recipients(iv) {
+// Punto 40 — preferencias de notificación por tipo: cada usuario puede
+// apagar un tipo de aviso desde "Mi Perfil" (notificationPrefs: { interviews,
+// commitments, councilPrep, dailyDigest, push }). Si el campo no existe
+// (cuenta vieja, nunca tocó esa preferencia) se considera ACTIVADO por
+// defecto — así nadie deja de recibir algo que ya recibía sin haberlo
+// decidido. `user` puede ser null/undefined (ej: un email suelto que no
+// corresponde a ninguna cuenta) — en ese caso no hay preferencia que
+// respetar, así que se manda igual.
+export function notifEnabled(user, type) {
+  if (!user || !user.notificationPrefs) return true;
+  return user.notificationPrefs[type] !== false;
+}
+
+// Punto 39: el push tiene, además de la preferencia por TIPO de arriba
+// (interviews/commitments/etc.), un interruptor MAESTRO propio ('push') —
+// hay que pasar los dos filtros para que le llegue un push de un tipo dado:
+// que ese tipo no esté apagado, Y que no haya apagado el push en general
+// (por ejemplo, alguien que solo quiere sus recordatorios por WhatsApp).
+export function pushEnabledFor(user, type) {
+  return notifEnabled(user, type) && notifEnabled(user, 'push');
+}
+
+// Devuelve la lista de destinatarios (líder y/o miembro) que tengan email
+// cargado, salvo los que estén en `skipEmails` (Punto 40: la persona
+// desactivó ese tipo de aviso desde su cuenta — ver notifEnabled arriba).
+// El entrevistador es un campo de texto libre, no siempre ligado a una
+// cuenta real, así que su copia no se puede filtrar por preferencia: solo
+// se excluye por email explícito cuando SÍ hay una cuenta detrás (ver
+// checkAndSendReminders en reminders.js).
+function recipients(iv, skipEmails = new Set()) {
   const list = [];
-  if (iv.interviewerEmail) list.push({ email: iv.interviewerEmail, label: iv.interviewerName || 'líder' });
-  if (iv.memberEmail) list.push({ email: iv.memberEmail, label: iv.memberName || 'miembro' });
+  if (iv.interviewerEmail && !skipEmails.has(iv.interviewerEmail)) list.push({ email: iv.interviewerEmail, label: iv.interviewerName || 'líder' });
+  if (iv.memberEmail && !skipEmails.has(iv.memberEmail)) list.push({ email: iv.memberEmail, label: iv.memberName || 'miembro' });
   return list;
 }
 
@@ -30,9 +59,9 @@ function detailRows(iv) {
   ].filter(Boolean).join('');
 }
 
-async function sendToParticipants(iv, subject, buildHtml) {
+async function sendToParticipants(iv, subject, buildHtml, skipEmails = new Set()) {
   if (!isEmailConfigured()) return;
-  for (const r of recipients(iv)) {
+  for (const r of recipients(iv, skipEmails)) {
     try {
       await sendEmail({ to: r.email, subject, html: buildHtml(r) });
       console.log(`[notificaciones] "${subject}" enviado a ${r.email}`);
@@ -42,14 +71,15 @@ async function sendToParticipants(iv, subject, buildHtml) {
   }
 }
 
-export async function sendReminderEmail(iv) {
+export async function sendReminderEmail(iv, skipEmails = new Set()) {
   await sendToParticipants(
     iv,
     `Recordatorio: entrevista con ${iv.memberName} mañana`,
     (r) => `<p>Hola ${escHtml(r.label)},</p>
 <p>Este es un recordatorio: tienes una entrevista agendada para <strong>mañana</strong> en OrganizaSion.</p>
 <ul>${detailRows(iv)}</ul>
-<p>— OrganizaSion</p>`
+<p>— OrganizaSion</p>`,
+    skipEmails
   );
 }
 
@@ -166,6 +196,60 @@ export async function sendInterviewRescheduledWhatsApp(iv, memberUser, previous)
 
 export async function sendCommitmentDueTodayWhatsApp(commitment, user, meetingTitle) {
   await sendUserWhatsApp(user, `🎯 Recordatorio: tu compromiso vence HOY en OrganizaSion.\n"${commitment.description}" (acta: ${meetingTitle})`, 'compromiso vence hoy');
+}
+
+// Nace de una pregunta directa: cuando ya existía una actividad en un día, y
+// otra organización agenda encima (choque de horario y/o lugar), hasta ahora
+// SOLO se avisaba a quien la agendaba en segundo lugar (el aviso "suave" del
+// calendario, que igual la deja guardar) — quien la había puesto primero
+// nunca se enteraba. Este WhatsApp es inmediato (no espera al recordatorio
+// por cron) y le llega al DUEÑO de la actividad más antigua apenas se guarda
+// la que choca con ella.
+export async function sendEventConflictWhatsApp(originalEvent, newEvent, orgName, originalOwner) {
+  await sendUserWhatsApp(
+    originalOwner,
+    `⚠️ Choque de horario en OrganizaSion.\nTu actividad "${originalEvent.title}" del ${originalEvent.date} a las ${originalEvent.startTime} ahora se cruza con una actividad nueva de ${orgName}: "${newEvent.title}" (${newEvent.date} a las ${newEvent.startTime}).\nRevísalo en OrganizaSion → Mis Actividades.`,
+    'choque de horario con actividad nueva'
+  );
+}
+
+// ------------------------------------------------------------------
+// Punto 39 — Notificaciones push del navegador (ver webpush.js). Mismo
+// espíritu que las de WhatsApp de arriba: reciben directamente el `user`
+// (una notificación push SOLO puede llegarle a una cuenta que ya se
+// suscribió desde su propio navegador — no hay campo de texto libre
+// posible como con el email/entrevistador) y nunca lanzan hacia arriba.
+// Cada llamada debe ir siempre detrás de un chequeo de pushEnabledFor(user,
+// tipo) en el punto donde se dispara — igual criterio que ya se usa para
+// gatear canSendWhatsApp/notifEnabled antes de las de WhatsApp.
+// ------------------------------------------------------------------
+
+export async function sendInterviewReminderPush(iv, memberUser) {
+  await sendUserPush(memberUser, {
+    title: '⏰ Entrevista mañana',
+    body: `${iv.date} a las ${iv.startTime}${iv.location ? ' · ' + iv.location : ''}`,
+  });
+}
+
+export async function sendInterviewTodayPush(iv, memberUser) {
+  await sendUserPush(memberUser, {
+    title: '⏰ Hoy tienes una entrevista',
+    body: `${iv.startTime}${iv.endTime ? '-' + iv.endTime : ''}${iv.location ? ' · ' + iv.location : ''}${iv.interviewerName ? ' · con ' + iv.interviewerName : ''}`,
+  });
+}
+
+export async function sendCommitmentDueTodayPush(commitment, user, meetingTitle) {
+  await sendUserPush(user, {
+    title: '🎯 Compromiso vence hoy',
+    body: `${commitment.description} (acta: ${meetingTitle})`,
+  });
+}
+
+export async function sendEventConflictPush(originalEvent, newEvent, orgName, originalOwner) {
+  await sendUserPush(originalOwner, {
+    title: '⚠️ Choque de horario',
+    body: `"${originalEvent.title}" (${originalEvent.date}) ahora se cruza con una actividad nueva de ${orgName}.`,
+  });
 }
 
 // Resumen diario para el Obispado (y el Administrador): un solo correo cada

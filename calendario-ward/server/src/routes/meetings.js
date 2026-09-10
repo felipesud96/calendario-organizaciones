@@ -214,6 +214,37 @@ export function registerMeetingRoutes(router) {
     sendJson(res, 200, assignableUsersFor(req.user, data));
   }));
 
+  // Punto 18 (auto-generador de agenda): a diferencia del recordatorio por
+  // correo de checkCouncilPrepReminders (reminders.js), que solo AVISA que
+  // quedaron compromisos pendientes del consejo anterior, esto deja armar
+  // la agenda del acta NUEVA con esos mismos compromisos como temas de
+  // seguimiento concretos, ni bien se elige el tipo en "Nueva acta" — mismo
+  // criterio de "pendiente" (pending o not_fulfilled) que ya usa ese
+  // recordatorio, para que nunca se vean distintos. Mismo público que ese
+  // recordatorio (Obispado o Secretario de Barrio, sin filtrar por
+  // confidencialidad) — ya es el precedente de este mismo archivo.
+  router.get('/api/meetings/pending-from-previous', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res) => {
+    const data = load();
+    const type = req.query.type;
+    if (!MEETING_TYPES.includes(type)) return sendJson(res, 400, { error: 'Tipo de acta inválido' });
+    if (OBISPADO_ONLY_TYPES.includes(type) && !isObispadoLeader(req.user, data) && req.user.role !== 'ward_clerk') {
+      return sendJson(res, 403, { error: 'Solo el Obispado (o el Secretario de Barrio) puede ver esto para Consejo de Barrio o Coordinación de Ministración' });
+    }
+    const beforeDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayISO();
+    const previous = previousMeetingOfType(data, type, beforeDate);
+    if (!previous) return sendJson(res, 200, { previousMeeting: null, pending: [] });
+    const pending = (previous.commitments || [])
+      .filter((c) => c.status === 'pending' || c.status === 'not_fulfilled')
+      .map((c) => ({
+        id: c.id,
+        description: c.description,
+        dueDate: c.dueDate,
+        status: c.status,
+        assignedToName: userName(data, c.assignedToUserId),
+      }));
+    sendJson(res, 200, { previousMeeting: { id: previous.id, title: previous.title, date: previous.date }, pending });
+  }));
+
   // Listado de actas — cada organización ve las suyas (como el libro de
   // actas propio); el líder de Obispado y el Administrador ven las de
   // todas las organizaciones. Igual que en Entrevistas, es el servidor el

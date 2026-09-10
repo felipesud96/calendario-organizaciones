@@ -11,7 +11,8 @@ import { isEmailConfigured } from './email.js';
 import { canSendWhatsApp } from './whatsapp.js';
 import {
   sendReminderEmail, sendCommitmentDueSoonEmail, sendDailyDigestEmail, sendCouncilPrepEmail,
-  sendInterviewTodayWhatsApp, sendCommitmentDueTodayWhatsApp,
+  sendInterviewTodayWhatsApp, sendCommitmentDueTodayWhatsApp, notifEnabled,
+  pushEnabledFor, sendInterviewReminderPush, sendInterviewTodayPush, sendCommitmentDueTodayPush,
 } from './notifications.js';
 import { isObispadoLeader } from './routes/stake.js';
 import { computeBishopricOverview } from './routes/dashboard.js';
@@ -38,7 +39,14 @@ function dueForReminder(iv, now) {
   // ya se marcó ✅/❌ (por ejemplo, se adelantó o se canceló de antemano) —
   // no tiene sentido recordar una entrevista que ya se verificó.
   if (iv.status && iv.status !== 'scheduled') return false;
-  if (!iv.interviewerEmail && !iv.memberEmail) return false;
+  // Punto 39: antes se descartaba acá mismo una entrevista sin ningún email
+  // cargado (ni de entrevistador ni de miembro), porque este chequeo solo
+  // existía para el recordatorio por EMAIL. Ahora el mismo recordatorio de
+  // "24 horas antes" también manda push al miembro (si tiene cuenta y no lo
+  // apagó) — eso no depende de ningún email, así que ya no se puede cortar
+  // acá; sendReminderEmail ya se encarga sola de no mandar nada si de verdad
+  // no hay ningún email a quien escribirle (ver recipients() en
+  // notifications.js).
   const start = interviewStart(iv);
   if (Number.isNaN(start)) return false;
   const diff = start - now;
@@ -46,12 +54,28 @@ function dueForReminder(iv, now) {
 }
 
 async function checkAndSendReminders() {
-  if (!isEmailConfigured()) return;
+  // Punto 39: antes esta función entera cortaba con un `return` apenas
+  // faltaba GMAIL_USER/GMAIL_APP_PASSWORD — tenía sentido cuando lo único
+  // que hacía era mandar el email de "mañana". Ahora también manda el push
+  // al miembro, que es un canal aparte, así que ya no se puede cortar toda
+  // la función por eso: solo se salta el envío del email en sí.
+  const emailOn = isEmailConfigured();
   const data = load();
   const now = Date.now();
   const due = data.interviews.filter((iv) => dueForReminder(iv, now));
   for (const iv of due) {
-    await sendReminderEmail(iv);
+    // Punto 40: si el miembro tiene cuenta y apagó los avisos de
+    // "entrevistas", se le excluye de esta copia — el entrevistador (campo
+    // de texto libre, no siempre una cuenta real) sigue recibiendo la suya
+    // igual, porque no hay ninguna preferencia que consultarle.
+    const skipEmails = new Set();
+    let memberUser = null;
+    if (iv.memberUserId) {
+      memberUser = data.users.find((u) => u.id === Number(iv.memberUserId));
+      if (memberUser?.email && !notifEnabled(memberUser, 'interviews')) skipEmails.add(memberUser.email);
+    }
+    if (emailOn) await sendReminderEmail(iv, skipEmails);
+    if (memberUser && pushEnabledFor(memberUser, 'interviews')) await sendInterviewReminderPush(iv, memberUser);
     await withDb((d) => {
       const target = d.interviews.find((i) => i.id === iv.id);
       if (target) target.reminderSent = true;
@@ -74,7 +98,7 @@ async function checkCommitmentReminders() {
       if (c.status !== 'pending' || c.dueDate !== tomorrow || c.commitmentReminderSent) continue;
       const assignee = data.users.find((u) => u.id === Number(c.assignedToUserId));
       if (!assignee || !assignee.email) continue;
-      await sendCommitmentDueSoonEmail(c, assignee.email, assignee.name, m.title);
+      if (notifEnabled(assignee, 'commitments')) await sendCommitmentDueSoonEmail(c, assignee.email, assignee.name, m.title);
       await withDb((d) => {
         const meeting = d.meetings.find((x) => x.id === m.id);
         const target = meeting?.commitments?.find((x) => x.id === c.id);
@@ -103,7 +127,8 @@ async function checkInterviewTodayWhatsApp() {
   );
   for (const iv of due) {
     const memberUser = data.users.find((u) => u.id === Number(iv.memberUserId));
-    if (canSendWhatsApp(memberUser)) await sendInterviewTodayWhatsApp(iv, memberUser);
+    if (canSendWhatsApp(memberUser) && notifEnabled(memberUser, 'interviews')) await sendInterviewTodayWhatsApp(iv, memberUser);
+    if (pushEnabledFor(memberUser, 'interviews')) await sendInterviewTodayPush(iv, memberUser);
     await withDb((d) => {
       const target = d.interviews.find((i) => i.id === iv.id);
       if (target) target.whatsappTodayReminderSent = true;
@@ -122,7 +147,8 @@ async function checkCommitmentDueTodayWhatsApp() {
     for (const c of (m.commitments || [])) {
       if (c.status !== 'pending' || c.dueDate !== today || c.whatsappDueTodaySent) continue;
       const assignee = data.users.find((u) => u.id === Number(c.assignedToUserId));
-      if (canSendWhatsApp(assignee)) await sendCommitmentDueTodayWhatsApp(c, assignee, m.title);
+      if (canSendWhatsApp(assignee) && notifEnabled(assignee, 'commitments')) await sendCommitmentDueTodayWhatsApp(c, assignee, m.title);
+      if (pushEnabledFor(assignee, 'commitments')) await sendCommitmentDueTodayPush(c, assignee, m.title);
       await withDb((d) => {
         const meeting = d.meetings.find((x) => x.id === m.id);
         const target = meeting?.commitments?.find((x) => x.id === c.id);
@@ -162,7 +188,7 @@ async function checkCouncilPrepReminders() {
         assignedToName: data.users.find((u) => u.id === Number(c.assignedToUserId))?.name || '(usuario eliminado)',
       }));
       if (pendingInfo.length) {
-        const recipients = data.users.filter((u) => u.email && (u.role === 'ward_clerk' || isObispadoLeader(u, data)));
+        const recipients = data.users.filter((u) => u.email && (u.role === 'ward_clerk' || isObispadoLeader(u, data)) && notifEnabled(u, 'councilPrep'));
         const seen = new Set();
         for (const u of recipients) {
           if (seen.has(u.email)) continue;
@@ -206,7 +232,7 @@ async function checkDailyDigest() {
       }
     }
   }
-  const recipients = data.users.filter((u) => u.email && isObispadoLeader(u, data));
+  const recipients = data.users.filter((u) => u.email && isObispadoLeader(u, data) && notifEnabled(u, 'dailyDigest'));
   if (!recipients.length) { lastDigestDate = today; return; }
   for (const u of recipients) {
     await sendDailyDigestEmail(u.email, u.name, {

@@ -987,6 +987,10 @@ table.data-table tr:last-child td { border-bottom: none; }
 .wg-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 720px) { .wg-chart-grid { grid-template-columns: 1fr; } }
 
+/* Punto 27: Panel de Control — comparar dos años lado a lado. En celular se
+   apilan uno debajo del otro, igual criterio que wg-chart-grid arriba. */
+@media (max-width: 720px) { .stats-compare-grid { grid-template-columns: 1fr !important; gap: 24px !important; } }
+
 .wg-legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 6px; font-size: 11.5px; color: var(--ink-soft); }
 .wg-legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .wg-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }

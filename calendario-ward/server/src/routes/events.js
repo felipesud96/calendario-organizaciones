@@ -1,8 +1,10 @@
 import { sendJson } from '../router.js';
-import { load, withDb, nextId } from '../db.js';
+import { load, withDb, nextId, timesOverlap } from '../db.js';
 import { requireAuth } from '../guard.js';
 import { findStakeConflicts } from '../stakeCalendar.js';
 import { isObispadoLeader } from './stake.js';
+import { notifEnabled, pushEnabledFor, sendEventConflictWhatsApp, sendEventConflictPush } from '../notifications.js';
+import { buildIcsCalendar } from '../ics.js';
 
 // Mensaje de error cuando una actividad de organización o de todo el Barrio
 // choca con una actividad de Estaca de las que SÍ bloquean (conferencias,
@@ -130,6 +132,105 @@ export function canSeeMeeting(user, item) {
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// ------------------------------------------------------------------------
+// Choque "suave" entre organizaciones (Task nacida de una pregunta directa
+// del usuario): a diferencia del choque con Estaca (findStakeConflicts, que
+// SÍ bloquea salvo autorización del líder de Obispado), dos actividades de
+// distintas organizaciones del propio Barrio pueden chocar en horario y/o
+// lugar sin que nada lo impida — el cliente ya avisa de esto a quien está
+// agendando (ver findConflictingActivities en app.js), pero antes de esto
+// quien había agendado PRIMERO nunca se enteraba de que alguien agendó
+// encima. Estas funciones reproducen exactamente el mismo criterio que usa
+// el cliente (mismo org = no choca; igual horario O igual lugar = choca),
+// pero del lado del servidor, para poder avisarle al dueño de la actividad
+// más antigua.
+function normalizeLocationForConflict(loc) { return String(loc || '').trim().toLowerCase(); }
+
+function placesConflictServer(aLoc, aSala, bLoc, bSala) {
+  if (!aLoc || !bLoc) return false;
+  if (normalizeLocationForConflict(aLoc) !== normalizeLocationForConflict(bLoc)) return false;
+  if (aSala && bSala && normalizeLocationForConflict(aSala) !== normalizeLocationForConflict(bSala)) return false;
+  return true;
+}
+
+function orgSetForConflict(item) {
+  const ids = [Number(item.organizationId)];
+  if (Array.isArray(item.involvedOrganizationIds)) ids.push(...item.involvedOrganizationIds.map(Number));
+  return ids;
+}
+
+// Todas las demás actividades del mismo día que chocan (horario o lugar) con
+// `event` y son de una organización distinta (sin ninguna en común).
+function findOrgConflictsForEvent(data, event) {
+  return data.events.filter((other) => {
+    if (other.id === event.id) return false;
+    if (other.date !== event.date) return false;
+    const eventOrgs = orgSetForConflict(event);
+    const otherOrgs = orgSetForConflict(other);
+    if (eventOrgs.some((id) => otherOrgs.includes(id))) return false;
+    const timeConflict = timesOverlap(event.startTime, event.endTime, other.startTime, other.endTime);
+    const placeConflict = placesConflictServer(event.location, event.sala, other.location, other.sala);
+    return timeConflict || placeConflict;
+  });
+}
+
+// De esos choques, cuáles son MÁS ANTIGUOS que `event` (fueron creados
+// primero) — es decir, para `event` (recién creado/editado), quiénes son
+// los "dueños originales" a los que hay que avisar.
+function findOlderConflicts(data, event) {
+  return findOrgConflictsForEvent(data, event)
+    .filter((other) => new Date(other.createdAt).getTime() < new Date(event.createdAt).getTime());
+}
+
+// De esos choques, cuáles son MÁS NUEVOS que `event` — para saber si una
+// actividad propia (`event`, la más antigua) tiene hoy un choque sin avisar,
+// usado por la campana de notificaciones (ver notifications-summary.js).
+export function findNewerConflicts(data, event) {
+  return findOrgConflictsForEvent(data, event)
+    .filter((other) => new Date(other.createdAt).getTime() > new Date(event.createdAt).getTime());
+}
+
+// Actividades propias (como creador), aún futuras, que quedaron con un
+// choque de otra organización sin que su dueño se haya enterado — para la
+// campana de notificaciones. Se recalcula cada vez (igual que el resto de
+// los avisos de la campana): si la actividad más nueva se edita o se borra y
+// deja de chocar, el aviso desaparece solo, sin necesidad de "marcarlo como
+// visto".
+export function conflictingEventsOwnedBy(data, userId) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  return data.events
+    .filter((ev) => Number(ev.createdBy) === Number(userId) && ev.date >= todayIso)
+    .map((ev) => ({ event: ev, conflicts: findNewerConflicts(data, ev) }))
+    .filter((x) => x.conflicts.length > 0);
+}
+
+// Avisa por WhatsApp (inmediato, no espera al recordatorio por cron) al
+// dueño de cada actividad más antigua con la que `event` choca — salvo que
+// sea la misma persona quien la creó (ej. el Administrador agendando dos
+// organizaciones distintas) o que haya apagado este tipo de aviso desde "Mi
+// Perfil" (notificationPrefs.eventConflicts). Nunca lanza hacia arriba ni
+// retrasa la respuesta al usuario que está guardando: se llama sin `await`
+// desde el handler de la ruta.
+async function notifyOriginalOwnersOfConflict(data, event, creatorUserId) {
+  const olderConflicts = findOlderConflicts(data, event);
+  if (!olderConflicts.length) return;
+  const orgName = data.organizations.find((o) => o.id === Number(event.organizationId))?.name || 'otra organización';
+  for (const older of olderConflicts) {
+    if (Number(older.createdBy) === Number(creatorUserId)) continue;
+    const owner = data.users.find((u) => u.id === Number(older.createdBy));
+    if (!owner || !notifEnabled(owner, 'eventConflicts')) continue;
+    try {
+      await sendEventConflictWhatsApp(older, event, orgName, owner);
+      // Punto 39: mismo criterio de gateo que el WhatsApp de arriba (el
+      // `continue` de más arriba ya exige notifEnabled(owner,
+      // 'eventConflicts')) más el interruptor maestro de push.
+      if (pushEnabledFor(owner, 'eventConflicts')) await sendEventConflictPush(older, event, orgName, owner);
+    } catch (err) {
+      console.error('[eventos] error avisando choque de horario:', err.message);
+    }
+  }
+}
+
 function buildEventFields(body, orgs) {
   const { title, description, location, sala, startTime, endTime, organizationId, involvedOrganizationIds, isWardActivity, isMeeting, purpose, supervisingAdults } = body || {};
   const wardWide = !!isWardActivity;
@@ -191,6 +292,42 @@ export function registerEventRoutes(router) {
     sendJson(res, 200, items);
   }));
 
+  // Punto 31: descarga el archivo .ics de UNA sola actividad (o reunión, si
+  // quien pide puede verla — ver canSeeMeeting), para agregarla al
+  // calendario personal del dispositivo con un solo botón — a diferencia
+  // del feed de "Mis Actividades" (calendar.js), que es una SUSCRIPCIÓN
+  // completa y pública por token, este endpoint SÍ requiere sesión (igual
+  // que la descarga de respaldos, ver admin/backups) porque es una
+  // descarga puntual dentro de la app, no un enlace para pegar en otra app
+  // de calendario.
+  router.get('/api/events/:id/ics', requireAuth(async (req, res, params) => {
+    const id = Number(params.id);
+    const data = load();
+    const event = data.events.find((e) => e.id === id);
+    if (!event) return sendJson(res, 404, { error: 'Actividad no encontrada' });
+    if (!canSeeMeeting(req.user, event)) return sendJson(res, 403, { error: 'No puedes ver esta actividad' });
+    const org = data.organizations.find((o) => o.id === Number(event.organizationId));
+    const item = {
+      id: event.id,
+      kind: 'event',
+      date: event.date,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      summary: `${event.isMeeting ? '🔒 ' : event.isWardActivity ? '🏘️ ' : ''}${event.title}`,
+      location: event.location || '',
+      description: event.description || '',
+      organizationName: org?.name || '',
+    };
+    const ics = buildIcsCalendar([item], event.title);
+    const safeName = event.title.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'actividad';
+    res.writeHead(200, {
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${safeName}.ics"`,
+      'Cache-Control': 'no-cache, no-store',
+    });
+    res.end(ics);
+  }));
+
   router.post('/api/events', requireAuth(async (req, res, params, body) => {
     const { title, date, startTime, organizationId, purpose } = body || {};
     if (!title || !date || !startTime || !organizationId) {
@@ -224,6 +361,7 @@ export function registerEventRoutes(router) {
     });
     const data = load();
     sendJson(res, 201, withOrgInfo(event, data.organizations, req.user.id));
+    notifyOriginalOwnersOfConflict(data, event, req.user.id);
   }));
 
   // Crea varias ocurrencias de una misma actividad/reunión de una sola vez
@@ -282,6 +420,7 @@ export function registerEventRoutes(router) {
     });
     const data = load();
     sendJson(res, 201, created.map((e) => withOrgInfo(e, data.organizations, req.user.id)));
+    for (const e of created) notifyOriginalOwnersOfConflict(data, e, req.user.id);
   }));
 
   router.put('/api/events/:id', requireAuth(async (req, res, params, body) => {
@@ -337,6 +476,7 @@ export function registerEventRoutes(router) {
       return ev;
     });
     sendJson(res, 200, withOrgInfo(updated, data.organizations, req.user.id));
+    notifyOriginalOwnersOfConflict(load(), updated, req.user.id);
   }));
 
   // Confirmación de asistencia (RSVP) por el propio usuario — "Voy" / "No

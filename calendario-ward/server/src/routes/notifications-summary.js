@@ -4,6 +4,8 @@ import { requireAuth } from '../guard.js';
 import { isObispadoLeader } from './stake.js';
 import { computeBishopricOverview } from './dashboard.js';
 import { pendingEvaluationsFor } from './stats.js';
+import { stakeSyncFailingAlert } from '../stakeCalendar.js';
+import { conflictingEventsOwnedBy } from './events.js';
 
 // Módulo "Campana de notificaciones": junta en un solo lugar los avisos que
 // antes solo vivían en pantallas sueltas (o, en el caso de los compromisos
@@ -35,6 +37,24 @@ export function registerNotificationsSummaryRoutes(router) {
         key: 'myCommitments', icon: '🔔', count: mine.length,
         label: `Compromiso${mine.length === 1 ? '' : 's'} pendiente${mine.length === 1 ? '' : 's'}`,
         view: 'meetings', subtab: 'mine',
+      });
+    }
+
+    // Actividades propias con un choque de horario/lugar sin avisar (ver
+    // events.js → conflictingEventsOwnedBy) — nace de una pregunta directa:
+    // antes de esto, quien agendaba una actividad PRIMERO nunca se enteraba
+    // de que otra organización agendó encima; solo la segunda persona veía
+    // el aviso al guardar. Se recalcula cada vez, así que desaparece solo si
+    // el choque se resuelve (se edita o borra cualquiera de las dos).
+    const myConflicts = conflictingEventsOwnedBy(data, user.id);
+    if (myConflicts.length > 0) {
+      items.push({
+        key: 'eventConflicts', icon: '⚠️', count: myConflicts.length,
+        label: `Actividad${myConflicts.length === 1 ? '' : 'es'} tuya${myConflicts.length === 1 ? '' : 's'} con un choque de horario nuevo`,
+        // El Administrador no tiene pestaña "Mis Actividades" propia (ve
+        // todo desde el Calendario) — solo Líder (y los 3 llamamientos de
+        // apoyo) la tienen. Ver canSeeMyActivitiesTab() en app.js.
+        view: user.role === 'admin' ? 'calendar' : 'myActivities',
       });
     }
 
@@ -89,6 +109,17 @@ export function registerNotificationsSummaryRoutes(router) {
           key: 'upcomingInterviews', icon: '👤', count: overview.upcomingInterviews.length,
           label: `Entrevista${overview.upcomingInterviews.length === 1 ? '' : 's'} esta semana`,
           view: 'interviews',
+        });
+      }
+      // Aviso de fallo de sincronización de Estaca (Punto 17) — solo se
+      // muestra cuando lleva 24h+ fallando, para no alertar por un corte
+      // pasajero de red.
+      const stakeAlert = stakeSyncFailingAlert(data.stakeCalendar);
+      if (stakeAlert) {
+        items.push({
+          key: 'stakeSyncFailing', icon: '⚠️', count: 1,
+          label: stakeAlert.message,
+          view: 'admin', subtab: 'stake',
         });
       }
     }

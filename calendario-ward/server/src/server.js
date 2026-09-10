@@ -30,6 +30,7 @@ import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
 import { registerAdminBackupRoutes } from './routes/adminBackup.js';
 import { registerBackupRoutes } from './routes/backups.js';
 import { registerDirectoryRoutes } from './routes/directory.js';
+import { registerWebPushRoutes } from './routes/webpush.js';
 import { startReminderScheduler } from './reminders.js';
 import { startStakeSyncScheduler } from './stakeCalendar.js';
 import { startAchievementsScheduler } from './achievements.js';
@@ -64,6 +65,7 @@ registerWardGrowthRoutes(router);
 registerAdminBackupRoutes(router);
 registerBackupRoutes(router);
 registerDirectoryRoutes(router);
+registerWebPushRoutes(router);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

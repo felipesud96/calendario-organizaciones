@@ -757,6 +757,7 @@ async function boot() {
   wireInstallPrompt();
   wireScrollTopButton();
   wireSwipeNavigation();
+  registerServiceWorker(); // Punto 39 — sin esperar: tiene que estar listo para cuando alguien active el interruptor en "Mi Perfil", pero no debe demorar el arranque de la app.
   if (!state.token) { renderLogin(); return; }
   try {
     state.user = await api('/auth/me');
@@ -964,6 +965,137 @@ function wireInstallPrompt() {
   });
 }
 
+// ---------------- Notificaciones push del navegador (Punto 39) ----------------
+// El service worker (client/public/sw.js) se registra apenas arranca la app
+// (registerServiceWorker(), llamado desde boot()) — tiene que estar activo
+// ANTES de poder suscribirse. La suscripción en sí (que sí pide permiso al
+// navegador) solo se dispara cuando la persona prende el interruptor
+// "Notificaciones push" en "Mi Perfil" (ver notificationPushFieldHtml/
+// wireProfilePushToggle más abajo) — nunca sola, sin que nadie la pida.
+function webPushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+}
+
+let swRegistration = null;
+async function registerServiceWorker() {
+  if (!webPushSupported()) return null;
+  try {
+    swRegistration = await navigator.serviceWorker.register('/sw.js');
+    return swRegistration;
+  } catch (err) {
+    console.error('No se pudo registrar el service worker:', err);
+    return null;
+  }
+}
+
+// La clave pública VAPID (ver /api/push/vapid-public-key) llega en
+// base64url — PushManager.subscribe() la necesita como Uint8Array. Es la
+// conversión estándar que documenta la propia spec de Web Push.
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+// Activa las notificaciones push EN ESTE navegador para la cuenta actual:
+// pide permiso, crea la suscripción con la clave VAPID del servidor, la
+// guarda en /api/push/subscribe, y prende la preferencia maestra 'push' (ver
+// pushEnabledFor en notifications.js) para que el servidor sepa que puede
+// mandarle avisos a esta cuenta. Lanza un Error con un mensaje en español
+// listo para mostrar si algo falla (permiso denegado, navegador sin
+// soporte, etc.) — quien la llama se encarga de mostrarlo.
+async function subscribeToPush() {
+  if (!webPushSupported()) throw new Error('Este navegador no admite notificaciones push (o la página no se abrió por HTTPS)');
+  const reg = swRegistration || await registerServiceWorker();
+  if (!reg) throw new Error('No se pudo preparar el service worker de notificaciones');
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Debes permitir las notificaciones desde el navegador para activarlas');
+  const { publicKey } = await api('/push/vapid-public-key');
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+  }
+  await api('/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+  state.user = await api('/auth/me/profile', { method: 'PUT', body: { notificationPrefs: { ...(state.user.notificationPrefs || {}), push: true } } });
+}
+
+// Apaga las notificaciones push en ESTE navegador: cancela la suscripción
+// del lado del navegador, avisa al servidor para que borre esa suscripción
+// guardada, y apaga la preferencia maestra 'push' de la cuenta (si la
+// persona tiene push activo en otro dispositivo/navegador, ese no se toca —
+// solo se manda el endpoint DE ESTE navegador a /api/push/unsubscribe).
+async function unsubscribeFromPush() {
+  try {
+    const reg = swRegistration || await navigator.serviceWorker.getRegistration();
+    const sub = reg ? await reg.pushManager.getSubscription() : null;
+    if (sub) {
+      await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+      await sub.unsubscribe();
+    }
+  } finally {
+    state.user = await api('/auth/me/profile', { method: 'PUT', body: { notificationPrefs: { ...(state.user.notificationPrefs || {}), push: false } } });
+  }
+}
+
+// HTML del interruptor de "Mi Perfil" — a diferencia de las demás
+// preferencias (notificationPrefFieldHtml), esta se guarda y activa DE
+// INMEDIATO al tocarla (ver wireProfilePushToggle), no al presionar
+// "Guardar" del formulario: prender/apagar el permiso del navegador es una
+// acción propia, no un campo de texto que espera el resto del form.
+function notificationPushFieldHtml() {
+  if (!webPushSupported()) {
+    return '<div class="hint-box" style="margin:8px 0 0;">🔕 Tu navegador no admite notificaciones push (o la página no se abrió por HTTPS) — para este aviso te queda el email/WhatsApp.</div>';
+  }
+  if (Notification.permission === 'denied') {
+    return '<div class="hint-box" style="margin:8px 0 0; border-color:#b91c1c; background:#fef2f2; color:#7f1d1d;">🔕 Bloqueaste el permiso de notificaciones de este sitio en tu navegador — para activarlo, cámbialo desde el candado/configuración de la barra de direcciones y vuelve a entrar.</div>';
+  }
+  return `<label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:8px 0 0;"><input type="checkbox" id="prof-push-toggle" style="width:auto;" /> 🔔 Notificaciones push en este navegador (avisos aunque tengas la app cerrada)</label>`;
+}
+
+// Se llama después de insertar el HTML de arriba en el modal de perfil.
+// Deja el checkbox reflejando si ESTE navegador de verdad tiene una
+// suscripción activa ahora mismo (no solo lo que diga la preferencia de la
+// cuenta, que es la misma para todos sus dispositivos) y ata el cambio
+// inmediato de suscripción al tocarlo.
+function wireProfilePushToggle() {
+  const toggle = document.getElementById('prof-push-toggle');
+  if (!toggle) return;
+  (async () => {
+    try {
+      const reg = swRegistration || await navigator.serviceWorker.getRegistration();
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      toggle.checked = !!sub && state.user.notificationPrefs?.push !== false;
+    } catch (err) { /* se deja el checkbox destildado por defecto */ }
+  })();
+  toggle.addEventListener('change', async (e) => {
+    // Se corta la propagación a propósito: este interruptor se guarda solo,
+    // al tocarlo (ver subscribeToPush/unsubscribeFromPush arriba) — no debe
+    // disparar el aviso de "cambios sin guardar" de wireUnsavedChangesGuard,
+    // que escucha 'change' en todo el formulario para el resto de los campos
+    // (esos sí esperan a que se presione "Guardar").
+    e.stopPropagation();
+    const wantOn = toggle.checked;
+    toggle.disabled = true;
+    try {
+      if (wantOn) {
+        await subscribeToPush();
+        toast('Notificaciones push activadas en este navegador');
+      } else {
+        await unsubscribeFromPush();
+        toast('Notificaciones push desactivadas en este navegador');
+      }
+    } catch (err) {
+      toggle.checked = !wantOn;
+      toast(err.message || 'No se pudo actualizar las notificaciones push', 'error');
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+}
+
 // ---------------- Recorrido guiado (primera vez) ----------------
 // Un carrusel corto (no un spotlight sobre el DOM real, que es frágil entre
 // distintos anchos de pantalla) explicando, paso a paso, solo las pestañas
@@ -1088,6 +1220,17 @@ function maybeShowMandatoryProfileModal(onDone) {
   openProfileModal({ mandatory: true, onDone });
 }
 
+// Punto 40 — un checkbox por tipo de aviso dentro de "Mi Perfil". Se lee el
+// estado actual de state.user.notificationPrefs (si el campo no existe
+// todavía en la cuenta, se asume activado — mismo criterio que notifEnabled()
+// del servidor, para que el checkbox arranque coherente con lo que en
+// verdad va a pasar).
+function notificationPrefFieldHtml(key, label) {
+  const prefs = state.user.notificationPrefs || {};
+  const checked = prefs[key] !== false;
+  return `<label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:8px 0;"><input type="checkbox" name="notifPref_${key}" style="width:auto;" ${checked ? 'checked' : ''} /> ${label}</label>`;
+}
+
 function openProfileModal({ mandatory = false, onDone } = {}) {
   const u = state.user;
   let photoDataUri = u.profilePhoto || null;
@@ -1156,6 +1299,16 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
               <input type="text" name="whatsappPhone" value="${esc(u.whatsappPhone || '')}" placeholder="Tu teléfono, ej: 9 1234 5678" style="margin-bottom:8px;" />
               <input type="text" name="whatsappApiKey" value="${esc(u.whatsappApiKey || '')}" placeholder="Tu clave de CallMeBot" />
               ${u.whatsappPhone && u.whatsappApiKey ? '<button type="button" class="btn btn-ghost btn-sm" id="prof-whatsapp-test" style="margin-top:8px;">🧪 Mandarme un WhatsApp de prueba</button>' : ''}
+            </div>
+            <div class="field">
+              <label>🔔 Qué avisos quiero recibir</label>
+              <div class="hint-box" style="margin:4px 0 10px;">Por defecto todo está activado. Si apagas alguno, dejas de recibirlo tanto por email como por WhatsApp — no afecta a nadie más, solo a tu cuenta.</div>
+              ${notificationPrefFieldHtml('interviews', '👤 Entrevistas (recordatorio 24h antes y el mismo día)')}
+              ${notificationPrefFieldHtml('commitments', '🎯 Compromisos de reuniones/actas (vencen mañana y hoy)')}
+              ${(u.role === 'ward_clerk' || isObispadoUser()) ? notificationPrefFieldHtml('councilPrep', '📋 Preparación de Consejo de Barrio / Coordinación de Ministración') : ''}
+              ${isObispadoUser() ? notificationPrefFieldHtml('dailyDigest', '📰 Resumen diario del Obispado') : ''}
+              ${(u.role === 'leader' || u.role === 'admin') ? notificationPrefFieldHtml('eventConflicts', '⚠️ Choque de horario cuando otra organización agenda encima de una actividad mía') : ''}
+              ${notificationPushFieldHtml()}
             </div>`}
           </form>
         </div>
@@ -1183,6 +1336,7 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
     document.getElementById('prof-modal-close').addEventListener('click', guardedClose);
     document.getElementById('prof-cancel').addEventListener('click', guardedClose);
     document.getElementById('prof-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'prof-modal-backdrop') guardedClose(); });
+    wireProfilePushToggle();
   }
   document.getElementById('prof-photo-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
@@ -1213,6 +1367,18 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
     if (!mandatory) {
       body.whatsappPhone = fd.get('whatsappPhone') || null;
       body.whatsappApiKey = fd.get('whatsappApiKey') || null;
+      // Solo se mandan las preferencias que de verdad están en este
+      // formulario (algunas, como councilPrep/dailyDigest, ni siquiera se
+      // muestran según el rol) — el servidor las combina con lo que ya
+      // había, así que no hace falta reenviar las que no corresponden acá.
+      const notifKeys = ['interviews', 'commitments', 'councilPrep', 'dailyDigest', 'eventConflicts'];
+      const notificationPrefs = {};
+      let anyNotifField = false;
+      for (const key of notifKeys) {
+        const field = form.querySelector(`[name="notifPref_${key}"]`);
+        if (field) { notificationPrefs[key] = field.checked; anyNotifField = true; }
+      }
+      if (anyNotifField) body.notificationPrefs = notificationPrefs;
     }
     try {
       let updated = await api('/auth/me/profile', { method: 'PUT', body });
@@ -1406,6 +1572,7 @@ async function renderNotifPanel() {
         else if (state.view === 'stats') state.statsSubtab = row.dataset.subtab;
         else if (state.view === 'cleaning') state.assignmentsSubtab = row.dataset.subtab;
         else if (state.view === 'interviews') state.interviewsSubtab = row.dataset.subtab;
+        else if (state.view === 'admin') state.adminSubtab = row.dataset.subtab;
       }
       render();
     });
@@ -2891,6 +3058,34 @@ function wireRsvpButtons(item) {
   noBtn.addEventListener('click', handle('no'));
 }
 
+// Punto 31: descarga el .ics de UNA sola actividad y dispara la descarga en
+// el navegador — mismo mecanismo que ya usa la descarga de respaldos
+// (fetch con el token de sesión + Blob + <a download>), porque el endpoint
+// no devuelve JSON sino el archivo mismo (ver GET /api/events/:id/ics).
+async function downloadEventIcs(id, title) {
+  try {
+    const res = await fetch(`${API}/events/${id}/ics`, {
+      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    });
+    if (!res.ok) throw new Error('No se pudo descargar la actividad');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // Sin acentos/tildes en el nombre del archivo (mismo criterio que el
+    // servidor al armar el nombre por defecto) — el navegador usa ESTE
+    // nombre para la descarga, no el que sugiere el servidor, porque el
+    // <a download> lo pisa.
+    const safeName = String(title || 'actividad').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'actividad';
+    a.download = `${safeName}.ics`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('Descargando… ábrelo para agregarla a tu calendario');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
 function openReadOnlyModal(item, kind) {
   if (!item) return;
   const title = kind === 'interview' ? (item.memberNames || item.memberName) : item.title;
@@ -2913,6 +3108,7 @@ function openReadOnlyModal(item, kind) {
           ${rsvpApplies(item, kind) ? rsvpSectionHtml(item) : ''}
         </div>
         <div class="modal-footer" style="justify-content:flex-end;">
+          ${kind === 'event' ? `<button type="button" class="btn btn-secondary" id="ro-add-calendar">📅 Agregar a mi calendario</button>` : ''}
           <button class="btn btn-secondary" id="ro-modal-close2">Cerrar</button>
         </div>
       </div>
@@ -2920,6 +3116,8 @@ function openReadOnlyModal(item, kind) {
   document.getElementById('ro-modal-close').addEventListener('click', closeModal);
   document.getElementById('ro-modal-close2').addEventListener('click', closeModal);
   document.getElementById('ro-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ro-modal-backdrop') closeModal(); });
+  const roAddCal = document.getElementById('ro-add-calendar');
+  if (roAddCal) roAddCal.addEventListener('click', () => downloadEventIcs(item.id, item.title));
   if (rsvpApplies(item, kind)) wireRsvpButtons(item);
 }
 
@@ -3644,6 +3842,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
           <div style="display:flex; gap:8px;">
             ${isEdit ? `<button class="btn btn-danger" id="ev-delete">Eliminar</button>` : ''}
             ${isEdit ? `<button type="button" class="btn btn-secondary" id="ev-duplicate">${icon('copy')} Duplicar</button>` : ''}
+            ${isEdit ? `<button type="button" class="btn btn-secondary" id="ev-add-calendar">📅 Agregar a mi calendario</button>` : ''}
           </div>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-secondary" id="ev-cancel">Cancelar</button>
@@ -3657,6 +3856,8 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
   document.getElementById('ev-modal-close').addEventListener('click', evGuardedClose);
   document.getElementById('ev-cancel').addEventListener('click', evGuardedClose);
   document.getElementById('ev-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ev-modal-backdrop') evGuardedClose(); });
+  const evAddCal = document.getElementById('ev-add-calendar');
+  if (evAddCal) evAddCal.addEventListener('click', () => downloadEventIcs(existing.id, existing.title));
   // "Duplicar": cierra este modal y abre uno nuevo en modo creación,
   // precargado con los datos ORIGINALES de la actividad (no con lo que se
   // haya alcanzado a escribir sin guardar en este formulario) — así que, si
@@ -6515,6 +6716,7 @@ async function openMeetingModal(presetType) {
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-use-template" style="display:none;">${icon('copy')} Usar plantilla de temas</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-pending-previous" style="display:none;">🔁 Traer compromisos pendientes del consejo anterior</button>
               </div>
             </div>
             <div class="field">
@@ -6579,6 +6781,43 @@ async function openMeetingModal(presetType) {
       agendaBox.lastElementChild.querySelector('.ar-topic').value = topic;
     });
     toast(`${tpl.length} temas agregados desde la plantilla`);
+  });
+
+  // Punto 18 (auto-generador de agenda): a diferencia de la plantilla de
+  // arriba (títulos genéricos, siempre los mismos), este botón trae los
+  // compromisos DE VERDAD que quedaron pendientes del consejo anterior de
+  // este mismo tipo (mismo criterio que ya usa el recordatorio por correo
+  // de checkCouncilPrepReminders en reminders.js) y los agrega como temas
+  // de seguimiento concretos, con el responsable de cada uno como "quién lo
+  // presenta" — listo para retomarlos en la reunión de hoy.
+  const pendingPrevBtn = document.getElementById('mt-pending-previous');
+  const updatePendingPrevBtnVisibility = () => {
+    if (!pendingPrevBtn) return;
+    pendingPrevBtn.style.display = agendaPatternFor(typeSelForTemplate?.value) ? '' : 'none';
+  };
+  if (typeSelForTemplate) {
+    typeSelForTemplate.addEventListener('change', updatePendingPrevBtnVisibility);
+    updatePendingPrevBtnVisibility();
+  }
+  if (pendingPrevBtn) pendingPrevBtn.addEventListener('click', async () => {
+    const type = typeSelForTemplate.value;
+    const date = document.querySelector('#mt-form [name="date"]')?.value || toISODate(new Date());
+    let result;
+    try {
+      result = await api(`/meetings/pending-from-previous?type=${encodeURIComponent(type)}&date=${encodeURIComponent(date)}`);
+    } catch (e) { toast(e.message, 'error'); return; }
+    if (!result.previousMeeting) { toast('Todavía no hay un consejo anterior de este tipo'); return; }
+    if (!result.pending.length) { toast(`"${result.previousMeeting.title}" (${fmtDateHuman(result.previousMeeting.date)}) no dejó compromisos pendientes 🎉`); return; }
+    const yaHayTemas = agendaBox.children.length > 0;
+    const label = `${result.pending.length} compromiso${result.pending.length === 1 ? '' : 's'} pendiente${result.pending.length === 1 ? '' : 's'} de "${result.previousMeeting.title}" (${fmtDateHuman(result.previousMeeting.date)})`;
+    if (yaHayTemas && !(await confirmModal(`Esto agrega ${label} como temas de seguimiento al final de la lista (no borra los que ya escribiste). ¿Continuar?`, { title: 'Compromisos pendientes del consejo anterior', confirmText: 'Agregar temas' }))) return;
+    result.pending.forEach((c) => {
+      addAgendaRow();
+      const row = agendaBox.lastElementChild;
+      row.querySelector('.ar-topic').value = `Seguimiento: ${c.description}`;
+      row.querySelector('.ar-presenter').value = c.assignedToName;
+    });
+    toast(`${result.pending.length} tema${result.pending.length === 1 ? '' : 's'} de seguimiento agregados`);
   });
 
   const commitmentsBox = document.getElementById('mt-commitments');
@@ -7781,12 +8020,33 @@ const DIRECTORY_CATEGORY_FILTERS = ['Todos', 'Primaria', 'Hombres Jóvenes', 'Mu
 // (MINISTERING_MISSING_FILTERS), así los dos lugares quedan sincronizados
 // por definición — nunca puede haber un chip que cuente distinto de lo que
 // se ve en las tarjetas.
+// Punto 14: antes "convenio pendiente" era un solo chip genérico — ahora
+// que el detalle granular dice CUÁL convenio específico falta (Investidura,
+// Sellamiento u Ordenación), cada uno tiene su propio chip/etiqueta, para
+// que se note de un vistazo qué falta exactamente sin tener que abrir la
+// ficha. Los registros que todavía no pasaron por el formulario nuevo
+// (it.convenios === null, cuentas viejas sin editar desde este cambio)
+// siguen mostrando el aviso genérico de antes, hasta que se actualicen.
+const CONVENIO_LABELS = { investidura: 'Investidura del templo', sellamiento: 'Sellamiento', ordenacion: 'Ordenación al sacerdocio' };
 const MINISTERING_MISSING_FILTERS = [
   { key: 'llamamiento', label: '❌ Sin llamamiento', match: (it) => !!it.cuadrante && !it.tieneLlamamiento },
-  { key: 'convenio', label: '❌ Convenio pendiente', match: (it) => !!it.cuadrante && !!it.faltaConvenio },
+  { key: 'convenio-investidura', label: `❌ ${CONVENIO_LABELS.investidura} pendiente`, match: (it) => !!it.cuadrante && it.convenios?.investidura === 'no' },
+  { key: 'convenio-sellamiento', label: `❌ ${CONVENIO_LABELS.sellamiento} pendiente`, match: (it) => !!it.cuadrante && it.convenios?.sellamiento === 'no' },
+  { key: 'convenio-ordenacion', label: `❌ ${CONVENIO_LABELS.ordenacion} pendiente`, match: (it) => !!it.cuadrante && it.convenios?.ordenacion === 'no' },
+  { key: 'convenio-generico', label: '❌ Convenio pendiente (sin detalle)', match: (it) => !!it.cuadrante && !!it.faltaConvenio && !it.convenios },
   { key: 'recomendacion', label: '❌ Recomendación vencida', match: (it) => !!it.cuadrante && !it.recomendacionVigente },
   { key: 'asistencia', label: '📉 Asistencia baja', match: (it) => !!it.cuadrante && it.asistencia === 'Bajo' },
 ];
+
+// Resumen en una frase de los convenios (usado en el historial de cambios,
+// ver openPastoralFocusModal): si hay detalle granular, nombra CUÁL falta;
+// si no (registro antiguo sin ese detalle todavía), cae al texto genérico
+// de siempre.
+function conveniosSummaryText(x) {
+  if (!x.convenios) return x.faltaConvenio ? 'convenio pendiente (sin detalle)' : 'convenios al día';
+  const faltantes = CONVENIO_KEYS_CLIENT.filter((k) => x.convenios[k] === 'no').map((k) => CONVENIO_LABELS[k]);
+  return faltantes.length ? `falta: ${faltantes.join(', ')}` : 'convenios al día';
+}
 
 function pastoralFocusMissingTags(it) {
   if (!it.cuadrante) return '';
@@ -7907,6 +8167,27 @@ function computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio, r
   const cumpleTodo = !faltaConvenio && !!recomendacionVigente && !!tieneLlamamiento;
   if (asistencia === 'Bajo') return cumpleTodo ? 'Actividad' : 'Rescatar';
   return cumpleTodo ? 'Retener' : 'Enfoque';
+}
+
+// Punto 14 — replica exacta de faltaConvenioFromChecklist() en
+// server/src/pastoralFocus.js, solo para la vista previa en vivo.
+const CONVENIO_KEYS_CLIENT = ['investidura', 'sellamiento', 'ordenacion'];
+function faltaConvenioFromChecklistClient(convenios) {
+  if (!convenios) return null;
+  return CONVENIO_KEYS_CLIENT.some((k) => convenios[k] === 'no');
+}
+
+// Valor con el que arranca cada select de convenio al abrir la ficha: si ya
+// hay detalle granular guardado, se usa tal cual; si no (ficha nunca
+// editada con el formulario nuevo), se parte de una suposición razonable a
+// partir del agregado antiguo — "todo al día" si nunca se evaluó o si el
+// agregado decía que sí, "pendiente" si el agregado decía que faltaba algo
+// (obliga a repasar cada convenio por separado la primera vez) — la
+// Ordenación al sacerdocio nunca aplica a mujeres.
+function convenioDefaultValue(it, key) {
+  if (key === 'ordenacion' && it.member.sex !== 'V') return 'na';
+  if (it.convenios && it.convenios[key]) return it.convenios[key];
+  return it.faltaConvenio === true ? 'no' : 'si';
 }
 
 // ---------------- Enfoque Ministración (cuadrantes) ----------------
@@ -8046,14 +8327,28 @@ function pastoralFocusCardHtml(it) {
 function openPastoralFocusModal(it) {
   const modalRoot = document.getElementById('modal-root');
   const sortedHistory = [...(it.history || [])];
+  const memberIsMale = it.member.sex === 'V';
   const currentPreview = () => {
     const asistencia = document.querySelector('#pf-form [name="asistencia"]')?.value;
     const tieneLlamamiento = document.querySelector('#pf-form [name="tieneLlamamiento"]')?.checked;
-    const conveniosAlDia = document.querySelector('#pf-form [name="conveniosAlDia"]')?.checked;
     const recomendacionVigente = document.querySelector('#pf-form [name="recomendacionVigente"]')?.checked;
     if (!asistencia) return null;
-    return computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio: !conveniosAlDia, recomendacionVigente });
+    const convenios = {
+      investidura: document.querySelector('#pf-form [name="convenio_investidura"]')?.value,
+      sellamiento: document.querySelector('#pf-form [name="convenio_sellamiento"]')?.value,
+      ordenacion: memberIsMale ? document.querySelector('#pf-form [name="convenio_ordenacion"]')?.value : 'na',
+    };
+    return computeCuadranteClient({ asistencia, tieneLlamamiento, faltaConvenio: faltaConvenioFromChecklistClient(convenios), recomendacionVigente });
   };
+  const convenioSelectHtml = (key, label) => `
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin:6px 0;">
+      <span style="font-size:13.5px;">${esc(label)}</span>
+      <select name="convenio_${key}" style="max-width:150px;">
+        <option value="si" ${convenioDefaultValue(it, key) === 'si' ? 'selected' : ''}>✅ Al día</option>
+        <option value="no" ${convenioDefaultValue(it, key) === 'no' ? 'selected' : ''}>❌ Pendiente</option>
+        <option value="na" ${convenioDefaultValue(it, key) === 'na' ? 'selected' : ''}>➖ No aplica</option>
+      </select>
+    </div>`;
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="pf-modal-backdrop">
       <div class="modal" style="max-width:560px;">
@@ -8069,7 +8364,12 @@ function openPastoralFocusModal(it) {
               </select>
             </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="tieneLlamamiento" style="width:auto;" ${it.tieneLlamamiento ? 'checked' : ''} /> Tiene llamamiento o asignación</label>
-            <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="conveniosAlDia" style="width:auto;" ${!it.faltaConvenio ? 'checked' : ''} /> Tiene sus convenios al día</label>
+            <div class="field" style="margin-top:12px;">
+              <label>Convenios y ordenanzas</label>
+              ${convenioSelectHtml('investidura', CONVENIO_LABELS.investidura)}
+              ${convenioSelectHtml('sellamiento', CONVENIO_LABELS.sellamiento)}
+              ${memberIsMale ? convenioSelectHtml('ordenacion', CONVENIO_LABELS.ordenacion) : ''}
+            </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:13.5px; margin:10px 0;"><input type="checkbox" name="recomendacionVigente" style="width:auto;" ${it.recomendacionVigente ? 'checked' : ''} /> Tiene su recomendación vigente</label>
           </form>
           <div id="pf-preview" style="margin:10px 0;"></div>
@@ -8079,7 +8379,7 @@ function openPastoralFocusModal(it) {
             ${sortedHistory.length ? sortedHistory.map((h) => `
               <div class="commitment-detail-row">
                 <div style="font-weight:600; font-size:12.5px;">${esc(fmtDateHuman(h.changedAt.slice(0, 10)))} — antes: <span class="status-pill ${CUADRANTE_INFO[h.cuadrante]?.pill || 'status-gray'}">${CUADRANTE_INFO[h.cuadrante]?.emoji || ''} ${esc(h.cuadrante)}</span></div>
-                <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Asistencia ${esc(h.asistencia)} · ${h.tieneLlamamiento ? 'con' : 'sin'} llamamiento · ${h.faltaConvenio ? 'convenio pendiente' : 'convenios al día'} · recomendación ${h.recomendacionVigente ? 'vigente' : 'vencida'}${h.changedByName ? ` · ${esc(h.changedByName)}` : ''}</div>
+                <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Asistencia ${esc(h.asistencia)} · ${h.tieneLlamamiento ? 'con' : 'sin'} llamamiento · ${conveniosSummaryText(h)} · recomendación ${h.recomendacionVigente ? 'vigente' : 'vencida'}${h.changedByName ? ` · ${esc(h.changedByName)}` : ''}</div>
               </div>`).join('') : emptyStateHtml('Sin cambios registrados todavía', null, '📝', true)}
           </div>
         </div>
@@ -8110,7 +8410,11 @@ function openPastoralFocusModal(it) {
     const body = {
       asistencia: fd.get('asistencia'),
       tieneLlamamiento: fd.get('tieneLlamamiento') === 'on',
-      faltaConvenio: fd.get('conveniosAlDia') !== 'on', // checkbox en positivo: marcado = convenios al día
+      convenios: {
+        investidura: fd.get('convenio_investidura'),
+        sellamiento: fd.get('convenio_sellamiento'),
+        ordenacion: memberIsMale ? fd.get('convenio_ordenacion') : 'na',
+      },
       recomendacionVigente: fd.get('recomendacionVigente') === 'on',
     };
     try {
@@ -9095,41 +9399,35 @@ function attendanceSparklineHtml(monthlyAttendance) {
     </div>`;
 }
 
-async function renderStatsDashboard() {
-  const content = document.getElementById('stats-content');
-  content.innerHTML = skeletonCardsHtml(3);
-  const params = [];
-  if (state.statsYear) params.push(`year=${state.statsYear}`);
-  if (state.user.role === 'admin' && state.statsOrgId) params.push(`organizationId=${state.statsOrgId}`);
-  let data;
-  try { data = await api(`/stats/dashboard${params.length ? '?' + params.join('&') : ''}`); }
-  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
-  state.statsYear = data.year;
-  const purposeEntries = Object.entries(data.purposeBalance);
+// Punto 27: el bloque completo del Panel de Control (tarjetas, tendencia
+// mensual, balance por propósito, ranking más/menos exitosa) — separado en
+// su propia función para poder pintarlo DOS veces lado a lado al comparar
+// dos años, sin duplicar el HTML. `deltaVs`, si se pasa, agrega debajo del
+// % de éxito cuánto subió o bajó contra ese otro período.
+function statsDashboardBlockHtml(d, deltaVs) {
+  const purposeEntries = Object.entries(d.purposeBalance);
   const maxCount = Math.max(1, ...purposeEntries.map(([, v]) => v));
-  content.innerHTML = `
-    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
-      ${data.canPickOrganization ? `
-        <select id="stats-org-select">
-          <option value="">Todo el Barrio</option>
-          ${state.organizations.map((o) => `<option value="${o.id}" ${String(data.organizationId) === String(o.id) ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
-        </select>` : ''}
-      <select id="stats-year-select">
-        ${data.years.map((y) => `<option value="${y}" ${y === data.year ? 'selected' : ''}>${y}</option>`).join('')}
-      </select>
-    </div>
+  let deltaHtml = '';
+  if (deltaVs && d.overallSuccessPct !== null && deltaVs.overallSuccessPct !== null) {
+    const diff = Math.round((d.overallSuccessPct - deltaVs.overallSuccessPct) * 10) / 10;
+    deltaHtml = diff === 0
+      ? `<div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">Sin cambio vs ${deltaVs.year}</div>`
+      : `<div style="font-size:11.5px; font-weight:600; color:${diff > 0 ? '#16a34a' : '#dc2626'}; margin-top:2px;">${diff > 0 ? '▲' : '▼'} ${diff > 0 ? '+' : ''}${diff} pts vs ${deltaVs.year}</div>`;
+  }
+  return `
     <div class="stats-cards">
       <div class="stat-card">
         <div class="stat-card-label">Actividades evaluadas</div>
-        <div class="stat-card-value">${data.evaluatedCount} <span style="font-size:13px; font-weight:400; color:var(--ink-soft);">de ${data.totalActivitiesInYear}</span></div>
+        <div class="stat-card-value">${d.evaluatedCount} <span style="font-size:13px; font-weight:400; color:var(--ink-soft);">de ${d.totalActivitiesInYear}</span></div>
       </div>
       <div class="stat-card">
         <div class="stat-card-label">% de éxito de asistencia</div>
-        <div class="stat-card-value">${data.overallSuccessPct !== null ? data.overallSuccessPct + '%' : '—'}</div>
+        <div class="stat-card-value">${d.overallSuccessPct !== null ? d.overallSuccessPct + '%' : '—'}</div>
+        ${deltaHtml}
       </div>
     </div>
     <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>Tendencia mensual de asistencia</strong></div>
-    ${attendanceSparklineHtml(data.monthlyAttendance)}
+    ${attendanceSparklineHtml(d.monthlyAttendance)}
     <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>Balance del año por Propósito</strong></div>
     <div class="purpose-balance">
       ${purposeEntries.map(([p, v]) => `
@@ -9142,17 +9440,78 @@ async function renderStatsDashboard() {
     <div class="ranking-row">
       <div class="ranking-card ranking-top">
         <div class="ranking-label">🏆 Más exitosa</div>
-        ${data.topActivity ? `<div class="ranking-title">${esc(data.topActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(data.topActivity.date))} · ${data.topActivity.pct}% (${data.topActivity.actualAttendance}/${data.topActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
+        ${d.topActivity ? `<div class="ranking-title">${esc(d.topActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(d.topActivity.date))} · ${d.topActivity.pct}% (${d.topActivity.actualAttendance}/${d.topActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
       </div>
       <div class="ranking-card ranking-bottom">
         <div class="ranking-label">📉 Menos exitosa</div>
-        ${data.bottomActivity ? `<div class="ranking-title">${esc(data.bottomActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(data.bottomActivity.date))} · ${data.bottomActivity.pct}% (${data.bottomActivity.actualAttendance}/${data.bottomActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
+        ${d.bottomActivity ? `<div class="ranking-title">${esc(d.bottomActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(d.bottomActivity.date))} · ${d.bottomActivity.pct}% (${d.bottomActivity.actualAttendance}/${d.bottomActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
       </div>
+    </div>`;
+}
+
+async function renderStatsDashboard() {
+  const content = document.getElementById('stats-content');
+  content.innerHTML = skeletonCardsHtml(3);
+  const params = [];
+  if (state.statsYear) params.push(`year=${state.statsYear}`);
+  if (state.user.role === 'admin' && state.statsOrgId) params.push(`organizationId=${state.statsOrgId}`);
+  let data;
+  try { data = await api(`/stats/dashboard${params.length ? '?' + params.join('&') : ''}`); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  state.statsYear = data.year;
+
+  // Punto 27: comparar dos años lado a lado reutiliza EXACTAMENTE el mismo
+  // endpoint con un segundo `year` — no hace falta nada nuevo del lado
+  // servidor, solo un segundo pedido en paralelo. Solo se puede comparar
+  // contra un año que YA tenga datos (data.years): el servidor ignora en
+  // silencio cualquier año sin actividades y devuelve el año actual en su
+  // lugar (ver /api/stats/dashboard), así que ofrecer un año sin datos
+  // sería engañoso — mejor ni mostrarlo como opción.
+  const otherYears = data.years.filter((y) => y !== data.year);
+  const compareOn = !!state.statsCompareOn && otherYears.length > 0;
+  let compareData = null;
+  let compareYear = null;
+  if (compareOn) {
+    compareYear = otherYears.includes(state.statsCompareYear) ? state.statsCompareYear : otherYears[0];
+    state.statsCompareYear = compareYear;
+    const compareParams = [`year=${compareYear}`];
+    if (state.user.role === 'admin' && state.statsOrgId) compareParams.push(`organizationId=${state.statsOrgId}`);
+    try { compareData = await api(`/stats/dashboard?${compareParams.join('&')}`); }
+    catch (e) { /* si falla el segundo período, se sigue mostrando solo el año principal */ }
+  }
+
+  content.innerHTML = `
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center;">
+      ${data.canPickOrganization ? `
+        <select id="stats-org-select">
+          <option value="">Todo el Barrio</option>
+          ${state.organizations.map((o) => `<option value="${o.id}" ${String(data.organizationId) === String(o.id) ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
+        </select>` : ''}
+      <select id="stats-year-select">
+        ${data.years.map((y) => `<option value="${y}" ${y === data.year ? 'selected' : ''}>${y}</option>`).join('')}
+      </select>
+      ${otherYears.length ? `
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; white-space:nowrap;">
+          <input type="checkbox" id="stats-compare-toggle" style="width:auto;" ${compareOn ? 'checked' : ''} /> Comparar con
+        </label>
+        <select id="stats-compare-year-select" ${compareOn ? '' : 'disabled'}>
+          ${otherYears.map((y) => `<option value="${y}" ${y === compareYear ? 'selected' : ''}>${y}</option>`).join('')}
+        </select>` : ''}
     </div>
+    ${compareOn && compareData ? `
+      <div class="stats-compare-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:0 24px;">
+        <div><div class="hint-box" style="margin-top:0; text-align:center; font-weight:700;">${data.year}</div>${statsDashboardBlockHtml(data)}</div>
+        <div><div class="hint-box" style="margin-top:0; text-align:center; font-weight:700;">${compareYear}</div>${statsDashboardBlockHtml(compareData, data)}</div>
+      </div>
+    ` : statsDashboardBlockHtml(data)}
   `;
   document.getElementById('stats-year-select').addEventListener('change', (e) => { state.statsYear = Number(e.target.value); renderStatsDashboard(); });
   const orgSelect = document.getElementById('stats-org-select');
   if (orgSelect) orgSelect.addEventListener('change', (e) => { state.statsOrgId = e.target.value || null; renderStatsDashboard(); });
+  const compareToggle = document.getElementById('stats-compare-toggle');
+  if (compareToggle) compareToggle.addEventListener('change', (e) => { state.statsCompareOn = e.target.checked; renderStatsDashboard(); });
+  const compareYearSelect = document.getElementById('stats-compare-year-select');
+  if (compareYearSelect) compareYearSelect.addEventListener('change', (e) => { state.statsCompareYear = Number(e.target.value); renderStatsDashboard(); });
 }
 
 // "Rachas y Logros": 6 rankings de todo el Barrio — compromisos cumplidos,

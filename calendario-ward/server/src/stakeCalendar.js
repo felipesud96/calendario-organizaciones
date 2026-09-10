@@ -195,22 +195,47 @@ export async function syncStakeCalendar() {
       // tal cual lo que ya había guardado (sigue siendo válido) y solo se
       // actualiza la marca de tiempo. Esto NO es una falla.
       return withDb((data) => {
-        data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, eventCount: data.stakeEvents.length };
+        data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, firstFailureAt: null, eventCount: data.stakeEvents.length };
         return data.stakeCalendar;
       });
     }
     const parsed = parseIcsEvents(result.text);
     return withDb((data) => {
       data.stakeEvents = parsed.map((ev) => ({ id: nextId(data, 'stakeEvents'), ...ev, syncedAt: now }));
-      data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, eventCount: data.stakeEvents.length };
+      data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: true, lastSyncError: null, firstFailureAt: null, eventCount: data.stakeEvents.length };
       return data.stakeCalendar;
     });
   } catch (e) {
+    // Punto 17 — se guarda desde CUÁNDO viene fallando seguido (sin resetear
+    // en cada intento fallido) para poder avisarle al Obispado/Admin si ya
+    // lleva más de un día así, en vez de que la falla pase desapercibida
+    // hasta que alguien entre a mirar la pestaña de Estaca por curiosidad.
     return withDb((data) => {
-      data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: false, lastSyncError: e.message || 'No se pudo descargar el calendario de Estaca', eventCount: data.stakeEvents.length };
+      const firstFailureAt = data.stakeCalendar?.firstFailureAt || now;
+      data.stakeCalendar = { ...data.stakeCalendar, lastSyncedAt: now, lastSyncOk: false, lastSyncError: e.message || 'No se pudo descargar el calendario de Estaca', firstFailureAt, eventCount: data.stakeEvents.length };
       return data.stakeCalendar;
     });
   }
+}
+
+// Punto 17 — a partir de cuántas horas seguidas fallando se considera que
+// "ya lleva un buen rato mal" y vale la pena molestar con una alerta (en vez
+// de una falla suelta de red que se arregla sola en el próximo intento, 4
+// horas después). 24 horas = al menos 6 intentos fallidos seguidos.
+const STAKE_SYNC_ALERT_AFTER_MS = 24 * 60 * 60 * 1000;
+
+export function stakeSyncFailingAlert(stakeCalendar) {
+  if (!stakeCalendar?.firstFailureAt || stakeCalendar.lastSyncOk) return null;
+  const failingSinceMs = Date.now() - new Date(stakeCalendar.firstFailureAt).getTime();
+  if (failingSinceMs < STAKE_SYNC_ALERT_AFTER_MS) return null;
+  const days = Math.floor(failingSinceMs / (24 * 60 * 60 * 1000));
+  return {
+    since: stakeCalendar.firstFailureAt,
+    days,
+    message: days >= 1
+      ? `⚠️ El calendario de Estaca lleva ${days} día${days === 1 ? '' : 's'} sin poder sincronizar (${stakeCalendar.lastSyncError || 'error desconocido'}).`
+      : `⚠️ El calendario de Estaca lleva más de 24 horas sin poder sincronizar (${stakeCalendar.lastSyncError || 'error desconocido'}).`,
+  };
 }
 
 let schedulerStarted = false;

@@ -89,6 +89,13 @@ const EMPTY_DB = {
   // achievementClosures más arriba, pero mucho más simple (no hay premios
   // que calcular, solo un compromiso fijo por organización).
   ministeringFocusQuarterCommitmentsCreated: [],
+  // Punto 39 — Notificaciones push del navegador (Web Push). `vapidKeys` se
+  // genera solo (ver getOrCreateVapidKeys en webpush.js) la primera vez que
+  // hace falta — no requiere ninguna variable de entorno nueva.
+  // `subscriptions` guarda la suscripción PushSubscription tal cual la da
+  // el navegador (endpoint + claves de cifrado), una por dispositivo/
+  // navegador — una persona puede tener más de una.
+  webPush: { vapidKeys: null, subscriptions: [] },
   // Módulo "Crecimiento del Barrio" (Estadísticas del Barrio): un registro
   // por trimestre con los 26 indicadores oficiales (real/potencial) y el
   // detalle de conversos de ese trimestre, más una "instantánea" única

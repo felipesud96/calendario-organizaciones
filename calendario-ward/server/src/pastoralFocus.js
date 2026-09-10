@@ -16,6 +16,25 @@
 export const ASISTENCIA_VALUES = ['Alto', 'Medio', 'Bajo'];
 export const CUADRANTES = ['Rescatar', 'Enfoque', 'Retener', 'Actividad'];
 
+// Punto 14 — antes "convenios al día" era un solo casillero (todo o nada);
+// ahora se desglosa en los 3 convenios concretos que de verdad se
+// evalúan: Investidura del templo y Sellamiento (cualquier adulto),
+// Ordenación al sacerdocio (solo hombres — para mujeres se fuerza a 'na',
+// ver PUT /api/pastoral-focus/:memberId en routes/directory.js). Cada uno
+// puede ser 'si' (al día), 'no' (pendiente) o 'na' (no aplica — ej.
+// Sellamiento para quien no está casado/a).
+export const CONVENIO_KEYS = ['investidura', 'sellamiento', 'ordenacion'];
+export const CONVENIO_STATUS_VALUES = ['si', 'no', 'na'];
+
+// Deriva el booleano agregado `faltaConvenio` (el que sigue usando
+// computeCuadrante de abajo, sin tocar su fórmula) a partir del detalle
+// granular: falta si CUALQUIERA de los convenios que sí aplican a esta
+// persona quedó en 'no' — los marcados 'na' nunca cuentan en contra.
+export function faltaConvenioFromChecklist(convenios) {
+  if (!convenios) return null;
+  return CONVENIO_KEYS.some((k) => convenios[k] === 'no');
+}
+
 export function computeCuadrante({ asistencia, tieneLlamamiento, faltaConvenio, recomendacionVigente }) {
   const cumpleTodo = !faltaConvenio && !!recomendacionVigente && !!tieneLlamamiento;
   if (asistencia === 'Bajo') return cumpleTodo ? 'Actividad' : 'Rescatar';

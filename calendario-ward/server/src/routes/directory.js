@@ -4,6 +4,7 @@ import { requireRole } from '../guard.js';
 import { isObispadoLeader } from './stake.js';
 import {
   ASISTENCIA_VALUES, computeCuadrante, ageFromBirthDate, categoryFor, isAdultMale, isAdultFemale,
+  CONVENIO_STATUS_VALUES, faltaConvenioFromChecklist,
 } from '../pastoralFocus.js';
 import { parseMemberListPdfBuffer } from '../directoryImport.js';
 
@@ -68,7 +69,7 @@ function withMemberInfo(m) {
 function focusInfo(focus) {
   if (!focus) {
     return {
-      asistencia: null, tieneLlamamiento: null, faltaConvenio: null, recomendacionVigente: null,
+      asistencia: null, tieneLlamamiento: null, faltaConvenio: null, convenios: null, recomendacionVigente: null,
       cuadrante: null, updatedAt: null, updatedByName: null, history: [],
     };
   }
@@ -76,6 +77,11 @@ function focusInfo(focus) {
     asistencia: focus.asistencia,
     tieneLlamamiento: focus.tieneLlamamiento,
     faltaConvenio: focus.faltaConvenio,
+    // Punto 14: detalle granular (Investidura/Sellamiento/Ordenación) — los
+    // registros que nunca pasaron por el formulario nuevo quedan en `null`,
+    // así el cliente sabe que solo tiene el dato agregado antiguo
+    // (faltaConvenio) y muestra el aviso genérico hasta que se actualicen.
+    convenios: focus.convenios || null,
     recomendacionVigente: focus.recomendacionVigente,
     cuadrante: computeCuadrante(focus),
     updatedAt: focus.updatedAt,
@@ -272,10 +278,29 @@ export function registerDirectoryRoutes(router) {
     if (!ASISTENCIA_VALUES.includes(body?.asistencia)) {
       return sendJson(res, 400, { error: 'Asistencia inválida (debe ser Alto, Medio o Bajo)' });
     }
+    // Punto 14: convenios granulares — Investidura del templo y Sellamiento
+    // aplican a cualquier adulto evaluado (por eso se exigen explícitos, con
+    // opción "No aplica" para quien corresponda, ej. Sellamiento de alguien
+    // soltero/a); Ordenación al sacerdocio solo aplica a hombres, y se fuerza
+    // a 'na' para mujeres sin importar lo que mande el cliente, para que
+    // nunca cuente en contra de alguien a quien no le corresponde.
+    const rawConvenios = body?.convenios || {};
+    if (!CONVENIO_STATUS_VALUES.includes(rawConvenios.investidura) || !CONVENIO_STATUS_VALUES.includes(rawConvenios.sellamiento)) {
+      return sendJson(res, 400, { error: 'Falta indicar el estado de Investidura del templo y Sellamiento (Sí / No / No aplica)' });
+    }
+    if (memberIsMale && !CONVENIO_STATUS_VALUES.includes(rawConvenios.ordenacion)) {
+      return sendJson(res, 400, { error: 'Falta indicar el estado de la Ordenación al sacerdocio' });
+    }
+    const convenios = {
+      investidura: rawConvenios.investidura,
+      sellamiento: rawConvenios.sellamiento,
+      ordenacion: memberIsMale ? rawConvenios.ordenacion : 'na',
+    };
     const newValues = {
       asistencia: body.asistencia,
       tieneLlamamiento: !!body.tieneLlamamiento,
-      faltaConvenio: !!body.faltaConvenio,
+      convenios,
+      faltaConvenio: faltaConvenioFromChecklist(convenios),
       recomendacionVigente: !!body.recomendacionVigente,
     };
     const now = new Date().toISOString();
@@ -289,9 +314,15 @@ export function registerDirectoryRoutes(router) {
         data.pastoralFocus.push(focus);
         return;
       }
+      // Se compara el detalle granular completo (no solo el agregado
+      // faltaConvenio): así queda registro en el historial aunque el
+      // agregado no haya cambiado — ej. antes faltaba Sellamiento y ahora
+      // en cambio falta Ordenación, el agregado sigue siendo "falta algo"
+      // pero el detalle real cambió y vale la pena que quede trazado.
+      const conveniosChanged = JSON.stringify(focus.convenios || null) !== JSON.stringify(newValues.convenios);
       const changed = focus.asistencia !== newValues.asistencia
         || focus.tieneLlamamiento !== newValues.tieneLlamamiento
-        || focus.faltaConvenio !== newValues.faltaConvenio
+        || conveniosChanged
         || focus.recomendacionVigente !== newValues.recomendacionVigente;
       if (changed) {
         focus.history = focus.history || [];
@@ -300,6 +331,7 @@ export function registerDirectoryRoutes(router) {
           asistencia: focus.asistencia,
           tieneLlamamiento: focus.tieneLlamamiento,
           faltaConvenio: focus.faltaConvenio,
+          convenios: focus.convenios || null,
           recomendacionVigente: focus.recomendacionVigente,
           cuadrante: computeCuadrante(focus),
           changedAt: now,
