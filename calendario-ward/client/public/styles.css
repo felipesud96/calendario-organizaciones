@@ -80,6 +80,7 @@ a { color: var(--celeste-dark); }
 
 /* ---------- Login ---------- */
 .login-wrap {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -1211,8 +1212,22 @@ tr.wg-cat-row td {
    siempre con su mismo aspecto de papel/certificado, como una foto que no
    cambia de colores con el tema.
    ================================================================== */
+/* El modo oscuro puede venir de dos lados: solo (siguiendo el tema del
+   celular/computador, como hasta ahora) o forzado a mano con el interruptor
+   ☀️/🌙 de la barra superior (ver THEME_KEY/applyTheme en app.js, que le pone
+   data-theme="light" o "dark" a <html>). Por eso cada regla de acá abajo
+   queda DUPLICADA en dos bloques en vez de uno:
+   1) @media (prefers-color-scheme: dark) con el selector agregado
+      ":root:not([data-theme=\"light\"])" — se activa solo si el sistema está
+      oscuro Y la persona no forzó el modo claro a mano.
+   2) ":root[data-theme=\"dark\"]" sin media query — se activa cuando la
+      persona forzó el modo oscuro a mano, sin importar el tema del sistema.
+   Así el interruptor manual gana en los dos sentidos (fuerza claro estando
+   el sistema oscuro, o fuerza oscuro estando el sistema claro), y elegir
+   "seguir al sistema" (borrar data-theme) vuelve exactamente al
+   comportamiento automático de siempre. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --celeste: #38bdf8;
     --celeste-dark: #7dd3fc;
     --celeste-darker: #bae6fd;
@@ -1229,48 +1244,96 @@ tr.wg-cat-row td {
     --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
   }
 
-  .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
+  :root:not([data-theme="light"]) .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
 
   /* Celdas "de otro mes" del calendario: en claro son un blanco apenas
      distinto (#fafcff); en oscuro necesitan su propio tono, si no quedan
      como un recuadro blanco encendido en medio de la grilla oscura. */
-  .cal-cell.other-month { background: #101a24; }
-  .cal-cell.other-month .cal-daynum { color: #4c6178; }
-  .mini-cal-cell.other-month { color: #3a5166; }
+  :root:not([data-theme="light"]) .cal-cell.other-month { background: #101a24; }
+  :root:not([data-theme="light"]) .cal-cell.other-month .cal-daynum { color: #4c6178; }
+  :root:not([data-theme="light"]) .mini-cal-cell.other-month { color: #3a5166; }
 
   /* Insignias/estados lisos gris claro — el resto de las píldoras de color
      (ámbar, verde, morado) se dejan igual: una etiqueta con color de sobra
      se ve bien encima de cualquier fondo, pero el gris casi blanco de estas
      dos sí necesita su propia versión oscura. */
-  .role-member { background: #263141; color: #b6c2cf; }
-  .status-gray { background: #263141; color: #b6c2cf; }
-  .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
+  :root:not([data-theme="light"]) .role-member { background: #263141; color: #b6c2cf; }
+  :root:not([data-theme="light"]) .status-gray { background: #263141; color: #b6c2cf; }
+  :root:not([data-theme="light"]) .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
 
   /* Avisos y tarjetas que ocupan un ancho considerable de la pantalla (no
      son una simple píldora chica) — estos si se dejaran con su color claro
      original se verían como un recuadro brillante fuera de lugar. */
-  .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
-  .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
-  .wg-autofill-banner, .wg-pdf-warnings-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
-  .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
-  .ranking-top { background: #122a1c; border-color: #1f4a30; }
-  .ac-item:hover { background: #1c2b38; }
+  :root:not([data-theme="light"]) .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+  :root:not([data-theme="light"]) .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+  :root:not([data-theme="light"]) .wg-autofill-banner, :root:not([data-theme="light"]) .wg-pdf-warnings-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+  :root:not([data-theme="light"]) .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
+  :root:not([data-theme="light"]) .ranking-top { background: #122a1c; border-color: #1f4a30; }
+  :root:not([data-theme="light"]) .ac-item:hover { background: #1c2b38; }
 
   /* Bordes que en claro usaban un rosado suave a juego con danger-light —
      como esa variable ya cambió arriba, sin este ajuste el borde quedaba
      rosado claro sobre un fondo rojo oscuro. */
-  .btn-danger { border-color: #5c2323; }
-  .btn-danger:hover { background: #4a1c1c; }
-  .error-msg { border-color: #5c2323; }
-  .ranking-bottom { border-color: #5c2323; }
+  :root:not([data-theme="light"]) .btn-danger { border-color: #5c2323; }
+  :root:not([data-theme="light"]) .btn-danger:hover { background: #4a1c1c; }
+  :root:not([data-theme="light"]) .error-msg { border-color: #5c2323; }
+  :root:not([data-theme="light"]) .ranking-bottom { border-color: #5c2323; }
 
   /* El diploma es un documento para compartir/imprimir — mantiene siempre
      su mismo aspecto de papel/certificado, sin importar el tema del
      celular, igual que una foto no cambia de colores en modo oscuro. */
-  .diploma-border { background: #fffdf7; border-color: #0369a1; }
-  .diploma-eyebrow, .diploma-sub, .diploma-footer { color: #475569; }
-  .diploma-title { color: #075985; }
-  .diploma-body-text, .diploma-winner { color: #0f172a; }
-  .diploma-winner { border-bottom-color: #0ea5e9; }
-  .diploma-value { color: #0369a1; }
+  :root:not([data-theme="light"]) .diploma-border { background: #fffdf7; border-color: #0369a1; }
+  :root:not([data-theme="light"]) .diploma-eyebrow, :root:not([data-theme="light"]) .diploma-sub, :root:not([data-theme="light"]) .diploma-footer { color: #475569; }
+  :root:not([data-theme="light"]) .diploma-title { color: #075985; }
+  :root:not([data-theme="light"]) .diploma-body-text, :root:not([data-theme="light"]) .diploma-winner { color: #0f172a; }
+  :root:not([data-theme="light"]) .diploma-winner { border-bottom-color: #0ea5e9; }
+  :root:not([data-theme="light"]) .diploma-value { color: #0369a1; }
 }
+
+/* Modo oscuro forzado a mano con el interruptor ☀️/🌙, aunque el sistema
+   esté en modo claro — mismas reglas que el bloque de arriba, sin depender
+   de prefers-color-scheme. Ver el comentario grande más arriba. */
+:root[data-theme="dark"] {
+  --celeste: #38bdf8;
+  --celeste-dark: #7dd3fc;
+  --celeste-darker: #bae6fd;
+  --celeste-light: #1e3a4f;
+  --celeste-lighter: #16283a;
+  --white: #16212c;
+  --ink: #e7eef4;
+  --ink-soft: #9db0c2;
+  --border: #2a3f52;
+  --danger: #f87171;
+  --danger-light: #3a1414;
+  --success: #4ade80;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme="dark"] .modal-backdrop { background: rgba(0, 0, 0, 0.6); }
+:root[data-theme="dark"] .cal-cell.other-month { background: #101a24; }
+:root[data-theme="dark"] .cal-cell.other-month .cal-daynum { color: #4c6178; }
+:root[data-theme="dark"] .mini-cal-cell.other-month { color: #3a5166; }
+:root[data-theme="dark"] .role-member { background: #263141; color: #b6c2cf; }
+:root[data-theme="dark"] .status-gray { background: #263141; color: #b6c2cf; }
+:root[data-theme="dark"] .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
+:root[data-theme="dark"] .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+:root[data-theme="dark"] .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
+:root[data-theme="dark"] .wg-autofill-banner, :root[data-theme="dark"] .wg-pdf-warnings-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
+:root[data-theme="dark"] .stake-status-bar { background: #241f38; border-color: #3d3358; color: #c9b2f5; }
+:root[data-theme="dark"] .ranking-top { background: #122a1c; border-color: #1f4a30; }
+:root[data-theme="dark"] .ac-item:hover { background: #1c2b38; }
+:root[data-theme="dark"] .btn-danger { border-color: #5c2323; }
+:root[data-theme="dark"] .btn-danger:hover { background: #4a1c1c; }
+:root[data-theme="dark"] .error-msg { border-color: #5c2323; }
+:root[data-theme="dark"] .ranking-bottom { border-color: #5c2323; }
+:root[data-theme="dark"] .diploma-border { background: #fffdf7; border-color: #0369a1; }
+:root[data-theme="dark"] .diploma-eyebrow, :root[data-theme="dark"] .diploma-sub, :root[data-theme="dark"] .diploma-footer { color: #475569; }
+:root[data-theme="dark"] .diploma-title { color: #075985; }
+:root[data-theme="dark"] .diploma-body-text, :root[data-theme="dark"] .diploma-winner { color: #0f172a; }
+:root[data-theme="dark"] .diploma-winner { border-bottom-color: #0ea5e9; }
+:root[data-theme="dark"] .diploma-value { color: #0369a1; }
+
+/* Interruptor ☀️/🌙 de la barra superior. */
+.theme-toggle-btn .icon-svg { transition: transform 0.2s ease; }
+.theme-toggle-btn:hover .icon-svg { transform: rotate(15deg); }

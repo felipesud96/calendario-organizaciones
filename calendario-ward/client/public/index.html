@@ -4,6 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OrganizaSion</title>
+  <!-- Modo oscuro manual (interruptor ☀️/🌙 de la barra superior, ver
+       THEME_KEY/applyTheme en app.js): esto va inline y lo más arriba
+       posible para que, si la persona ya eligió un tema a mano, se aplique
+       ANTES de que se pinte la página — si no, se vería un parpadeo del
+       tema equivocado (el del sistema) por una fracción de segundo antes de
+       que app.js termine de cargar y lo corrija. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('organizasion_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* almacenamiento no disponible — se ve el tema del sistema, sin parpadeo que evitar */ }
+    })();
+  </script>
   <link rel="icon" type="image/png" href="/logo-bee.png" />
   <!-- Acceso directo desde el celular/tablet ("Agregar a pantalla de inicio"):
        el manifest + estos íconos hacen que el acceso directo muestre el logo

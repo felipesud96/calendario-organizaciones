@@ -178,6 +178,8 @@ const ICON_PATHS = {
   check: '<polyline points="20 6 9 17 4 12"/>',
   mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
+  moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
 };
 function icon(name, size = 16) {
   const paths = ICON_PATHS[name];
@@ -741,6 +743,55 @@ function setToken(token) {
 // página proporcionalmente con `zoom` (botones, íconos y espacios incluidos,
 // no solo el texto) en vez de tener que tocar cada tamaño de fuente uno por
 // uno en todo el CSS.
+// Modo oscuro manual (interruptor ☀️/🌙 de la barra superior) — Punto 39b.
+// Hasta ahora el modo oscuro solo seguía al tema del sistema operativo
+// (prefers-color-scheme, ver styles.css). Este interruptor permite forzarlo
+// a mano en cualquier sentido (oscuro con el sistema en claro, o claro con
+// el sistema en oscuro); tocarlo una tercera vez "suelta" la elección y
+// vuelve a seguir al sistema solo. Es una preferencia de ESTE navegador
+// (localStorage), igual que el tamaño de letra de abajo — no de la cuenta,
+// porque cada dispositivo puede querer algo distinto.
+const THEME_KEY = 'organizasion_theme'; // 'light' | 'dark' | ausente = seguir al sistema
+function getStoredTheme() {
+  let v = null;
+  try { v = localStorage.getItem(THEME_KEY); } catch (e) { /* almacenamiento no disponible */ }
+  return v === 'light' || v === 'dark' ? v : null;
+}
+function systemPrefersDark() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function effectiveTheme() {
+  return getStoredTheme() || (systemPrefersDark() ? 'dark' : 'light');
+}
+function updateThemeToggleIcon() {
+  const isDark = effectiveTheme() === 'dark';
+  const manual = getStoredTheme();
+  document.querySelectorAll('.theme-toggle-btn').forEach((btn) => {
+    btn.innerHTML = icon(isDark ? 'moon' : 'sun', 18);
+    btn.title = manual
+      ? (isDark ? 'Modo oscuro (elegido a mano) — toca para pasar a modo claro' : 'Modo claro (elegido a mano) — toca para pasar a modo oscuro')
+      : (isDark ? 'Modo oscuro (según tu sistema) — toca para forzar modo claro' : 'Modo claro (según tu sistema) — toca para forzar modo oscuro');
+  });
+}
+// `theme`: 'light' | 'dark' para forzarlo a mano, o null para volver a
+// seguir al sistema (borra la elección guardada).
+function applyTheme(theme) {
+  try {
+    if (theme) localStorage.setItem(THEME_KEY, theme);
+    else localStorage.removeItem(THEME_KEY);
+  } catch (e) { /* almacenamiento no disponible — igual se aplica solo a esta carga */ }
+  if (theme) document.documentElement.setAttribute('data-theme', theme);
+  else document.documentElement.removeAttribute('data-theme');
+  updateThemeToggleIcon();
+}
+function toggleTheme() {
+  // Un clic simple alterna entre claro y oscuro (lo que pida el interruptor
+  // ☀️/🌙); si alguna vez hace falta "soltar" la elección y volver a seguir
+  // al sistema, alcanza con borrar el dato guardado desde el navegador —no
+  // hace falta un tercer estado en el botón para el uso normal del día a día.
+  applyTheme(effectiveTheme() === 'dark' ? 'light' : 'dark');
+}
+
 const FONT_SCALE_KEY = 'organizasion_font_scale';
 const FONT_SCALE_OPTIONS = [
   { value: '1', title: 'Normal' },
@@ -1611,6 +1662,7 @@ async function logout() {
 function renderLogin() {
   root.innerHTML = `
     <div class="login-wrap">
+      <button type="button" class="icon-btn theme-toggle-btn" id="theme-toggle" title="Modo claro/oscuro" style="position:absolute; top:16px; right:16px;"></button>
       <div class="login-card">
         <img class="login-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
         <h1 class="brand-wordmark">${BRAND_WORDMARK_HTML}</h1>
@@ -1652,6 +1704,8 @@ function renderLogin() {
   });
   document.getElementById('go-register').addEventListener('click', (e) => { e.preventDefault(); renderRegister(); });
   document.getElementById('go-forgot-password').addEventListener('click', (e) => { e.preventDefault(); renderForgotPassword(); });
+  document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+  updateThemeToggleIcon();
 }
 
 // ---------------- Recuperar contraseña (self-service por WhatsApp) ----------------
@@ -2127,6 +2181,7 @@ function render() {
       </div>
       <div class="topbar-right">
         ${canSeeBishopricPanelTab() ? `<button type="button" class="icon-btn topbar-icon-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" id="bishopric-toggle" title="Panel de Obispado">${icon('church')}</button>` : ''}
+        <button type="button" class="icon-btn topbar-icon-btn theme-toggle-btn" id="theme-toggle" title="Modo claro/oscuro"></button>
         <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">${icon('search')}</button>
         <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">${icon('bell')}<span class="notif-badge" id="notif-badge" hidden></span></button>
         <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">${icon('help')}</button>
@@ -2167,6 +2222,8 @@ function render() {
   });
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if (bishopricBtn) bishopricBtn.addEventListener('click', () => { state.view = 'bishopricPanel'; renderCurrentView(); });
+  document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+  updateThemeToggleIcon();
   wireTopbarUtilities();
   wireBottomNav();
   wireMobileFab();
@@ -4417,13 +4474,13 @@ function memberPickerFieldHtml(idPrefix, selectedUserId, selectedName) {
   return `
     <div class="field">
       <label>Miembro</label>
-      <div id="${idPrefix}-member-chip" style="display:${selectedUserId ? 'flex' : 'none'}; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 10px; border:1px solid var(--border, #d8e3ea); border-radius:8px; background:#f4f8fb;">
+      <div id="${idPrefix}-member-chip" style="display:${selectedUserId ? 'flex' : 'none'}; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 10px; border:1px solid var(--border, #d8e3ea); border-radius:8px; background:var(--celeste-lighter, #f4f8fb);">
         <span>🔗 Vinculado a <strong id="${idPrefix}-member-chip-name">${esc(selectedName || '')}</strong></span>
         <button type="button" class="btn btn-ghost btn-sm" id="${idPrefix}-member-unlink">Quitar / escribir a mano</button>
       </div>
       <div id="${idPrefix}-member-search-wrap" style="display:${selectedUserId ? 'none' : ''}; position:relative;">
         <input type="text" name="memberName" id="${idPrefix}-member-name" required autocomplete="off" placeholder="Nombre y apellido (si está registrado, aparecerán coincidencias para elegir)" value="${esc(selectedName || '')}" ${selectedUserId ? 'readonly' : ''} />
-        <div id="${idPrefix}-member-results" style="display:none; position:absolute; left:0; right:0; z-index:30; background:#fff; border:1px solid var(--border, #d8e3ea); border-radius:8px; margin-top:2px; max-height:220px; overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.12);"></div>
+        <div id="${idPrefix}-member-results" class="ac-results"></div>
       </div>
       <input type="hidden" name="memberUserId" id="${idPrefix}-member-user-id" value="${esc(selectedUserId || '')}" />
     </div>`;
@@ -4493,14 +4550,18 @@ function wireMemberPicker(idPrefix, directory, onChange, extraNamesFn) {
       .slice(0, Math.max(0, 8 - userMatches.length));
     if (!userMatches.length && !nameMatches.length) {
       resultsBox.innerHTML = `<div style="padding:8px 10px; color:var(--ink-soft, #888); font-size:13px;">Sin coincidencias — se guardará el nombre tal como lo escribas</div>`;
-      resultsBox.style.display = '';
+      resultsBox.style.display = 'block';
       return;
     }
     resultsBox.innerHTML = [
-      ...userMatches.map((u) => `<div class="ac-item" data-kind="user" data-id="${u.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(u.name)}</div>`),
-      ...nameMatches.map((n) => `<div class="ac-item" data-kind="name" data-name="${esc(n)}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(n)} <span style="font-size:11px; color:var(--ink-soft, #888);">(Directorio)</span></div>`),
+      ...userMatches.map((u) => `<div class="ac-item" data-kind="user" data-id="${u.id}">${esc(u.name)}</div>`),
+      ...nameMatches.map((n) => `<div class="ac-item" data-kind="name" data-name="${esc(n)}">${esc(n)} <span style="font-size:11px; color:var(--ink-soft, #888);">(Directorio)</span></div>`),
     ].join('');
-    resultsBox.style.display = '';
+    resultsBox.style.display = 'block';
+    // El resaltado al pasar el mouse queda a cargo de la regla CSS
+    // .ac-item:hover (con su propia versión para modo oscuro) — antes se
+    // pintaba a mano con un gris fijo (#f0f4f8) que en modo oscuro dejaba el
+    // texto casi invisible sobre un fondo claro fuera de lugar.
     resultsBox.querySelectorAll('.ac-item').forEach((el) => {
       el.addEventListener('mousedown', (e) => {
         e.preventDefault();
@@ -4511,8 +4572,6 @@ function wireMemberPicker(idPrefix, directory, onChange, extraNamesFn) {
           selectPlainName(el.dataset.name);
         }
       });
-      el.addEventListener('mouseenter', () => { el.style.background = '#f0f4f8'; });
-      el.addEventListener('mouseleave', () => { el.style.background = ''; });
     });
   });
   nameInput.addEventListener('focus', () => { if (!nameInput.readOnly && nameInput.value) nameInput.dispatchEvent(new Event('input')); });
@@ -8843,7 +8902,7 @@ async function openCleaningShiftModal(presetDate) {
       <div style="display:flex; gap:8px; align-items:flex-start;">
         <div style="flex:1; position:relative;">
           <input type="text" class="fr-name" required autocomplete="off" placeholder="Ej: Familia Pino" />
-          <div class="fr-results" style="display:none; position:absolute; left:0; right:0; z-index:30; background:#fff; border:1px solid var(--border); border-radius:8px; margin-top:2px; max-height:200px; overflow-y:auto; box-shadow:0 6px 20px rgba(0,0,0,.12);"></div>
+          <div class="fr-results ac-results"></div>
         </div>
         <button type="button" class="btn btn-ghost btn-sm fr-remove" title="Quitar esta familia">${icon('trash')}</button>
       </div>
@@ -8870,8 +8929,8 @@ async function openCleaningShiftModal(presetDate) {
       // participó, por definición (recién se va a crear al guardar el turno).
       showStatsFor(exact || { timesDone: 0, lastDoneDate: null });
       if (!matches.length) { resultsBox.style.display = 'none'; resultsBox.innerHTML = ''; return; }
-      resultsBox.innerHTML = matches.map((f) => `<div class="ac-item" data-id="${f.id}" style="padding:8px 10px; cursor:pointer; font-size:13.5px;">${esc(f.name)}</div>`).join('');
-      resultsBox.style.display = '';
+      resultsBox.innerHTML = matches.map((f) => `<div class="ac-item" data-id="${f.id}">${esc(f.name)}</div>`).join('');
+      resultsBox.style.display = 'block';
       resultsBox.querySelectorAll('.ac-item').forEach((el) => {
         el.addEventListener('mousedown', (e) => {
           e.preventDefault();
