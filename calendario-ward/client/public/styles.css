@@ -1134,6 +1134,9 @@ tr.wg-cat-row td {
 .minuta-img-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-bottom: 1px solid #f1f5f9; font-size: 14.5px; color: #0f172a; line-height: 1.4; }
 .minuta-img-item:last-child { border-bottom: none; }
 .minuta-img-item-num { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: #0ea5e9; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.minuta-img-item-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.minuta-img-item-topic { font-weight: 500; }
+.minuta-img-item-presenter { font-size: 12px; color: #64748b; }
 .minuta-img-footer { text-align: center; font-size: 11px; color: #94a3b8; margin-top: 22px; padding-top: 14px; border-top: 1px solid #f1f5f9; }
 
 @media print {

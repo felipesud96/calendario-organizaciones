@@ -7488,7 +7488,7 @@ function presidencyAgendaTopics(orgName) {
 // servidor, y es la persona quien elige a quién enviárselo desde su propio
 // WhatsApp.
 function buildMinutaShareText(m) {
-  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable).map((a, i) => `${i + 1}. ${a.topic}`);
+  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable).map((a, i) => `${i + 1}. ${a.topic}${a.presenter ? ` — ${a.presenter}` : ''}`);
   const lines = [
     `📋 Minuta — ${m.title}`,
     `${m.organizationName} · ${fmtDateHuman(m.date)}`,
@@ -7522,7 +7522,10 @@ function buildMinutaImageNode(m) {
     ${topics.length ? topics.map((a, i) => `
       <div class="minuta-img-item">
         <span class="minuta-img-item-num">${i + 1}</span>
-        <span>${esc(a.topic)}</span>
+        <span class="minuta-img-item-text">
+          <span class="minuta-img-item-topic">${esc(a.topic)}</span>
+          ${a.presenter ? `<span class="minuta-img-item-presenter">👤 ${esc(a.presenter)}</span>` : ''}
+        </span>
       </div>`).join('') : `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin temas todavía)</span></div>`}
     <div class="minuta-img-footer">¡Gracias por su preparación! · Generado con ${esc(APP_NAME)}</div>
   `;
