@@ -136,6 +136,27 @@ export function computeBishopricOverview(data) {
       keyLeaders: keyLeadersForMinistering(data),
     };
 
+    // Fase 6: la reunión de Obispado también se da "por lo general, cada
+    // semana" (Manual General 29.2.4) — mismo aviso que Consejo de Barrio,
+    // pero SOLO para el Obispado entre las organizaciones con plantilla de
+    // reunión de presidencia (ver PRESIDENCY_AGENDA_TEMPLATES en app.js): es
+    // la única para la que el Manual da un número concreto de frecuencia; el
+    // resto solo dice "con regularidad", sin número con el que comparar, así
+    // que no se les agregó un aviso de atrasado en esta pasada. La reunión de
+    // Obispado se registra como acta tipo 'general' (no un tipo nuevo),
+    // acotada a la organización "Obispado" para no mezclarla con las actas
+    // 'general' de las otras 6 presidencias.
+    const obispadoOrg = data.organizations.find((o) => o.name === 'Obispado');
+    const OBISPADO_MEETING_FREQUENCY_DAYS = 7;
+    const lastBishopricMeetingDate = obispadoOrg ? lastMeetingDateOfType(data, 'general', obispadoOrg.id) : null;
+    const daysSinceBishopricMeeting = lastBishopricMeetingDate ? Math.floor((Date.parse(today) - Date.parse(lastBishopricMeetingDate)) / 86400000) : null;
+    const bishopricMeeting = {
+      frequencyDays: OBISPADO_MEETING_FREQUENCY_DAYS,
+      lastDate: lastBishopricMeetingDate,
+      daysSinceLast: daysSinceBishopricMeeting,
+      overdue: lastBishopricMeetingDate ? daysSinceBishopricMeeting > OBISPADO_MEETING_FREQUENCY_DAYS : true,
+    };
+
     return {
       generatedAt: new Date().toISOString(),
       overdueCommitments,
@@ -152,6 +173,7 @@ export function computeBishopricOverview(data) {
       },
       wardCouncil,
       ministeringCoordination,
+      bishopricMeeting,
     };
 }
 

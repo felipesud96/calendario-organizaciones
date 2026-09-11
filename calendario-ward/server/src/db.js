@@ -106,6 +106,12 @@ const EMPTY_DB = {
   // Obispado, no un descuido.
   quarterlyStats: [],
   wardSnapshot: null,
+  // Fase 7 (idea de Felipe): "Acuerdos entre organizaciones" — un compromiso
+  // explícito entre dos o más presidencias (ej. "el 4to domingo de cada mes,
+  // Cuórum de Élderes y Sociedad de Socorro hacen la misma clase combinada"),
+  // para que quede registrado y ambas partes se mantengan alineadas en vez
+  // de depender de la memoria de cada presidente. Ver routes/agreements.js.
+  interOrgAgreements: [],
   // Configuración editable por el Obispado: cada cuántos días se espera un
   // Consejo de Barrio, para avisar en el Panel de Obispado si se atrasó. Ver
   // routes/ward-settings.js.
@@ -136,6 +142,7 @@ const EMPTY_DB = {
     meetings: 1, commitments: 1, families: 1, cleaningShifts: 1, eventEvaluations: 1, talks: 1,
     achievementAwards: 1, achievementClosures: 1, interviewRequests: 1, budgetExpenseRequests: 1,
     agendaItems: 1, welfareCases: 1, welfareActions: 1, quarterlyStats: 1,
+    interOrgAgreements: 1,
   },
 };
 

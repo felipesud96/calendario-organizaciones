@@ -653,10 +653,21 @@ function orgSetForConflictCheck(item) {
 // actividades: requiere que se solapen el horario Y la sala — a propósito,
 // para no generar un aviso por cada entrevista del día que no tiene nada
 // que ver con la sala que se está por usar (evitar fatiga de avisos). Si
-// ambas comparten alguna organización (como dueña o como participante), no
-// se considera choque — ya están coordinadas a propósito. excludeEventId/
-// excludeInterviewId sirven para que, al editar una actividad o entrevista
-// ya existente, no choque consigo misma.
+// ambas comparten alguna organización (como dueña o como participante), en
+// general no se considera choque — ya están coordinadas a propósito.
+//
+// Punto (Felipe, Fase 7) — EXCEPCIÓN: si ambas cosas usan una SALA concreta
+// del edificio (Casa Capilla o Capilla — ver ROOMS_BY_LOCATION) y se solapan
+// en horario, sí se avisa AUNQUE sea la MISMA organización: no poder estar
+// físicamente en dos lugares a la vez es un choque real, no algo que "ya
+// esté coordinado" por ser la misma presidencia (ej. el presidente del
+// Cuórum de Élderes agenda una actividad y, sin darse cuenta, agenda
+// también una entrevista a la misma hora en la misma sala). Este caso se
+// marca con `sameOrgRoomConflict: true` para que conflictWarningHtml lo
+// redacte distinto ("tu misma organización — mismo lugar" en vez de
+// asumir que es otra organización). excludeEventId/excludeInterviewId
+// sirven para que, al editar una actividad o entrevista ya existente, no
+// choque consigo misma.
 async function findConflictingActivities(candidate, excludeEventId, excludeInterviewId) {
   if (!candidate.date || !candidate.startTime || !candidate.organizationId) return [];
   let dayEvents = [];
@@ -664,32 +675,38 @@ async function findConflictingActivities(candidate, excludeEventId, excludeInter
   try { dayEvents = await api(`/events?from=${candidate.date}&to=${candidate.date}`); } catch (e) { /* si falla, sigue con lo que sí cargó */ }
   try { dayInterviewRooms = await api(`/interviews/room-occupancy?date=${candidate.date}`); } catch (e) { /* si falla, sigue con lo que sí cargó */ }
   const candidateOrgs = orgSetForConflictCheck(candidate);
-  const eventConflicts = dayEvents.filter((ev) => {
-    if (excludeEventId && ev.id === Number(excludeEventId)) return false;
-    const evOrgs = orgSetForConflictCheck(ev);
-    if (candidateOrgs.some((id) => evOrgs.includes(id))) return false;
-    const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, ev.startTime, ev.endTime);
-    const placeConflict = placesConflict(candidate.location, candidate.sala, ev.location, ev.sala);
-    return timeConflict || placeConflict;
-  });
+  const eventConflicts = dayEvents
+    .filter((ev) => !(excludeEventId && ev.id === Number(excludeEventId)))
+    .map((ev) => {
+      const evOrgs = orgSetForConflictCheck(ev);
+      const sameOrg = candidateOrgs.some((id) => evOrgs.includes(id));
+      const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, ev.startTime, ev.endTime);
+      const placeConflict = placesConflict(candidate.location, candidate.sala, ev.location, ev.sala);
+      const sameRoomConflict = timeConflict && placeConflict && !!candidate.sala && !!ev.sala;
+      if (sameOrg) return sameRoomConflict ? { ...ev, sameOrgRoomConflict: true } : null;
+      return (timeConflict || placeConflict) ? ev : null;
+    })
+    .filter(Boolean);
   const interviewConflicts = dayInterviewRooms
-    .filter((iv) => {
-      if (excludeInterviewId && iv.id === Number(excludeInterviewId)) return false;
+    .filter((iv) => !(excludeInterviewId && iv.id === Number(excludeInterviewId)))
+    .map((iv) => {
       const ivOrgs = orgSetForConflictCheck(iv);
-      if (candidateOrgs.some((id) => ivOrgs.includes(id))) return false;
+      const sameOrg = candidateOrgs.some((id) => ivOrgs.includes(id));
       const timeConflict = timesOverlap(candidate.startTime, candidate.endTime, iv.startTime, iv.endTime);
       const placeConflict = placesConflict(candidate.location, candidate.sala, iv.location, iv.sala);
-      return timeConflict && placeConflict;
+      const sameRoomConflict = timeConflict && placeConflict && !!candidate.sala && !!iv.sala;
+      if (sameOrg) return sameRoomConflict ? { ...iv, kind: 'interview', sameOrgRoomConflict: true } : null;
+      return (timeConflict && placeConflict) ? { ...iv, kind: 'interview' } : null;
     })
-    .map((iv) => ({ ...iv, kind: 'interview' }));
+    .filter(Boolean);
   return [...eventConflicts, ...interviewConflicts];
 }
 
 function conflictWarningHtml(conflicts) {
   return `<div class="hint-box" style="border-color:#f59e0b; background:#fffbeb;">
-    ⚠️ <strong>Posible choque con otra organización</strong> — vuelve a presionar el botón para agendar de todas formas:
+    ⚠️ <strong>Posible choque de horario o lugar</strong> — vuelve a presionar el botón para agendar de todas formas:
     <ul style="margin:6px 0 0; padding-left:18px;">
-      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong> — ${c.kind === 'interview' ? '🔒 ocupada por una entrevista (privada)' : esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(locationDisplay(c)) : ''}</li>`).join('')}
+      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong>${c.sameOrgRoomConflict ? ' (tu misma organización — mismo lugar)' : ''} — ${c.kind === 'interview' ? '🔒 ocupada por una entrevista (privada)' : esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(locationDisplay(c)) : ''}</li>`).join('')}
     </ul>
   </div>`;
 }
@@ -2575,8 +2592,8 @@ async function renderCalendarView() {
           // una actividad del barrio.
           const calEventBg = it.kind === 'stake' ? '#7c3aed' : it.organizationColor;
           return `
-          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''} ${draggableEvent ? 'cal-event-draggable' : ''}" style="background:${calEventBg}" data-kind="${it.kind}" data-id="${it.id}" ${draggableEvent ? 'draggable="true"' : ''} title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc(stakeAwarePrefix(it) + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}${draggableEvent ? ' (arrástrala a otro día para moverla)' : ''}">
-            ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${esc(stakeAwarePrefix(it))}${esc(truncateTitle(it.title))}
+          <button class="cal-event ${it.kind === 'interview' ? 'is-interview' : ''} ${it.kind === 'stake' ? (it.blocking === false ? 'is-stake is-stake-info' : 'is-stake') : ''} ${draggableEvent ? 'cal-event-draggable' : ''}" style="background:${calEventBg}" data-kind="${it.kind}" data-id="${it.id}" ${draggableEvent ? 'draggable="true"' : ''} title="${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${esc((it.isMeeting && it.kind !== 'stake' ? '🔒 ' : '') + it.title)}${it.location ? ' — ' + esc(locationDisplay(it)) : ''}${draggableEvent ? ' (arrástrala a otro día para moverla)' : ''}">
+            ${it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.kind === 'stake' && it.allDay ? 'Todo el día' : fmtTime(it.startTime))} ${it.kind === 'interview' ? '👤' : ''} ${stakeAwarePrefix(it)}${esc(truncateTitle(it.title))}
           </button>`;
         }).join('')}
         ${extra > 0 ? `<button class="cal-more" data-more="${iso}">+${extra} más</button>` : ''}
@@ -6274,11 +6291,13 @@ async function renderMeetingsView() {
     <div class="subtabs">
       <button class="subtab-btn ${state.meetingsSubtab === 'mine' ? 'active' : ''}" data-tab="mine">Mis Asignaciones</button>
       <button class="subtab-btn ${state.meetingsSubtab === 'manage' ? 'active' : ''}" data-tab="manage">Reuniones</button>
+      <button class="subtab-btn ${state.meetingsSubtab === 'agreements' ? 'active' : ''}" data-tab="agreements">🤝 Acuerdos entre Organizaciones</button>
     </div>
     <div id="meetings-content"></div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.meetingsSubtab = b.dataset.tab; renderMeetingsView(); }));
   if (state.meetingsSubtab === 'mine') await renderMyAssignments();
+  else if (state.meetingsSubtab === 'agreements') await renderAgreementsManage();
   else await renderMeetingsManage();
 }
 
@@ -6509,6 +6528,236 @@ function wireMeetingCards(meetings) {
   });
 }
 
+// ==================================================================
+// Fase 7 — "Acuerdos entre Organizaciones" (idea de Felipe): un compromiso
+// explícito y de más largo plazo entre dos o más presidencias — ej. "el
+// presidente del Cuórum de Élderes y la presidenta de la Sociedad de
+// Socorro acordaron que el 4to domingo de cada mes hacen la misma clase
+// combinada" — para que quede registrado y ambas partes se mantengan
+// alineadas, sin depender de la memoria de cada presidente. A diferencia de
+// un acta, no "pertenece" a una sola organización: cualquiera de las
+// involucradas (o el Obispado) lo puede ver y editar (ver
+// canEditAgreement en agreements.js).
+// ==================================================================
+const AGREEMENT_NTH_OPTIONS = [
+  ['1', '1er'], ['2', '2do'], ['3', '3er'], ['4', '4to'], ['5', '5to'], ['last', 'último'],
+];
+const AGREEMENT_WEEKDAY_OPTIONS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+async function renderAgreementsManage() {
+  const content = document.getElementById('meetings-content');
+  content.innerHTML = skeletonCardsHtml(3);
+  let agreements;
+  try { agreements = await api('/agreements'); }
+  catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
+  const active = agreements.filter((a) => a.status === 'active');
+  const archived = agreements.filter((a) => a.status === 'archived');
+  content.innerHTML = `
+    <div class="hint-box" style="margin-top:0;">🤝 Compromisos entre dos o más presidencias — ej. "Cuórum de Élderes y Sociedad de Socorro hacen la misma clase el 4to domingo de cada mes" — para quedar alineados sin depender de la memoria de cada líder.</div>
+    <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+      <button class="btn btn-primary" id="agreement-new">+ Nuevo acuerdo</button>
+    </div>
+    <div class="card-list">
+      ${active.length ? active.map((a) => agreementCardHtml(a)).join('') : emptyStateHtml('No hay acuerdos activos', { id: 'agreement-empty-new', label: '+ Crear el primero' }, '🤝')}
+    </div>
+    ${archived.length ? `
+      <div style="margin-top:22px;">
+        <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">📁 Acuerdos archivados</h3>
+        <div class="card-list">${archived.map((a) => agreementCardHtml(a)).join('')}</div>
+      </div>` : ''}
+  `;
+  document.getElementById('agreement-new').addEventListener('click', () => openAgreementModal());
+  wireEmptyStateCta('agreement-empty-new', () => openAgreementModal());
+  wireAgreementCards(agreements);
+}
+
+function agreementOrgChipsHtml(a) {
+  return a.organizationNames.map((name, i) => `
+    <span style="display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; margin-right:8px;">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${a.organizationColors[i]};"></span>${esc(name)}
+    </span>`).join('');
+}
+
+function agreementCardHtml(a) {
+  const nextText = a.recurrenceType === 'freeform'
+    ? '📝 ' + esc(a.freeformText)
+    : a.nextOccurrence
+      ? `${a.recurrenceType === 'once' ? (a.isPast ? '📅 Fue el' : '📅 Próxima vez:') : '🔁 Próxima vez:'} ${esc(fmtDateHuman(a.nextOccurrence))}`
+      : '(sin próxima fecha calculable)';
+  return `
+    <div class="list-card agreement-card" data-id="${a.id}" style="cursor:pointer;">
+      <div class="lc-main">
+        <div class="lc-title">${esc(a.title)}${a.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivado)</span>' : ''}</div>
+        <div style="margin:3px 0;">${agreementOrgChipsHtml(a)}</div>
+        <div class="lc-sub">${nextText}</div>
+      </div>
+    </div>`;
+}
+
+function wireAgreementCards(agreements) {
+  document.querySelectorAll('.agreement-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const a = agreements.find((x) => x.id === Number(card.dataset.id));
+      if (a) openAgreementModal(a);
+    });
+  });
+}
+
+// Checkboxes de organizaciones para el acuerdo — igual estilo visual que
+// involvedOrgsFieldHtml (actividades en conjunto), pero sin "organización
+// principal": acá TODAS las marcadas son parte por igual del acuerdo, y se
+// necesitan al menos 2. Para un líder común, su propia organización queda
+// SIEMPRE marcada y no se puede desmarcar (el servidor lo exige igual, ver
+// agreements.js) — el Obispado/Administrador sí puede elegir cualquier par.
+function agreementOrgsFieldHtml(existingIds, lockedOrgId) {
+  const ids = (existingIds || []).map(Number);
+  return `
+    <div class="field">
+      <label>Organizaciones que participan (elige al menos 2)</label>
+      <div id="ag-orgs" style="display:flex; flex-wrap:wrap; gap:8px 14px; padding:4px 2px;">
+        ${state.organizations.map((o) => {
+          const isLocked = lockedOrgId != null && Number(o.id) === Number(lockedOrgId);
+          const checked = isLocked || ids.includes(o.id);
+          return `
+          <label style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:400; cursor:${isLocked ? 'default' : 'pointer'};">
+            <input type="checkbox" name="agreementOrgIds" value="${o.id}" ${checked ? 'checked' : ''} ${isLocked ? 'disabled' : ''} />
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+          </label>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function computeAgreementOrgIds(lockedOrgId) {
+  const checked = Array.from(document.querySelectorAll('#ag-orgs input[type="checkbox"]:checked')).map((el) => Number(el.value));
+  if (lockedOrgId != null && !checked.includes(Number(lockedOrgId))) checked.push(Number(lockedOrgId));
+  return checked;
+}
+
+function agreementRecurrenceFieldsHtml(existing) {
+  const type = existing?.recurrenceType || 'structured';
+  const nth = existing?.structured?.nth != null ? String(existing.structured.nth) : '4';
+  const weekday = existing?.structured?.weekday != null ? String(existing.structured.weekday) : '0';
+  return `
+    <div class="field">
+      <label>¿Cómo se repite?</label>
+      <div style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="recurrenceType" value="structured" ${type === 'structured' ? 'checked' : ''} style="width:auto;" /> Patrón fijo (ej. "4to domingo de cada mes")</label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="recurrenceType" value="once" ${type === 'once' ? 'checked' : ''} style="width:auto;" /> Fecha única (sin repetición)</label>
+        <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="recurrenceType" value="freeform" ${type === 'freeform' ? 'checked' : ''} style="width:auto;" /> Texto libre (no calza en un patrón fijo)</label>
+      </div>
+    </div>
+    <div id="ag-structured-fields" class="two-col" style="display:${type === 'structured' ? '' : 'none'};">
+      <div class="field">
+        <label>Cuál</label>
+        <select id="ag-nth">${AGREEMENT_NTH_OPTIONS.map(([v, label]) => `<option value="${v}" ${nth === v ? 'selected' : ''}>${label}</option>`).join('')}</select>
+      </div>
+      <div class="field">
+        <label>Día de la semana</label>
+        <select id="ag-weekday">${AGREEMENT_WEEKDAY_OPTIONS.map((label, i) => `<option value="${i}" ${weekday === String(i) ? 'selected' : ''}>${label}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div id="ag-once-field" class="field" style="display:${type === 'once' ? '' : 'none'};">
+      <label>Fecha</label>
+      <input type="date" id="ag-once-date" value="${esc(existing?.onceDate || '')}" />
+    </div>
+    <div id="ag-freeform-field" class="field" style="display:${type === 'freeform' ? '' : 'none'};">
+      <label>Descríbelo (ej. "cada 2 meses, coordinar antes con el Obispado")</label>
+      <textarea id="ag-freeform-text" rows="2">${esc(existing?.freeformText || '')}</textarea>
+    </div>`;
+}
+
+function wireAgreementRecurrenceFields() {
+  document.querySelectorAll('input[name="recurrenceType"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const type = document.querySelector('input[name="recurrenceType"]:checked').value;
+      document.getElementById('ag-structured-fields').style.display = type === 'structured' ? '' : 'none';
+      document.getElementById('ag-once-field').style.display = type === 'once' ? '' : 'none';
+      document.getElementById('ag-freeform-field').style.display = type === 'freeform' ? '' : 'none';
+    });
+  });
+}
+
+function openAgreementModal(existing) {
+  const isObispadoTier = isObispadoUser();
+  // Un líder común solo puede armar acuerdos donde participe SU PROPIA
+  // organización — se marca sola y no se puede desmarcar (ver
+  // agreementOrgsFieldHtml). El Obispado/Administrador no tiene esa
+  // restricción: puede elegir cualquier par de organizaciones.
+  const lockedOrgId = isObispadoTier ? null : state.user.organizationId;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ag-modal-backdrop">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h3>${existing ? 'Editar acuerdo' : 'Nuevo acuerdo entre organizaciones'}</h3><button class="modal-close" id="ag-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ag-error"></div>
+          <form id="ag-form">
+            <div class="field">
+              <label>Título</label>
+              <input type="text" name="title" required placeholder="Ej: Clase combinada del 4to domingo" value="${esc(existing?.title || '')}" />
+            </div>
+            ${agreementOrgsFieldHtml(existing?.organizationIds, lockedOrgId)}
+            <div class="field">
+              <label>¿En qué consiste el acuerdo?</label>
+              <textarea name="description" rows="3" required placeholder="Ej: Cuórum de Élderes y Sociedad de Socorro hacen la misma clase combinada">${esc(existing?.description || '')}</textarea>
+            </div>
+            ${agreementRecurrenceFieldsHtml(existing)}
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div>${existing ? `<button type="button" class="btn btn-ghost" id="ag-archive-toggle">${existing.status === 'archived' ? '♻️ Reactivar' : '📁 Archivar'}</button>` : ''}</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ag-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ag-save">${existing ? 'Guardar' : 'Crear acuerdo'}</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  wireAgreementRecurrenceFields();
+  const agGuardedClose = wireUnsavedChangesGuard(document.getElementById('ag-form'));
+  document.getElementById('ag-modal-close').addEventListener('click', agGuardedClose);
+  document.getElementById('ag-cancel').addEventListener('click', agGuardedClose);
+  document.getElementById('ag-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ag-modal-backdrop') agGuardedClose(); });
+  document.getElementById('ag-archive-toggle')?.addEventListener('click', async () => {
+    try {
+      await api(`/agreements/${existing.id}/archive`, { method: 'PUT', body: { archive: existing.status !== 'archived' } });
+      closeModal();
+      toast(existing.status === 'archived' ? 'Acuerdo reactivado' : 'Acuerdo archivado');
+      await renderAgreementsManage();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  document.getElementById('ag-save').addEventListener('click', async () => {
+    const form = document.getElementById('ag-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const organizationIds = computeAgreementOrgIds(lockedOrgId);
+    if (organizationIds.length < 2) {
+      document.getElementById('ag-error').innerHTML = `<div class="error-msg">Elige al menos dos organizaciones</div>`;
+      return;
+    }
+    const recurrenceType = document.querySelector('input[name="recurrenceType"]:checked')?.value;
+    const body = {
+      title: fd.get('title'),
+      description: fd.get('description'),
+      organizationIds,
+      recurrenceType,
+      structured: recurrenceType === 'structured' ? { nth: document.getElementById('ag-nth').value === 'last' ? 'last' : Number(document.getElementById('ag-nth').value), weekday: Number(document.getElementById('ag-weekday').value) } : undefined,
+      onceDate: recurrenceType === 'once' ? document.getElementById('ag-once-date').value : undefined,
+      freeformText: recurrenceType === 'freeform' ? document.getElementById('ag-freeform-text').value : undefined,
+    };
+    try {
+      if (existing) await api(`/agreements/${existing.id}`, { method: 'PUT', body });
+      else await api('/agreements', { method: 'POST', body });
+      closeModal();
+      toast(existing ? 'Acuerdo actualizado' : 'Acuerdo creado');
+      await renderAgreementsManage();
+    } catch (e) {
+      document.getElementById('ag-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
 function commitmentStatusPillHtml(c) {
   const map = {
     pending: ['status-amber', 'Pendiente'],
@@ -6718,7 +6967,7 @@ async function openMeetingModal(presetType) {
     <div class="commitment-row">
       <div class="two-col">
         <div class="field" style="margin-bottom:0;">
-          <label>Tema</label>
+          <label>Tema <span class="ar-cita-icon" style="display:none; cursor:help;" title="">ⓘ</span></label>
           <input type="text" class="ar-topic" required placeholder="Ej: Presupuesto de actividades de agosto" />
         </div>
         <div class="field" style="margin-bottom:0;">
@@ -6726,6 +6975,9 @@ async function openMeetingModal(presetType) {
           <input type="text" class="ar-presenter" placeholder="Ej: Roberto Fuentes" />
         </div>
       </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:400; margin-top:6px;">
+        <input type="checkbox" class="ar-not-applicable" style="width:auto;" /> No aplica este tema para esta reunión
+      </label>
       <button type="button" class="btn btn-ghost btn-sm ar-remove">${icon('trash')} Quitar tema</button>
     </div>`;
 
@@ -6777,6 +7029,7 @@ async function openMeetingModal(presetType) {
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-use-template" style="display:none;">${icon('copy')} Usar plantilla de temas</button>
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-pending-previous" style="display:none;">🔁 Traer compromisos pendientes del consejo anterior</button>
               </div>
+              <div id="mt-template-hint" class="hint-box" style="display:none; margin-top:6px;"></div>
             </div>
             <div class="field">
               <label>Compromisos (opcional — también se pueden agregar después)</label>
@@ -6808,36 +7061,93 @@ async function openMeetingModal(presetType) {
   const wireAgendaRow = (row) => {
     wireNameAutocomplete(row.querySelector('.ar-presenter'), () => nameSuggestionsCache?.presenters);
     row.querySelector('.ar-remove').addEventListener('click', () => row.remove());
+    const naCheckbox = row.querySelector('.ar-not-applicable');
+    const topicInput = row.querySelector('.ar-topic');
+    naCheckbox.addEventListener('change', () => {
+      topicInput.required = !naCheckbox.checked;
+      row.style.opacity = naCheckbox.checked ? '0.55' : '';
+    });
   };
   const addAgendaRow = () => {
     agendaBox.insertAdjacentHTML('beforeend', agendaRowHtml());
     wireAgendaRow(agendaBox.lastElementChild);
   };
+  // Fase 6: agrega un tema de agenda ya con el título de la plantilla, y — si
+  // viene con cita del Manual General — muestra el ícono ⓘ de la fila con esa
+  // cita como tooltip nativo (title="…"), para no fingir que un tema suelto
+  // trae su propia cita puntual cuando en realidad el Manual cita la sección
+  // completa de responsabilidades de la organización.
+  const addAgendaRowWithCitation = (topic, citation, oficial) => {
+    addAgendaRow();
+    const row = agendaBox.lastElementChild;
+    row.querySelector('.ar-topic').value = topic;
+    if (citation) {
+      const citeIcon = row.querySelector('.ar-cita-icon');
+      citeIcon.style.display = '';
+      citeIcon.title = oficial ? `Basado en el ${citation}.` : `Sugerido en base a: ${citation}.`;
+    }
+  };
   document.getElementById('mt-add-agenda').addEventListener('click', addAgendaRow);
 
-  // Punto Grupo 3: "Usar plantilla de temas" — solo aparece para los tipos
-  // de acta que ya tienen una estructura estándar (ver AGENDA_TEMPLATES más
-  // arriba). Agrega los temas AL FINAL de lo que ya haya, sin borrar nada —
-  // así se puede usar de punto de partida y seguir ajustando a mano.
+  // Fase 6: quien crea el acta ve la plantilla de reunión de presidencia de
+  // SU PROPIA organización (la que el servidor le va a asignar automático al
+  // acta 'general' — ver organizationId en POST /meetings), nunca la de otra.
+  const myOrgName = orgById(state.user.organizationId)?.name || null;
+
+  // Punto Grupo 3 / Fase 6: "Usar plantilla de temas" — aparece para los
+  // tipos de acta con estructura estándar (Consejo de Barrio / Coordinación
+  // de Ministración, ver AGENDA_TEMPLATES) Y AHORA TAMBIÉN para una acta
+  // 'general' cuando la organización de quien la crea tiene una plantilla de
+  // reunión de presidencia (ver PRESIDENCY_AGENDA_TEMPLATES). Agrega los
+  // temas AL FINAL de lo que ya haya, sin borrar nada — sigue siendo un
+  // punto de partida opcional, nunca reemplaza el acta libre.
   const typeSelForTemplate = document.getElementById('mt-type');
   const templateBtn = document.getElementById('mt-use-template');
+  const templateHintBox = document.getElementById('mt-template-hint');
+  const currentTemplateInfo = () => {
+    const type = typeSelForTemplate?.value || 'general';
+    if (AGENDA_TEMPLATES[type]) return { kind: 'council', topics: AGENDA_TEMPLATES[type] };
+    if (type === 'general') {
+      const tpl = presidencyTemplateFor(myOrgName);
+      if (tpl) return { kind: 'presidency', orgName: myOrgName, cita: tpl.cita, oficial: tpl.oficial, topics: presidencyAgendaTopics(myOrgName) };
+    }
+    return null;
+  };
   const updateTemplateBtnVisibility = () => {
     if (!templateBtn) return;
-    templateBtn.style.display = AGENDA_TEMPLATES[typeSelForTemplate?.value] ? '' : 'none';
+    const info = currentTemplateInfo();
+    templateBtn.style.display = info ? '' : 'none';
+    templateBtn.innerHTML = info && info.kind === 'presidency'
+      ? `${icon('copy')} Usar plantilla de temas (${esc(info.orgName)})`
+      : `${icon('copy')} Usar plantilla de temas`;
+    if (templateHintBox) {
+      if (info && info.kind === 'presidency') {
+        templateHintBox.style.display = '';
+        templateHintBox.innerHTML = info.oficial
+          ? `📖 Esta plantilla se basa en el <strong>${esc(info.cita)}</strong>.`
+          : `💡 El Manual General no da una agenda de reunión de presidencia con viñetas propias para ${esc(info.orgName)} — estos temas son <strong>sugeridos</strong> en base a sus responsabilidades generales (${esc(info.cita)}).`;
+      } else {
+        templateHintBox.style.display = 'none';
+      }
+    }
   };
-  if (typeSelForTemplate) {
-    typeSelForTemplate.addEventListener('change', updateTemplateBtnVisibility);
-    updateTemplateBtnVisibility();
-  }
+  // Fase 6: antes solo se llamaba updateTemplateBtnVisibility() cuando
+  // existía el selector de tipo (típicamente solo Obispado/Secretario de
+  // Barrio) — un líder común (sin selector, siempre tipo 'general') nunca
+  // veía el botón de plantilla. Ahora se llama siempre, para que también le
+  // aparezca la plantilla de reunión de presidencia de su propia organización.
+  if (typeSelForTemplate) typeSelForTemplate.addEventListener('change', updateTemplateBtnVisibility);
+  updateTemplateBtnVisibility();
   if (templateBtn) templateBtn.addEventListener('click', async () => {
-    const tpl = AGENDA_TEMPLATES[typeSelForTemplate.value] || [];
-    if (!tpl.length) return;
-    const tipoLabel = typeSelForTemplate.options[typeSelForTemplate.selectedIndex].text;
+    const info = currentTemplateInfo();
+    if (!info || !info.topics.length) return;
+    const tpl = info.topics;
+    const tipoLabel = info.kind === 'presidency' ? `reunión de presidencia de ${info.orgName}` : typeSelForTemplate.options[typeSelForTemplate.selectedIndex].text;
     const yaHayTemas = agendaBox.children.length > 0;
     if (yaHayTemas && !(await confirmModal(`Esto agrega ${tpl.length} temas estándar de ${tipoLabel} al final de la lista (no borra los que ya escribiste). ¿Continuar?`, { title: 'Usar plantilla de temas', confirmText: 'Agregar temas' }))) return;
     tpl.forEach((topic) => {
-      addAgendaRow();
-      agendaBox.lastElementChild.querySelector('.ar-topic').value = topic;
+      if (info.kind === 'presidency') addAgendaRowWithCitation(topic, info.cita, info.oficial);
+      else { addAgendaRow(); agendaBox.lastElementChild.querySelector('.ar-topic').value = topic; }
     });
     toast(`${tpl.length} temas agregados desde la plantilla`);
   });
@@ -6848,18 +7158,24 @@ async function openMeetingModal(presetType) {
   // este mismo tipo (mismo criterio que ya usa el recordatorio por correo
   // de checkCouncilPrepReminders en reminders.js) y los agrega como temas
   // de seguimiento concretos, con el responsable de cada uno como "quién lo
-  // presenta" — listo para retomarlos en la reunión de hoy.
+  // presenta" — listo para retomarlos en la reunión de hoy. Fase 6: también
+  // aparece para una acta 'general' cuando la organización tiene plantilla
+  // de reunión de presidencia — el servidor acota "la reunión anterior" a la
+  // MISMA organización en ese caso (ver previousMeetingOfType en
+  // meetings.js).
   const pendingPrevBtn = document.getElementById('mt-pending-previous');
   const updatePendingPrevBtnVisibility = () => {
     if (!pendingPrevBtn) return;
-    pendingPrevBtn.style.display = agendaPatternFor(typeSelForTemplate?.value) ? '' : 'none';
+    const type = typeSelForTemplate?.value || 'general';
+    const showForPresidency = type === 'general' && !!presidencyTemplateFor(myOrgName);
+    pendingPrevBtn.style.display = (agendaPatternFor(type) || showForPresidency) ? '' : 'none';
   };
-  if (typeSelForTemplate) {
-    typeSelForTemplate.addEventListener('change', updatePendingPrevBtnVisibility);
-    updatePendingPrevBtnVisibility();
-  }
+  if (typeSelForTemplate) typeSelForTemplate.addEventListener('change', updatePendingPrevBtnVisibility);
+  updatePendingPrevBtnVisibility();
   if (pendingPrevBtn) pendingPrevBtn.addEventListener('click', async () => {
-    const type = typeSelForTemplate.value;
+    // Fase 6: para un líder común (sin selector de tipo — ver typeOptionsHtml
+    // más arriba) el tipo siempre es 'general', igual que al guardar el acta.
+    const type = typeSelForTemplate?.value || 'general';
     const date = document.querySelector('#mt-form [name="date"]')?.value || toISODate(new Date());
     let result;
     try {
@@ -6950,6 +7266,7 @@ async function openMeetingModal(presetType) {
       .map((row) => ({
         topic: row.querySelector('.ar-topic').value.trim(),
         presenter: row.querySelector('.ar-presenter').value.trim(),
+        notApplicable: row.querySelector('.ar-not-applicable')?.checked || false,
       }))
       .filter((a) => a.topic);
     try {
@@ -7023,6 +7340,167 @@ function isCouncilMeetingType(type) {
   return agendaPatternFor(type) !== null;
 }
 
+// ==================================================================
+// Fase 6 — "Reunión de presidencia" por organización (idea aprobada por
+// Felipe en base al Manual General: predefinir temas por organización, sin
+// perder nunca la opción de acta 100% libre).
+//
+// A diferencia de AGENDA_TEMPLATES de arriba (Consejo de Barrio /
+// Coordinación de Ministración, con su propio patrón de campos fijo), esto
+// NO agrega un tipo de acta nuevo: sigue siendo type: 'general', y la
+// plantilla se elige según la ORGANIZACIÓN de quien crea el acta (ver
+// presidencyTemplateFor). Los temas quedan como cualquier tema de acta
+// general — título + presentador — así que la agenda sigue totalmente
+// editable a mano igual que siempre; "Usar plantilla" solo agrega un punto
+// de partida, nunca reemplaza el modo libre.
+//
+// `oficial: true` = la lista de temas viene textual de la sección citada del
+// Manual General (8.3.3.3, 9.3.2.3, etc.) — Cuórum de Élderes, Sociedad de
+// Socorro, Hombres Jóvenes, Mujeres Jóvenes y Obispado sí tienen una agenda
+// de reunión de presidencia con viñetas propias ahí.
+// `oficial: false` = Primaria y Escuela Dominical NO tienen, en el Manual,
+// una agenda de reunión de presidencia con viñetas propias — solo dice "se
+// reúne con regularidad" — así que estos temas son SUGERIDOS a partir de las
+// responsabilidades generales de la organización, y se lo avisamos a la
+// persona (ver hint de "sugerido" en openMeetingModal) para no hacer pasar
+// una sugerencia nuestra por una cita textual del Manual.
+//
+// Punto explícito de Felipe: toda reunión de presidencia empieza con
+// oración, sigue con un pensamiento espiritual o lectura del Manual
+// General, y termina con oración — esto va tanto en el acta como en la
+// minuta que se comparte antes con los consejeros (ver
+// PRESIDENCY_FIXED_OPENING/THOUGHT/CLOSING y buildMinutaShareText).
+const PRESIDENCY_FIXED_OPENING = 'Oración inicial';
+const PRESIDENCY_FIXED_THOUGHT = 'Pensamiento espiritual o lectura del Manual General';
+const PRESIDENCY_FIXED_CLOSING = 'Oración final';
+
+const PRESIDENCY_AGENDA_TEMPLATES = {
+  'Obispado': {
+    cita: 'Manual General 29.2.4',
+    oficial: true,
+    temas: [
+      'Coordinar la obra de salvación y exaltación',
+      'Cómo fortalecer a personas y familias del barrio',
+      'Quiénes están listos para ordenanzas, llamamientos, una misión o instrucción',
+      'Asuntos de organización y programas del barrio',
+      'Presupuesto',
+      'Informes',
+      'Planificación de las próximas reuniones',
+    ],
+  },
+  'Cuórum de Élderes': {
+    cita: 'Manual General 8.3.3.3',
+    oficial: true,
+    temas: [
+      'Cómo fortalecer a los miembros del cuórum (incluyendo a quienes se ordenarán o se unirán pronto)',
+      'La obra de salvación y exaltación',
+      'La obra misional, el templo y la historia familiar',
+      'Cómo responder al consejo y las asignaciones del obispo y de los líderes de estaca',
+      'Cómo responder a las asignaciones del Consejo de Barrio',
+      'Asignaciones de ministración, consideradas con espíritu de oración',
+      'Información de las entrevistas de ministración y cómo satisfacer las necesidades detectadas',
+      'Hermanos a considerar para llamamientos o asignaciones',
+      'Planificación de las reuniones y actividades del cuórum',
+    ],
+  },
+  'Sociedad de Socorro': {
+    cita: 'Manual General 9.3.2.3',
+    oficial: true,
+    temas: [
+      'Cómo fortalecer a las hermanas y sus familias',
+      'La obra de salvación y exaltación',
+      'La obra misional, el templo y la historia familiar',
+      'Cómo responder al consejo y las asignaciones del obispo y de los líderes de estaca',
+      'Cómo responder a las asignaciones del Consejo de Barrio',
+      'Asignaciones de ministración, consideradas con espíritu de oración',
+      'Información de las entrevistas de ministración y cómo satisfacer las necesidades detectadas',
+      'Hermanas a considerar para llamamientos o asignaciones',
+      'Planificación de las reuniones y actividades de la Sociedad de Socorro',
+    ],
+  },
+  'Hombres Jóvenes': {
+    cita: 'Manual General 10.4.3',
+    oficial: true,
+    temas: [
+      'Cómo ayudar a llevar a cabo la obra de salvación y exaltación',
+      'Cómo servir a los jóvenes (nuevos miembros, menos activos)',
+      'Cómo tender la mano a jóvenes de otras religiones o creencias',
+      'Planificación de reuniones, proyectos de servicio y actividades',
+      'Capacitación de liderazgo para los jóvenes con un llamamiento',
+    ],
+  },
+  'Mujeres Jóvenes': {
+    cita: 'Manual General 11.3.4.3',
+    oficial: true,
+    temas: [
+      'Cómo ayudar a llevar a cabo la obra de salvación y exaltación',
+      'Cómo servir a las jóvenes de la clase (nuevas, menos activas)',
+      'Cómo tender la mano a jóvenes de otras religiones o creencias',
+      'Planificación de reuniones, actividades y proyectos de servicio',
+      'Capacitación de liderazgo por parte de la consejera de la presidencia',
+    ],
+  },
+  'Primaria': {
+    cita: 'Manual General 12.3 (responsabilidades del presidente — el Manual no da una agenda de reunión de presidencia con viñetas propias)',
+    oficial: false,
+    temas: [
+      'Organización de clases, canto y actividades',
+      'Confirmar dos adultos responsables para cada actividad',
+      'Preparación de los niños para las ordenanzas (ej. el bautismo)',
+      'Necesidades de ministración a niños, maestros y líderes de la Primaria',
+      'Obreros de la Primaria a recomendar',
+      'Registros, informes y presupuesto',
+    ],
+  },
+  'Escuela Dominical': {
+    cita: 'Manual General 13.2.2 (responsabilidades del presidente — el Manual no da una agenda de reunión de presidencia con viñetas propias)',
+    oficial: false,
+    temas: [
+      'Mejora del aprendizaje y la enseñanza en las clases',
+      'Maestros a recomendar (con aprobación del Obispado)',
+      'Apoyo y capacitación a los maestros',
+      'Alcance a miembros que no están asistiendo',
+      'Registros de asistencia e informe trimestral',
+    ],
+  },
+};
+
+function presidencyTemplateFor(orgName) {
+  return PRESIDENCY_AGENDA_TEMPLATES[orgName || ''] || null;
+}
+
+// Arma la lista final de temas de la plantilla de una organización: oración
+// inicial + pensamiento espiritual + temas propios (Manual General) +
+// oración final — ver la nota de Felipe más arriba sobre por qué estos tres
+// van siempre, en toda reunión de presidencia.
+function presidencyAgendaTopics(orgName) {
+  const tpl = presidencyTemplateFor(orgName);
+  if (!tpl) return null;
+  return [PRESIDENCY_FIXED_OPENING, PRESIDENCY_FIXED_THOUGHT, ...tpl.temas, PRESIDENCY_FIXED_CLOSING];
+}
+
+// Punto (Felipe): "minuta" = lo que el presidente de la organización comparte
+// ANTES de la reunión con sus consejeros, con pautas generales, para que
+// lleguen preparados a los temas — SOLO los títulos de los temas (nunca
+// notas/decisiones ni nada confidencial), en el mismo orden de la agenda,
+// saltando los marcados "no aplica". Se arma un link de WhatsApp (wa.me) que
+// corre entero en el navegador de la persona — no se manda nada a ningún
+// servidor, y es la persona quien elige a quién enviárselo desde su propio
+// WhatsApp.
+function buildMinutaShareText(m) {
+  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable).map((a, i) => `${i + 1}. ${a.topic}`);
+  const lines = [
+    `📋 Minuta — ${m.title}`,
+    `${m.organizationName} · ${fmtDateHuman(m.date)}`,
+    '',
+    'Temas a tratar (para venir preparados):',
+    ...(topics.length ? topics : ['(sin temas todavía)']),
+    '',
+    '¡Gracias por su preparación!',
+  ];
+  return lines.join('\n');
+}
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
@@ -7047,8 +7525,8 @@ async function openMeetingDetailModal(m) {
                     ['👣 Seguimiento', a.seguimiento],
                   ].filter(([, v]) => v);
                   return `
-                <div class="commitment-detail-row" data-agenda-id="${a.id}">
-                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
                   ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button>` : ''}
                 </div>`;
@@ -7063,15 +7541,15 @@ async function openMeetingDetailModal(m) {
                     ['🤝 Quién lo hará', a.quienLoHara],
                   ].filter(([, v]) => v);
                   return `
-                <div class="commitment-detail-row" data-agenda-id="${a.id}">
-                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${ministeringFields.length ? ministeringFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin quién/qué/quién todavía</div>` : '')}
                   ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button>` : ''}
                 </div>`;
                 }
                 return `
-                <div class="commitment-detail-row" data-agenda-id="${a.id}">
-                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}</div>
+                <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
+                  <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
                   ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button>` : ''}
                 </div>`;
@@ -7096,7 +7574,8 @@ async function openMeetingDetailModal(m) {
           `}
         </div>
         <div class="modal-footer">
-          <div style="display:flex; gap:8px;">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">📤 Compartir minuta</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
           </div>
@@ -7107,6 +7586,14 @@ async function openMeetingDetailModal(m) {
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
+  // Punto (Felipe): "Compartir minuta" — antes de la reunión, el presidente
+  // de la organización manda por WhatsApp los temas a tratar (nunca notas ni
+  // nada confidencial) para que sus consejeros lleguen preparados. Visible
+  // para cualquiera que vea el contenido del acta (no solo quien la creó),
+  // porque cualquier miembro de la presidencia podría ser quien la comparta.
+  document.getElementById('md-share-minuta')?.addEventListener('click', () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
+  });
   if (!m.contentRedacted) wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
   if (canEdit) {
     document.getElementById('md-toggle-confidential').addEventListener('click', async () => {
@@ -7207,6 +7694,16 @@ function openEditAgendaNotesModal(m, item) {
   ` : `
             <div class="field"><label>Qué se decidió / notas</label><textarea name="notes" rows="4">${esc(item.notes || '')}</textarea></div>
   `;
+  // Fase 6: "no aplica este tema" — se ofrece para cualquier tipo de acta
+  // (no solo las de plantilla de presidencia), para marcar un tema que esta
+  // vez no corresponde tratar, sin tener que borrarlo de la agenda.
+  const naFieldHtml = `
+            <div class="field" style="margin-bottom:14px;">
+              <label style="display:flex; align-items:center; gap:8px; font-weight:600;">
+                <input type="checkbox" name="notApplicable" style="width:auto;" ${item.notApplicable ? 'checked' : ''} />
+                No aplica este tema para esta reunión
+              </label>
+            </div>`;
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="an-modal-backdrop">
       <div class="modal">
@@ -7214,6 +7711,7 @@ function openEditAgendaNotesModal(m, item) {
         <div class="modal-body">
           <div id="an-error"></div>
           <form id="an-form">
+            ${naFieldHtml}
             ${bodyHtml}
           </form>
         </div>
@@ -7232,11 +7730,14 @@ function openEditAgendaNotesModal(m, item) {
   document.getElementById('an-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'an-modal-backdrop') anGuardedClose(); });
   document.getElementById('an-save').addEventListener('click', async () => {
     const fd = new FormData(document.getElementById('an-form'));
-    const body = agendaPattern === 'consejo'
-      ? { necesidad: fd.get('necesidad'), analisis: fd.get('analisis'), acuerdo: fd.get('acuerdo'), seguimiento: fd.get('seguimiento') }
-      : agendaPattern === 'ministracion'
-      ? { quienNecesita: fd.get('quienNecesita'), queSeHara: fd.get('queSeHara'), quienLoHara: fd.get('quienLoHara') }
-      : { notes: fd.get('notes') };
+    const body = {
+      notApplicable: fd.get('notApplicable') === 'on',
+      ...(agendaPattern === 'consejo'
+        ? { necesidad: fd.get('necesidad'), analisis: fd.get('analisis'), acuerdo: fd.get('acuerdo'), seguimiento: fd.get('seguimiento') }
+        : agendaPattern === 'ministracion'
+        ? { quienNecesita: fd.get('quienNecesita'), queSeHara: fd.get('queSeHara'), quienLoHara: fd.get('quienLoHara') }
+        : { notes: fd.get('notes') }),
+    };
     try {
       const updated = await api(`/meetings/${m.id}/agenda-items/${item.id}`, { method: 'PUT', body });
       closeModal();
@@ -9916,6 +10417,7 @@ async function renderBishopricPanelView() {
     </div>
     ${bpWardCouncilAlertHtml(data.wardCouncil)}
     ${bpMinisteringAlertHtml(data.ministeringCoordination)}
+    ${bpBishopricMeetingAlertHtml(data.bishopricMeeting)}
     <div class="stats-cards" style="margin-bottom:22px;">
       <div class="stat-card"><div class="stat-card-label">Compromisos atrasados</div><div class="stat-card-value">${data.overdueCommitments.length}</div></div>
       <div class="stat-card"><div class="stat-card-label">Turnos de aseo sin confirmar</div><div class="stat-card-value">${data.cleaningPending.length}</div></div>
@@ -10002,6 +10504,33 @@ function bpMinisteringAlertHtml(mc) {
     </div>`;
 }
 
+// Fase 6 — aviso de Reunión de Obispado atrasada: mismo criterio de "días
+// desde la última" que Consejo de Barrio (Manual General 29.2.4: "por lo
+// general, cada semana"), pero con la frecuencia FIJA en 7 días (no
+// editable) — a diferencia de Consejo de Barrio, esto no tiene un campo de
+// configuración propio porque el Manual ya da el número exacto y no hay
+// motivo para que varíe de barrio en barrio. La reunión de Obispado se
+// registra como acta 'general' de la organización "Obispado" (ver
+// PRESIDENCY_AGENDA_TEMPLATES más arriba), no como un tipo de acta nuevo.
+function bpBishopricMeetingAlertHtml(bm) {
+  if (!bm) return '';
+  const okClass = bm.overdue ? '' : ' ok';
+  const statusText = !bm.lastDate
+    ? 'Todavía no hay ninguna reunión de Obispado registrada.'
+    : bm.overdue
+      ? `Han pasado ${bm.daysSinceLast} días desde la última (${esc(fmtDateHuman(bm.lastDate))}) — la frecuencia esperada es cada ${bm.frequencyDays} días.`
+      : `Al día — la última fue hace ${bm.daysSinceLast} día${bm.daysSinceLast === 1 ? '' : 's'} (${esc(fmtDateHuman(bm.lastDate))}).`;
+  return `
+    <div class="council-alert-box${okClass}">
+      <div class="council-alert-icon">${bm.overdue ? '⚠️' : '✅'}</div>
+      <div class="council-alert-body">
+        <div class="council-alert-title">🏛️ Reunión de Obispado (semanal)</div>
+        <div>${statusText}</div>
+        ${bm.overdue ? `<button type="button" class="btn btn-secondary btn-sm" id="bp-create-bishopric">📋 Crear acta de reunión de Obispado</button>` : ''}
+      </div>
+    </div>`;
+}
+
 // Las esferitas reemplazan la barra de scroll nativa (que queda escondida
 // por CSS) para las cajas "de a una tarjeta a la vez" del Panel de
 // Obispado: una por tarjeta, gris, y la de la tarjeta que se está viendo se
@@ -10081,6 +10610,7 @@ function bpCleaningRowHtml(s) {
 function wireBishopricPanelActions() {
   document.getElementById('bp-create-council')?.addEventListener('click', () => goCreateMeetingOfType('consejo_barrio'));
   document.getElementById('bp-create-ministering')?.addEventListener('click', () => goCreateMeetingOfType('coordinacion_ministracion'));
+  document.getElementById('bp-create-bishopric')?.addEventListener('click', () => goCreateMeetingOfType('general'));
   document.getElementById('bp-council-freq-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = document.getElementById('bp-council-freq');

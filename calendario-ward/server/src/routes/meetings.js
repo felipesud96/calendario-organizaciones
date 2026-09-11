@@ -14,10 +14,18 @@ const OBISPADO_ONLY_TYPES = ['consejo_barrio', 'coordinacion_ministracion'];
 
 // Fecha del acta más reciente de un tipo dado (cualquier estado, activa o
 // archivada — lo que importa es que la reunión haya ocurrido) — reutilizado
-// por dashboard.js para los avisos de "Consejo de Barrio atrasado" y
-// "Coordinación de Ministración pendiente este trimestre".
-export function lastMeetingDateOfType(data, type) {
-  const dates = data.meetings.filter((m) => m.type === type).map((m) => m.date).sort();
+// por dashboard.js para los avisos de "Consejo de Barrio atrasado",
+// "Coordinación de Ministración pendiente este trimestre" y (Fase 6)
+// "Reunión de Obispado atrasada". `organizationId` es opcional: sin él se
+// busca en TODAS las organizaciones (como antes, para Consejo de Barrio y
+// Coordinación de Ministración, que no son de una sola organización); con
+// él, se acota a esa organización — necesario para el tipo 'general', que
+// junta las reuniones de presidencia de las 7 organizaciones (Fase 6) más
+// las del Obispado, y mezclarlas todas sería incorrecto.
+export function lastMeetingDateOfType(data, type, organizationId) {
+  const dates = data.meetings
+    .filter((m) => m.type === type && (organizationId == null || Number(m.organizationId) === Number(organizationId)))
+    .map((m) => m.date).sort();
   return dates.length ? dates[dates.length - 1] : null;
 }
 
@@ -26,8 +34,13 @@ export function lastMeetingDateOfType(data, type) {
 // reminders.js para avisar, unos días antes de la próxima reunión ya
 // agendada como agenda (ver Punto 7 más abajo), qué compromisos de la
 // reunión pasada siguen sin resolverse.
-export function previousMeetingOfType(data, type, beforeDate) {
-  const candidates = data.meetings.filter((m) => m.type === type && m.date < beforeDate);
+// Fase 6: mismo motivo que lastMeetingDateOfType de arriba — `organizationId`
+// opcional para acotar el tipo 'general' a la reunión de presidencia ANTERIOR
+// de la MISMA organización (si no, "pendientes del acta anterior" de una
+// presidencia podría traer temas de la reunión de otra organización distinta
+// que también usó el tipo 'general').
+export function previousMeetingOfType(data, type, beforeDate, organizationId) {
+  const candidates = data.meetings.filter((m) => m.type === type && m.date < beforeDate && (organizationId == null || Number(m.organizationId) === Number(organizationId)));
   if (!candidates.length) return null;
   return candidates.sort((a, b) => b.date.localeCompare(a.date))[0];
 }
@@ -188,9 +201,15 @@ export function canSeeMeetingRecord(user, meeting, data) {
 // `meeting.type`, cuál subconjunto mostrar/editar (ver isCouncilMeetingType
 // / meetingAgendaFields en app.js). Todos empiezan vacíos y solo se
 // completan después (PUT), nunca al crear el tema.
+// Fase 6: `notApplicable` deja marcar un tema de agenda como "no aplica esta
+// vez" en vez de borrarlo — útil sobre todo para las plantillas de reunión
+// de presidencia por organización (Fase 6 más abajo), donde no siempre
+// corresponden TODOS los temas sugeridos en cada reunión. Un tema marcado
+// así se salta al armar la minuta que se comparte antes con los consejeros
+// (ver buildMinutaShareText en app.js).
 const EMPTY_AGENDA_ITEM_NOTES = {
   notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '',
-  quienNecesita: '', queSeHara: '', quienLoHara: '',
+  quienNecesita: '', queSeHara: '', quienLoHara: '', notApplicable: false,
 };
 
 function validCommitmentInput(raw, assignableIds) {
@@ -231,7 +250,13 @@ export function registerMeetingRoutes(router) {
       return sendJson(res, 403, { error: 'Solo el Obispado (o el Secretario de Barrio) puede ver esto para Consejo de Barrio o Coordinación de Ministración' });
     }
     const beforeDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : todayISO();
-    const previous = previousMeetingOfType(data, type, beforeDate);
+    // Fase 6: para el tipo 'general' (reunión de presidencia de una
+    // organización, o del Obispado), la "reunión anterior" debe ser de la
+    // MISMA organización que la de quien pregunta — si no, un líder de
+    // Cuórum de Élderes podría terminar viendo compromisos pendientes de la
+    // Sociedad de Socorro. Consejo de Barrio / Coordinación de Ministración
+    // siguen sin acotar por organización (son del barrio completo).
+    const previous = previousMeetingOfType(data, type, beforeDate, type === 'general' ? req.user.organizationId : null);
     if (!previous) return sendJson(res, 200, { previousMeeting: null, pending: [] });
     const pending = (previous.commitments || [])
       .filter((c) => c.status === 'pending' || c.status === 'not_fulfilled')
@@ -303,7 +328,7 @@ export function registerMeetingRoutes(router) {
     for (const raw of rawAgendaItems) {
       const topic = String(raw?.topic || '').trim();
       if (!topic) return sendJson(res, 400, { error: 'Cada tema de la agenda necesita un título' });
-      agendaItemsInput.push({ topic, presenter: String(raw?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES });
+      agendaItemsInput.push({ topic, presenter: String(raw?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES, notApplicable: !!raw?.notApplicable });
     }
 
     const now = new Date().toISOString();
@@ -377,7 +402,7 @@ export function registerMeetingRoutes(router) {
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
       m.agendaItems = m.agendaItems || [];
-      m.agendaItems.push({ id: nextId(data, 'agendaItems'), topic, presenter: String(body?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES });
+      m.agendaItems.push({ id: nextId(data, 'agendaItems'), topic, presenter: String(body?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES, notApplicable: !!body?.notApplicable });
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -412,6 +437,8 @@ export function registerMeetingRoutes(router) {
         quienNecesita: body?.quienNecesita !== undefined ? String(body.quienNecesita).trim() : it.quienNecesita,
         queSeHara: body?.queSeHara !== undefined ? String(body.queSeHara).trim() : it.queSeHara,
         quienLoHara: body?.quienLoHara !== undefined ? String(body.quienLoHara).trim() : it.quienLoHara,
+        // Fase 6: "no aplica este tema" — ver nota en EMPTY_AGENDA_ITEM_NOTES.
+        notApplicable: body?.notApplicable !== undefined ? !!body.notApplicable : it.notApplicable,
       });
     });
     const data = load();

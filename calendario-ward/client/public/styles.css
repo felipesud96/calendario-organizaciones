@@ -872,6 +872,15 @@ table.data-table tr:last-child td { border-bottom: none; }
   padding: 10px 0; border-bottom: 1px solid var(--border);
 }
 .commitment-detail-row:last-child { border-bottom: none; }
+/* Fase 6: tema de agenda marcado "no aplica esta vez" (ver notApplicable en
+   meetings.js) — se atenúa en vez de ocultarse, para que quede claro que se
+   revisó y se decidió que no correspondía, no que se olvidó llenar. */
+.commitment-detail-row.agenda-na { opacity: 0.55; }
+.agenda-na-badge {
+  display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.3px; padding: 2px 7px; border-radius: 999px;
+  background: #f1f5f9; color: #64748b; vertical-align: middle;
+}
 
 /* ---------- Aseo del Edificio ---------- */
 .ac-item:hover { background: #f0f4f8; }
@@ -1259,6 +1268,7 @@ tr.wg-cat-row td {
      dos sí necesita su propia versión oscura. */
   :root:not([data-theme="light"]) .role-member { background: #263141; color: #b6c2cf; }
   :root:not([data-theme="light"]) .status-gray { background: #263141; color: #b6c2cf; }
+  :root:not([data-theme="light"]) .agenda-na-badge { background: #263141; color: #b6c2cf; }
   :root:not([data-theme="light"]) .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
 
   /* Avisos y tarjetas que ocupan un ancho considerable de la pantalla (no
@@ -1316,6 +1326,7 @@ tr.wg-cat-row td {
 :root[data-theme="dark"] .mini-cal-cell.other-month { color: #3a5166; }
 :root[data-theme="dark"] .role-member { background: #263141; color: #b6c2cf; }
 :root[data-theme="dark"] .status-gray { background: #263141; color: #b6c2cf; }
+:root[data-theme="dark"] .agenda-na-badge { background: #263141; color: #b6c2cf; }
 :root[data-theme="dark"] .ministracion-filter-chip.ministracion-filter-active { box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.65); }
 :root[data-theme="dark"] .council-alert-box { background: #3a2f0f; border-color: #5c4a15; color: #fbd992; }
 :root[data-theme="dark"] .council-alert-box.ok { background: #12301f; border-color: #1f4a30; color: #86e0ac; }
