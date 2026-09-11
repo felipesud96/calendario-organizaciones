@@ -7501,6 +7501,83 @@ function buildMinutaShareText(m) {
   return lines.join('\n');
 }
 
+// Punto (Felipe): la minuta también se puede compartir como IMAGEN — una
+// tarjeta prolija con los mismos temas de buildMinutaShareText (mismo
+// orden, saltando "no aplica"), rasterizada con html2canvas (cargado por
+// CDN en index.html) para que se vea profesional al compartirla por
+// WhatsApp. La tarjeta se arma fuera de la pantalla (nunca se muestra al
+// usuario tal cual) solo para poder "fotografiarla"; todo corre en el
+// navegador de la persona, no se sube nada a ningún servidor.
+function buildMinutaImageNode(m) {
+  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable);
+  const wrap = document.createElement('div');
+  wrap.className = 'minuta-img-card';
+  wrap.innerHTML = `
+    <img class="minuta-img-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+    <div class="minuta-img-eyebrow">${esc(APP_NAME)}</div>
+    <div class="minuta-img-org">${esc(m.organizationName)}</div>
+    <div class="minuta-img-title">${esc(m.title)}</div>
+    <div class="minuta-img-date">📅 ${esc(fmtDateHuman(m.date))}</div>
+    <div class="minuta-img-heading">Temas a tratar (para venir preparados)</div>
+    ${topics.length ? topics.map((a, i) => `
+      <div class="minuta-img-item">
+        <span class="minuta-img-item-num">${i + 1}</span>
+        <span>${esc(a.topic)}</span>
+      </div>`).join('') : `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin temas todavía)</span></div>`}
+    <div class="minuta-img-footer">¡Gracias por su preparación! · Generado con ${esc(APP_NAME)}</div>
+  `;
+  return wrap;
+}
+
+async function shareMinutaAsImage(m, triggerBtn) {
+  if (typeof html2canvas === 'undefined') {
+    // Sin internet (o el CDN no cargó): cae de vuelta a compartir como texto
+    // en vez de dejar el botón sin hacer nada.
+    toast('No se pudo cargar el generador de imágenes — se comparte como texto', 'error');
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
+    return;
+  }
+  const originalLabel = triggerBtn ? triggerBtn.textContent : null;
+  if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = '⏳ Generando imagen...'; }
+  const node = buildMinutaImageNode(m);
+  node.style.position = 'fixed';
+  node.style.top = '0';
+  node.style.left = '-9999px';
+  node.style.zIndex = '-1';
+  document.body.appendChild(node);
+  try {
+    const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#fffdf7', useCORS: true });
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('no se pudo generar el archivo de imagen');
+    const safeOrg = (m.organizationName || 'reunion').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const filename = `minuta-${safeOrg || 'reunion'}-${m.date}.png`;
+    const file = new File([blob], filename, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      // En celular: abre directamente el cuadro de compartir del sistema
+      // (WhatsApp, etc.) con la imagen ya adjunta.
+      await navigator.share({ files: [file], title: `Minuta — ${m.title}` });
+    } else {
+      // Escritorio u otros navegadores sin Web Share de archivos: se
+      // descarga la imagen (mismo mecanismo que downloadCsv) para que la
+      // persona la adjunte a mano en WhatsApp.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Imagen descargada — adjúntala en WhatsApp desde tus archivos o galería');
+    }
+  } catch (e) {
+    if (!e || e.name !== 'AbortError') {
+      // AbortError = la persona cerró el cuadro de compartir del sistema sin elegir nada; no es un error real.
+      toast('No se pudo generar la imagen: ' + e.message, 'error');
+    }
+  } finally {
+    document.body.removeChild(node);
+    if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = originalLabel; }
+  }
+}
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
@@ -7575,7 +7652,7 @@ async function openMeetingDetailModal(m) {
         </div>
         <div class="modal-footer">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">📤 Compartir minuta</button>` : ''}
+            ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">🖼️ Compartir minuta</button><button class="btn btn-ghost btn-sm" id="md-share-minuta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
           </div>
@@ -7591,7 +7668,10 @@ async function openMeetingDetailModal(m) {
   // nada confidencial) para que sus consejeros lleguen preparados. Visible
   // para cualquiera que vea el contenido del acta (no solo quien la creó),
   // porque cualquier miembro de la presidencia podría ser quien la comparta.
-  document.getElementById('md-share-minuta')?.addEventListener('click', () => {
+  document.getElementById('md-share-minuta')?.addEventListener('click', (e) => {
+    shareMinutaAsImage(m, e.currentTarget);
+  });
+  document.getElementById('md-share-minuta-text')?.addEventListener('click', () => {
     window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
   });
   if (!m.contentRedacted) wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
