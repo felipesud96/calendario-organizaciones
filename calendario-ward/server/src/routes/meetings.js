@@ -304,8 +304,16 @@ export function registerMeetingRoutes(router) {
   router.post('/api/meetings', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
     const title = String(body?.title || '').trim();
     const date = String(body?.date || '').trim();
+    // Punto (Felipe): la hora de inicio (y término, opcional) se piden para
+    // poder mostrarlas en la minuta que se comparte por WhatsApp (ver
+    // buildMinutaShareText / buildMinutaImageNode en el cliente) — antes el
+    // acta solo tenía fecha, sin horario. La hora de término es opcional
+    // porque a veces no se sabe de antemano cuánto va a durar la reunión.
+    const startTime = String(body?.startTime || '').trim();
+    const endTime = String(body?.endTime || '').trim();
     if (!title) return sendJson(res, 400, { error: 'Falta el título del acta (ej: Consejo de Barrio)' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendJson(res, 400, { error: 'Falta la fecha de la reunión' });
+    if (!/^\d{2}:\d{2}$/.test(startTime)) return sendJson(res, 400, { error: 'Falta la hora de inicio de la reunión' });
 
     const data0 = load();
     const requestedType = MEETING_TYPES.includes(body?.type) ? body.type : 'general';
@@ -347,6 +355,8 @@ export function registerMeetingRoutes(router) {
         id: nextId(data, 'meetings'),
         title,
         date,
+        startTime,
+        endTime: endTime || null,
         type: requestedType,
         confidential: !!body?.confidential,
         organizationId: req.user.organizationId || null,

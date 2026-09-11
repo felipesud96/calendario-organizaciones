@@ -6534,7 +6534,7 @@ function meetingCardHtml(m) {
     <div class="list-card meeting-card" data-id="${m.id}" style="cursor:pointer;">
       <div class="lc-main">
         <div class="lc-title">${m.confidential ? icon('lock') + ' ' : ''}${esc(m.title)}${typeLabel ? ` <span class="status-pill status-gray">${typeLabel}</span>` : ''}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
-        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
+        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
       </div>
     </div>`;
 }
@@ -7033,6 +7033,16 @@ async function openMeetingModal(presetType) {
               <label>Fecha de la reunión</label>
               <input type="date" name="date" required value="${toISODate(new Date())}" />
             </div>
+            <div class="two-col">
+              <div class="field">
+                <label>Hora de inicio</label>
+                <input type="time" name="startTime" required />
+              </div>
+              <div class="field">
+                <label>Hora de término (opcional)</label>
+                <input type="time" name="endTime" />
+              </div>
+            </div>
             ${typeOptionsHtml}
             <div class="field">
               <label style="display:flex; align-items:center; gap:8px; font-weight:600;">
@@ -7295,6 +7305,8 @@ async function openMeetingModal(presetType) {
         body: {
           title: fd.get('title'),
           date: fd.get('date'),
+          startTime: fd.get('startTime'),
+          endTime: fd.get('endTime') || null,
           type: isObispadoTier ? fd.get('type') : 'general',
           confidential: fd.get('confidential') === 'on',
           commitments,
@@ -7499,6 +7511,16 @@ function presidencyAgendaTopics(orgName) {
   return [PRESIDENCY_FIXED_OPENING, PRESIDENCY_FIXED_THOUGHT, ...tpl.temas, PRESIDENCY_FIXED_CLOSING];
 }
 
+// Fecha + horario de una reunión, en un solo texto — usada tanto en el
+// detalle del acta como en ambas formas de compartir la minuta (texto e
+// imagen). Las actas creadas antes de que se pidiera la hora de inicio no
+// tienen `startTime` (era un campo nuevo) — en ese caso se muestra solo la
+// fecha, igual que antes, en vez de mostrar un horario en blanco.
+function fmtMeetingWhen(m) {
+  if (!m.startTime) return fmtDateHuman(m.date);
+  return `${fmtDateHuman(m.date)} · ${fmtTime(m.startTime)}${m.endTime ? ' a ' + fmtTime(m.endTime) : ''}`;
+}
+
 // Punto (Felipe): "minuta" = lo que el presidente de la organización comparte
 // ANTES de la reunión con sus consejeros, con pautas generales, para que
 // lleguen preparados a los temas — SOLO los títulos de los temas (nunca
@@ -7511,7 +7533,7 @@ function buildMinutaShareText(m) {
   const topics = (m.agendaItems || []).filter((a) => !a.notApplicable).map((a, i) => `${i + 1}. ${a.topic}${a.presenter ? ` — ${a.presenter}` : ''}`);
   const lines = [
     `📋 Minuta — ${m.title}`,
-    `${m.organizationName} · ${fmtDateHuman(m.date)}`,
+    `${m.organizationName} · ${fmtMeetingWhen(m)}`,
     '',
     'Temas a tratar (para venir preparados):',
     ...(topics.length ? topics : ['(sin temas todavía)']),
@@ -7537,7 +7559,7 @@ function buildMinutaImageNode(m) {
     <div class="minuta-img-eyebrow">${esc(APP_NAME)}</div>
     <div class="minuta-img-org">${esc(m.organizationName)}</div>
     <div class="minuta-img-title">${esc(m.title)}</div>
-    <div class="minuta-img-date">📅 ${esc(fmtDateHuman(m.date))}</div>
+    <div class="minuta-img-date">📅 ${esc(fmtMeetingWhen(m))}</div>
     <div class="minuta-img-heading">Temas a tratar (para venir preparados)</div>
     ${topics.length ? topics.map((a, i) => `
       <div class="minuta-img-item">
@@ -7611,7 +7633,7 @@ async function openMeetingDetailModal(m) {
       <div class="modal" style="max-width:560px;">
         <div class="modal-header"><h3>${esc(m.title)}</h3><button class="modal-close" id="md-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtDateHuman(m.date))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}</div>
+          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}</div>
           ${m.contentRedacted ? `<div class="empty-state">🔒 Esta acta es confidencial — solo el Obispado, el Administrador o quien la creó pueden ver su contenido.</div>` : `
           <div id="md-agenda">
             ${m.agendaItems && m.agendaItems.length ? `
