@@ -2,10 +2,44 @@
 // librerías externas, para que cualquiera pueda suscribirse a su "Mis
 // Actividades" desde Google Calendar, Apple Calendar u Outlook.
 //
-// Las horas se escriben como "hora flotante" (sin sufijo Z ni TZID): el
-// barrio funciona en un único huso horario, así que cada calendario personal
-// las interpreta según la zona horaria local del dispositivo — que para
-// alguien del mismo barrio es, en la práctica, la correcta.
+// Las horas se escriben con TZID=America/Santiago (huso horario del barrio),
+// nunca como "hora flotante" ni en UTC: probamos con hora flotante (sin
+// sufijo Z ni TZID) primero, pero varias apps de calendario (Google
+// Calendar entre ellas) al SUSCRIBIRSE a un feed externo no la interpretan
+// como "hora local del dispositivo" sino que asumen UTC, corriendo todos los
+// horarios varias horas — por eso ahora cada evento declara explícitamente
+// su zona horaria (ver WARD_TZID/WARD_VTIMEZONE más abajo), y el feed entero
+// incluye el bloque VTIMEZONE correspondiente. Google/Apple, al reconocer
+// "America/Santiago" como un huso horario IANA conocido, usan su propia base
+// de datos de horario de verano (siempre al día) en vez del VTIMEZONE de
+// acá — que igual queda declarado, con una regla aproximada del horario de
+// verano chileno actual, para cualquier app que si lo respete al pie de la
+// letra.
+const WARD_TZID = 'America/Santiago';
+// Array de líneas SIN unir (a diferencia del resto del archivo) para que
+// cada una pase por foldLine() individualmente más abajo — si se uniera acá
+// con '\r\n' quedaría como un solo elemento gigante dentro de `lines` y
+// foldLine() intentaría "plegar" ese bloque completo como si fuera una sola
+// línea de texto larga, cortándolo mal.
+const WARD_VTIMEZONE_LINES = [
+  'BEGIN:VTIMEZONE',
+  `TZID:${WARD_TZID}`,
+  'BEGIN:DAYLIGHT',
+  'TZOFFSETFROM:-0400',
+  'TZOFFSETTO:-0300',
+  'TZNAME:-03',
+  'DTSTART:19700906T000000',
+  'RRULE:FREQ=YEARLY;BYMONTH=9;BYDAY=1SU',
+  'END:DAYLIGHT',
+  'BEGIN:STANDARD',
+  'TZOFFSETFROM:-0300',
+  'TZOFFSETTO:-0400',
+  'TZNAME:-04',
+  'DTSTART:19700405T000000',
+  'RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=1SU',
+  'END:STANDARD',
+  'END:VTIMEZONE',
+];
 
 function icsEscapeText(str) {
   return String(str || '')
@@ -60,17 +94,19 @@ export function buildIcsCalendar(items, calendarName) {
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     `X-WR-CALNAME:${icsEscapeText(calendarName)}`,
+    `X-WR-TIMEZONE:${WARD_TZID}`,
     'REFRESH-INTERVAL;VALUE=DURATION:PT1H',
     'X-PUBLISHED-TTL:PT1H',
+    ...WARD_VTIMEZONE_LINES,
   ];
   for (const it of items) {
     if (!it.date || !it.startTime) continue;
     lines.push('BEGIN:VEVENT');
     lines.push(`UID:${it.kind}-${it.id}@calendario-barrio-valle-grande`);
     lines.push(`DTSTAMP:${now}`);
-    lines.push(`DTSTART:${formatIcsDateTime(it.date, it.startTime)}`);
+    lines.push(`DTSTART;TZID=${WARD_TZID}:${formatIcsDateTime(it.date, it.startTime)}`);
     if (it.endTime) {
-      lines.push(`DTEND:${formatIcsDateTime(it.date, it.endTime)}`);
+      lines.push(`DTEND;TZID=${WARD_TZID}:${formatIcsDateTime(it.date, it.endTime)}`);
     } else {
       lines.push('DURATION:PT1H');
     }
