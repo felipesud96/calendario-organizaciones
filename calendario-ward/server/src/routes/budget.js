@@ -98,7 +98,7 @@ export function summaryFor(data, quarter, ref) {
   const alloc = data.budgetAllocations.find((a) => a.quarter === quarter && categoryRefsEqual(a, ref));
   const expenses = data.budgetExpenses
     .filter((e) => e.quarter === quarter && categoryRefsEqual(e, ref))
-    .sort((a, b) => (b.date + String(b.id)).localeCompare(a.date + String(a.id)));
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
   const spent = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
   const assigned = alloc ? Number(alloc.amount) : 0;
   return {
@@ -146,11 +146,21 @@ export function registerBudgetRoutes(router) {
     if (data0.budgetCategories.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
       return sendJson(res, 409, { error: 'Ya existe una categoría con ese nombre' });
     }
+    // Corrección (revisión de código): la verificación de nombre duplicado de
+    // arriba se hace sobre `data0` (una foto tomada ANTES de entrar a
+    // withDb) — si dos solicitudes casi simultáneas piden crear la misma
+    // categoría, ambas podrían pasar esa verificación antes de que la
+    // primera se guarde. Se vuelve a verificar adentro del callback de
+    // withDb (que sí corre en orden, uno a la vez) para cerrar esa ventana.
     const cat = await withDb((d) => {
+      if (d.budgetCategories.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+        return null;
+      }
       const c = { id: nextId(d, 'budgetCategories'), name, createdBy: req.user.id, createdAt: new Date().toISOString() };
       d.budgetCategories.push(c);
       return c;
     });
+    if (!cat) return sendJson(res, 409, { error: 'Ya existe una categoría con ese nombre' });
     sendJson(res, 201, cat);
   }));
 
@@ -349,8 +359,16 @@ export function registerBudgetRoutes(router) {
       return sendJson(res, 400, { error: 'La fecha del gasto ya no cae dentro del trimestre actual — pide que se solicite de nuevo con una fecha vigente' });
     }
     const now = new Date().toISOString();
+    // Corrección (revisión de código): el chequeo `status !== 'pending'` de
+    // arriba corre sobre `data0`, tomada antes de entrar a withDb — dos
+    // aprobaciones casi simultáneas de la misma solicitud podían pasar
+    // ambas esa verificación y generar dos gastos duplicados para una sola
+    // solicitud. Se vuelve a verificar el estado adentro del callback
+    // (que sí serializa) antes de decidir; si ya no está pendiente, no se
+    // muta nada y se avisa con un error.
     const expense = await withDb((d) => {
       const r = d.budgetExpenseRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return null;
       const e = {
         id: nextId(d, 'budgetExpenses'), quarter,
         categoryType: r.categoryType, organizationId: r.organizationId, budgetCategoryId: r.budgetCategoryId,
@@ -361,6 +379,7 @@ export function registerBudgetRoutes(router) {
       Object.assign(r, { status: 'approved', decidedBy: req.user.id, decidedAt: now, decisionComment: String(body?.comment || '').trim(), resultingExpenseId: e.id });
       return e;
     });
+    if (!expense) return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const data = load();
     sendJson(res, 200, { expense: withExpenseInfo(expense, data), request: withExpenseRequestInfo(data.budgetExpenseRequests.find((r) => r.id === id), data) });
   }));
@@ -375,10 +394,17 @@ export function registerBudgetRoutes(router) {
     if (!reqItem) return sendJson(res, 404, { error: 'Solicitud no encontrada' });
     if (reqItem.status !== 'pending') return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const now = new Date().toISOString();
-    await withDb((d) => {
+    // Misma corrección que en /approve: se revalida el estado adentro de
+    // withDb para no rechazar una solicitud que, entre el chequeo de arriba
+    // y este punto, ya fue decidida (aprobada o rechazada) por otra
+    // solicitud casi simultánea.
+    const rejected = await withDb((d) => {
       const r = d.budgetExpenseRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return null;
       Object.assign(r, { status: 'rejected', decidedBy: req.user.id, decidedAt: now, decisionComment: String(body?.comment || '').trim() });
+      return r;
     });
+    if (!rejected) return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const data = load();
     sendJson(res, 200, withExpenseRequestInfo(data.budgetExpenseRequests.find((r) => r.id === id), data));
   }));
@@ -394,7 +420,18 @@ export function registerBudgetRoutes(router) {
       return sendJson(res, 403, { error: 'Solo quien la solicitó (o un Administrador) puede retirarla' });
     }
     if (reqItem.status !== 'pending') return sendJson(res, 400, { error: 'Solo se puede retirar una solicitud todavía pendiente' });
-    await withDb((d) => { d.budgetExpenseRequests = d.budgetExpenseRequests.filter((r) => r.id !== id); });
+    // Misma corrección que en /approve y /reject: si esta solicitud fue
+    // aprobada o rechazada justo entre el chequeo de arriba y este punto,
+    // no hay que borrarla — ya generó un gasto (aprobada) o quedó resuelta
+    // (rechazada), y borrarla igual dejaría ese resultado "huérfano" sin
+    // registro de la solicitud que lo originó.
+    const withdrawn = await withDb((d) => {
+      const r = d.budgetExpenseRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return false;
+      d.budgetExpenseRequests = d.budgetExpenseRequests.filter((x) => x.id !== id);
+      return true;
+    });
+    if (!withdrawn) return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     sendJson(res, 200, { ok: true });
   }));
 

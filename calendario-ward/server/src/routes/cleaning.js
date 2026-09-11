@@ -178,6 +178,14 @@ export function registerCleaningRoutes(router) {
     const id = Number(params.id);
     const data0 = load();
     if (!isObispadoLeader(req.user, data0)) return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden eliminar turnos de aseo' });
+    // Corrección (revisión de código): antes este endpoint respondía 200 OK
+    // aunque el turno ya no existiera (o nunca hubiese existido) — el
+    // filtro simplemente no quitaba nada y no había forma de distinguir "se
+    // borró" de "ya no estaba ahí", a diferencia de todos los demás DELETE
+    // de la app, que sí devuelven 404 en ese caso.
+    if (!data0.cleaningShifts.some((s) => s.id === id)) {
+      return sendJson(res, 404, { error: 'Turno de aseo no encontrado' });
+    }
     await withDb((data) => { data.cleaningShifts = data.cleaningShifts.filter((s) => s.id !== id); });
     sendJson(res, 200, { ok: true });
   }));

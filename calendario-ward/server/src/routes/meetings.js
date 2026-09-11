@@ -141,13 +141,23 @@ function commitmentVisibleFully(user, meeting, commitment, data) {
 function withCommitmentInfo(c, data, meeting, viewer) {
   const isOverdue = c.status === 'pending' && !!c.dueDate && c.dueDate < todayISO();
   const visible = !viewer || !meeting || commitmentVisibleFully(viewer, meeting, c, data);
+  // Corrección (revisión de código): antes, cuando `!visible`, solo se
+  // ocultaban `description`/`completionComment` — el `...c` de más abajo
+  // dejaba pasar `assignedToUserId`/`dueDate`/`status`/`completedAt`, y
+  // `assignedToName` se calculaba SIEMPRE sin importar la visibilidad. Un
+  // compromiso confidencial terminaba mostrando igual a quién estaba
+  // asignado y cuándo vencía — justo el tipo de dato que la
+  // confidencialidad de consejo (Manual General 4.4.6) busca proteger. Ahora
+  // se redacta igual que ya se hacía con los ítems de agenda.
   return {
     ...c,
     description: visible ? c.description : '(Compromiso confidencial)',
     completionComment: visible ? c.completionComment : '',
-    assignedToName: userName(data, c.assignedToUserId),
-    isOverdue,
-    displayStatus: c.status === 'pending' ? (isOverdue ? 'overdue' : 'pending') : c.status,
+    assignedToUserId: visible ? c.assignedToUserId : null,
+    assignedToName: visible ? userName(data, c.assignedToUserId) : '(confidencial)',
+    dueDate: visible ? c.dueDate : null,
+    isOverdue: visible && isOverdue,
+    displayStatus: c.status === 'pending' ? (visible && isOverdue ? 'overdue' : 'pending') : c.status,
     redacted: !visible,
   };
 }
@@ -314,6 +324,12 @@ export function registerMeetingRoutes(router) {
     if (!title) return sendJson(res, 400, { error: 'Falta el título del acta (ej: Consejo de Barrio)' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendJson(res, 400, { error: 'Falta la fecha de la reunión' });
     if (!/^\d{2}:\d{2}$/.test(startTime)) return sendJson(res, 400, { error: 'Falta la hora de inicio de la reunión' });
+    // Corrección (revisión de código): la hora de término era opcional pero
+    // no se validaba contra la de inicio — se podía guardar, por ejemplo,
+    // "de 20:00 a 19:00", que después se muestra tal cual en la minuta
+    // compartida (ver fmtMeetingWhen en el cliente) de forma confusa.
+    if (endTime && !/^\d{2}:\d{2}$/.test(endTime)) return sendJson(res, 400, { error: 'Hora de término inválida' });
+    if (endTime && endTime <= startTime) return sendJson(res, 400, { error: 'La hora de término debe ser posterior a la de inicio' });
 
     const data0 = load();
     const requestedType = MEETING_TYPES.includes(body?.type) ? body.type : 'general';
@@ -503,7 +519,15 @@ export function registerMeetingRoutes(router) {
   // El responsable marca su propio compromiso como completado, dejando un
   // comentario breve — no lo puede completar otra persona en su nombre
   // (ni siquiera quien armó el acta), para que el comentario sea confiable.
-  router.put('/api/commitments/:id/complete', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
+  // Corrección (revisión de código): un acta puede asignar un compromiso
+  // directo al Secretario Ejecutivo o al Secretario Financiero (ver
+  // STAFF_ROLES/assignableUsersFor más arriba), pero este endpoint solo
+  // dejaba pasar a admin/leader/ward_clerk — esas dos personas veían su
+  // propio compromiso en "Mis Asignaciones" y no podían marcarlo hecho
+  // (403). El chequeo de la línea de abajo (assignedToUserId === quien
+  // llama) ya garantiza que solo el verdadero responsable complete su
+  // propio compromiso, así que ampliar estos roles acá es seguro.
+  router.put('/api/commitments/:id/complete', requireRole(['admin', 'leader', 'ward_clerk', 'executive_secretary', 'financial_clerk'], async (req, res, params, body) => {
     const id = Number(params.id);
     const data0 = load();
     const found = findMeetingWithCommitment(data0, id);
@@ -518,10 +542,19 @@ export function registerMeetingRoutes(router) {
       return sendJson(res, 400, { error: 'Este compromiso ya estaba marcado como completado' });
     }
     const comment = String(body?.comment || '').trim();
-    await withDb((data) => {
+    // Corrección (revisión de código): el chequeo `status === 'completed'`
+    // de arriba corre sobre `data0`, tomada antes de entrar a withDb — dos
+    // clics casi simultáneos (doble tap, reintento de red) podían pasar
+    // ambos esa verificación, y el segundo pisaba silenciosamente el
+    // comentario/fecha de completado del primero. Se vuelve a verificar
+    // adentro del callback antes de mutar.
+    const completed = await withDb((data) => {
       const f = findMeetingWithCommitment(data, id);
+      if (!f || f.commitment.status === 'completed') return null;
       Object.assign(f.commitment, { status: 'completed', completedAt: new Date().toISOString(), completionComment: comment });
+      return true;
     });
+    if (!completed) return sendJson(res, 400, { error: 'Este compromiso ya estaba marcado como completado' });
     const data = load();
     const f2 = findMeetingWithCommitment(data, id);
     sendJson(res, 200, withCommitmentInfo(f2.commitment, data, f2.meeting, req.user));

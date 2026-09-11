@@ -1,6 +1,7 @@
 import { sendJson } from '../router.js';
 import { load } from '../db.js';
 import { requireAuth } from '../guard.js';
+import { isWelfareCommitteeMember } from './welfare.js';
 
 // Sugerencias de "nombres ya usados" para autocompletar campos de texto
 // libre que NO vienen de un <select> de usuarios registrados: adultos
@@ -40,7 +41,17 @@ export function registerNamesRoutes(router) {
     const data = load();
     const supervisingAdults = dedupByFrequency(data.events.flatMap((e) => e.supervisingAdults || []));
     const presenters = dedupByFrequency(data.meetings.flatMap((m) => (m.agendaItems || []).map((a) => a.presenter)));
-    const welfareMembers = dedupByFrequency((data.welfareCases || []).map((c) => c.memberName));
+    // Corrección (revisión de código): este endpoint solo exige sesión
+    // iniciada (requireAuth), sin revisar el rol — así que `welfareMembers`
+    // quedaba visible para CUALQUIER cuenta, incluido un Miembro común o un
+    // líder sin ninguna relación con Bienestar, contradiciendo que ese es
+    // "el módulo más restringido de toda la app" (ver welfare.js). El
+    // comentario de más abajo ya decía que esto debía limitarse a quien
+    // pudiera registrar un caso de Bienestar — ahora el código realmente lo
+    // exige, con el mismo chequeo que usa el resto de welfare.js.
+    const welfareMembers = isWelfareCommitteeMember(req.user, data)
+      ? dedupByFrequency((data.welfareCases || []).map((c) => c.memberName))
+      : [];
     const interviewers = dedupByFrequency(data.interviews.map((iv) => iv.interviewerName));
     // Punto pedido explícitamente: "ya teniendo el directorio usar esos
     // nombres para las entrevistas o discursos" — y después, también para

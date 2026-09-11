@@ -77,7 +77,16 @@ export function registerRegistrationRoutes(router) {
     if (taken) {
       return sendJson(res, 409, { error: 'Ese usuario ya existe o ya tiene una solicitud pendiente' });
     }
-    await withDb((d) => {
+    // Corrección (revisión de código): la verificación de arriba corre sobre
+    // `data`, tomada antes de entrar a withDb — dos registros casi
+    // simultáneos con el mismo usuario/email podían pasar ambos esa
+    // verificación y quedar dos solicitudes pendientes duplicadas (o una
+    // solicitud duplicando una cuenta ya activa). Se vuelve a verificar
+    // adentro del callback (que sí serializa) antes de crear la solicitud.
+    const created = await withDb((d) => {
+      const stillTaken = d.users.some((u) => u.email === normalizedEmail)
+        || d.registrationRequests.some((r) => r.email === normalizedEmail);
+      if (stillTaken) return false;
       d.registrationRequests.push({
         id: nextId(d, 'registrationRequests'),
         name,
@@ -91,7 +100,9 @@ export function registerRegistrationRoutes(router) {
         sex,
         createdAt: new Date().toISOString(),
       });
+      return true;
     });
+    if (!created) return sendJson(res, 409, { error: 'Ese usuario ya existe o ya tiene una solicitud pendiente' });
     sendJson(res, 201, { ok: true, message: 'Tu solicitud fue enviada. Un administrador debe aprobarla antes de que puedas ingresar.' });
   });
 
@@ -135,7 +146,17 @@ export function registerRegistrationRoutes(router) {
       callingInput: (body && body.calling !== undefined) ? body.calling : reqItem.requestedCalling,
       isPresidentInput: body && body.isPresident,
     });
+    // Corrección (revisión de código): las dos verificaciones de arriba
+    // (existe un usuario con ese email, la solicitud existe) corren sobre
+    // `data`, tomada antes de entrar a withDb — dos aprobaciones casi
+    // simultáneas de la misma solicitud (doble clic, o dos administradores
+    // aprobando a la vez) podían pasar ambas esa verificación y crear DOS
+    // cuentas de usuario para una sola solicitud. Se vuelve a verificar
+    // adentro del callback antes de crear la cuenta.
     const user = await withDb((d) => {
+      const stillPending = d.registrationRequests.some((r) => r.id === id);
+      if (!stillPending) return null;
+      if (d.users.some((u) => u.email === reqItem.email)) return null;
       const u = {
         id: nextId(d, 'users'),
         name: finalName,
@@ -160,6 +181,7 @@ export function registerRegistrationRoutes(router) {
       d.registrationRequests = d.registrationRequests.filter((r) => r.id !== id);
       return u;
     });
+    if (!user) return sendJson(res, 409, { error: 'Esta solicitud ya no está disponible — puede que ya haya sido aprobada, o que ya exista una cuenta activa con ese usuario' });
     sendJson(res, 201, publicUser(user));
   }));
 

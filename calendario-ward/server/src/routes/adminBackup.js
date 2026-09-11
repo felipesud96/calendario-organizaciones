@@ -1,5 +1,19 @@
 import fs from 'fs';
+import crypto from 'crypto';
 import { DB_PATH } from '../db.js';
+
+// Corrección (revisión de código): comparar el secreto con `!==` compara
+// caracter por caracter y corta apenas encuentra una diferencia — en teoría
+// eso filtra por tiempo de respuesta cuántos caracteres iniciales de un
+// secreto adivinado coinciden con el real. Mismo criterio que ya se aplica
+// a la contraseña (auth.js) y al token de sesión: se usa
+// `crypto.timingSafeEqual` en vez de una comparación directa.
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a ?? ''));
+  const bufB = Buffer.from(String(b ?? ''));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 // Ruta temporal de migración: sirve para copiar la base de datos completa
 // (server/data/db.json) de un servicio de Render a otro, por ejemplo al
@@ -17,7 +31,8 @@ import { DB_PATH } from '../db.js';
 export function registerAdminBackupRoutes(router) {
   router.get('/api/admin/backup-export', async (req, res) => {
     const secret = process.env.MIGRATION_SECRET;
-    if (!secret || req.headers['x-migration-secret'] !== secret) {
+    const provided = req.headers['x-migration-secret'];
+    if (!secret || !provided || !timingSafeStringEqual(provided, secret)) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'No encontrado' }));
       return;

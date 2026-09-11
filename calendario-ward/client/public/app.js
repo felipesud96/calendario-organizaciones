@@ -282,14 +282,6 @@ function fmtDateHuman(iso) {
 function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-// Igual que timesOverlap() en el servidor (db.js): si falta la hora de
-// término se asume una duración típica de 30 minutos, solo para poder
-// comparar si dos horarios se superponen.
-function timeToMinutes(t) { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; }
-function effectiveEndMinutes(startTime, endTime) { return endTime ? timeToMinutes(endTime) : timeToMinutes(startTime) + 30; }
-function timesOverlap(aStart, aEnd, bStart, bEnd) {
-  return timeToMinutes(aStart) < effectiveEndMinutes(bStart, bEnd) && timeToMinutes(bStart) < effectiveEndMinutes(aStart, aEnd);
-}
 // Punto 4 (ampliación): a partir de la agenda semanal declarada por un líder
 // (weekday + rango de horas), calcula las próximas fechas concretas que
 // calzan dentro de las próximas 6 semanas — para que el miembro elija un día
@@ -454,7 +446,7 @@ function involvedOrgsFieldHtml(idPrefix, existingIds) {
         ${state.organizations.map((o) => `
           <label data-org-id="${o.id}" style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:400; cursor:pointer;">
             <input type="checkbox" name="involvedOrganizationIds" value="${o.id}" ${ids.includes(o.id) ? 'checked' : ''} />
-            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(o.color)};"></span>${esc(o.name)}
           </label>`).join('')}
       </div>
     </div>`;
@@ -507,7 +499,7 @@ function involvedOrgsBadgesHtml(item) {
   if (item.isWardActivity) return ` · 🏘️ Actividad de todo el Barrio`;
   const involved = item.involvedOrganizations || [];
   if (!involved.length) return '';
-  return ` · 🤝 ${involved.map((o) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${o.color};margin-right:2px;"></span>${esc(o.name)}`).join(', ')}`;
+  return ` · 🤝 ${involved.map((o) => `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${esc(o.color)};margin-right:2px;"></span>${esc(o.name)}`).join(', ')}`;
 }
 
 // Prefijo visual para distinguir una Reunión (privada) de una Actividad
@@ -618,15 +610,21 @@ function toMinutes(t) {
   const [h, m] = String(t).split(':').map(Number);
   return h * 60 + m;
 }
+// Corrección (revisión de código): este archivo tenía DOS declaraciones de
+// timesOverlap — la otra (ya eliminada) asumía 30 minutos sin hora de
+// término, igual que el servidor (ver DEFAULT_SLOT_MINUTES en
+// server/src/db.js), pero quedaba pisada por esta (las declaraciones
+// `function` duplicadas en el mismo scope se sobrescriben: gana la última),
+// así que en la práctica se usaba un bloque mínimo de solo 1 minuto —
+// dos actividades sin hora de término podían chocar de verdad sin que
+// apareciera ningún aviso. Ahora hay una sola versión, con el mismo
+// supuesto de 30 minutos que usa el servidor.
+const DEFAULT_SLOT_MINUTES = 30;
 function timesOverlap(aStart, aEnd, bStart, bEnd) {
   if (!aStart || !bStart) return false;
   const as = toMinutes(aStart), bs = toMinutes(bStart);
-  const aeRaw = aEnd ? toMinutes(aEnd) : as;
-  const beRaw = bEnd ? toMinutes(bEnd) : bs;
-  // sin hora de término se trata como un bloque mínimo de 1 minuto, así dos
-  // actividades con exactamente la misma hora de inicio siempre chocan.
-  const ae = aeRaw > as ? aeRaw : as + 1;
-  const be = beRaw > bs ? beRaw : bs + 1;
+  const ae = aEnd ? toMinutes(aEnd) : as + DEFAULT_SLOT_MINUTES;
+  const be = bEnd ? toMinutes(bEnd) : bs + DEFAULT_SLOT_MINUTES;
   return as < be && bs < ae;
 }
 function normalizeLocation(loc) { return String(loc || '').trim().toLowerCase(); }
@@ -706,7 +704,7 @@ function conflictWarningHtml(conflicts) {
   return `<div class="hint-box" style="border-color:#f59e0b; background:#fffbeb;">
     ⚠️ <strong>Posible choque de horario o lugar</strong> — vuelve a presionar el botón para agendar de todas formas:
     <ul style="margin:6px 0 0; padding-left:18px;">
-      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c.organizationColor};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong>${c.sameOrgRoomConflict ? ' (tu misma organización — mismo lugar)' : ''} — ${c.kind === 'interview' ? '🔒 ocupada por una entrevista (privada)' : esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(locationDisplay(c)) : ''}</li>`).join('')}
+      ${conflicts.map((c) => `<li><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(c.organizationColor)};margin-right:4px;"></span><strong>${esc(c.organizationName)}</strong>${c.sameOrgRoomConflict ? ' (tu misma organización — mismo lugar)' : ''} — ${c.kind === 'interview' ? '🔒 ocupada por una entrevista (privada)' : esc(c.title || c.memberName || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? ' - ' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · 📍 ' + esc(locationDisplay(c)) : ''}</li>`).join('')}
     </ul>
   </div>`;
 }
@@ -2546,7 +2544,7 @@ async function renderCalendarView() {
 
   const chips = state.organizations.map((o) => `
     <button class="org-chip ${orgFilterActive(o.id) ? 'active' : ''}" style="color:${orgFilterActive(o.id) ? o.color : '#94a3b8'}" data-org="${o.id}">
-      <span class="org-dot" style="background:${o.color}"></span>${esc(o.name)}
+      <span class="org-dot" style="background:${esc(o.color)}"></span>${esc(o.name)}
     </button>`).join('');
 
   let cellsHtml = '';
@@ -3169,7 +3167,7 @@ function openReadOnlyModal(item, kind) {
       <div class="modal">
         <div class="modal-header"><h3>${kind === 'interview' ? '👤 ' : kind === 'stake' ? '🏛️ ' : eventTitlePrefix(item)}${esc(title)}</h3><button class="modal-close" id="ro-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="ro-detail-row"><span class="org-dot" style="background:${item.organizationColor}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
+          <div class="ro-detail-row"><span class="org-dot" style="background:${esc(item.organizationColor)}"></span><strong>${esc(item.organizationName)}</strong>${kind === 'event' ? involvedOrgsBadgesHtml(item) : ''}</div>
           <div class="ro-detail-row">📅 ${esc(fmtDateHuman(item.date))}</div>
           <div class="ro-detail-row">🕐 ${kind === 'stake' && item.allDay ? 'Todo el día' : esc(fmtTime(item.startTime))}${item.endTime ? ' - ' + esc(fmtTime(item.endTime)) : ''}</div>
           ${item.location ? `<div class="ro-detail-row">📍 ${esc(locationDisplay(item))}</div>` : ''}
@@ -3223,7 +3221,7 @@ function myInterviewRequestsSectionHtml(items) {
       ${relevant.length ? `<div class="card-list" id="my-interview-requests-list">
         ${relevant.map((r) => `
           <div class="list-card">
-            <span class="org-dot" style="background:${r.organizationColor}"></span>
+            <span class="org-dot" style="background:${esc(r.organizationColor)}"></span>
             <div class="lc-main">
               <div class="lc-title">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} ${r.status === 'pending' ? '<span class="status-pill status-amber">Esperando confirmación</span>' : '<span class="status-pill status-red">Rechazada</span>'}</div>
               <div class="lc-sub">Propusiste: ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
@@ -3630,7 +3628,7 @@ async function renderMyActivitiesLeaderView() {
         ${otherOrgs.map((o) => `
           <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
             <input type="checkbox" name="followOrg" value="${o.id}" ${followedIds.includes(o.id) ? 'checked' : ''} />
-            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(o.color)};"></span>${esc(o.name)}
           </label>`).join('')}
       </div>
       <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
@@ -3641,7 +3639,7 @@ async function renderMyActivitiesLeaderView() {
           <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
           ${grouped[d].map((it) => `
             <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
-              <span class="org-dot" style="background:${it.organizationColor}"></span>
+              <span class="org-dot" style="background:${esc(it.organizationColor)}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
                 <div class="lc-sub">${myActLeaderSubHtml(it, myOrgId)}</div>
@@ -3728,7 +3726,7 @@ async function renderMyActivitiesMemberView() {
         ${state.organizations.map((o) => `
           <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; cursor:pointer;">
             <input type="checkbox" name="followOrg" value="${o.id}" ${followedIds.includes(o.id) ? 'checked' : ''} />
-            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(o.color)};"></span>${esc(o.name)}
           </label>`).join('')}
       </div>
       <button class="btn btn-primary btn-sm" id="my-act-prefs-save">Guardar preferencias</button>
@@ -3739,7 +3737,7 @@ async function renderMyActivitiesMemberView() {
           <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
           ${grouped[d].map((it) => `
             <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
-              <span class="org-dot" style="background:${it.organizationColor}"></span>
+              <span class="org-dot" style="background:${esc(it.organizationColor)}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
                 <div class="lc-sub">${esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · con ${esc(it.interviewerName)}` : ''}${it.kind === 'event' && it.description ? ' · ' + esc(it.description) : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
@@ -4159,7 +4157,7 @@ function interviewStatsLine(iv) {
 function interviewPendingCardHtml(iv) {
   return `
     <div class="list-card">
-      <span class="org-dot" style="background:${iv.organizationColor}"></span>
+      <span class="org-dot" style="background:${esc(iv.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
         <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + phoneWithWhatsAppHtml(iv.memberPhone, esc(iv.memberPhone)) : ''}</div>
@@ -4278,7 +4276,7 @@ async function renderInterviewsView() {
       ${interviewOrgs.map((o) => {
         const count = list.filter((iv) => Number(iv.organizationId) === Number(o.id)).length;
         return `<button type="button" class="subtab-btn iv-org-tab ${activeOrg.id === o.id ? 'active' : ''}" data-org-id="${o.id}">
-          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${o.color}; margin-right:5px;"></span>${esc(o.name)}${count ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${count}</span>` : ''}
+          <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${esc(o.color)}; margin-right:5px;"></span>${esc(o.name)}${count ? ` <span style="background:var(--celeste);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px;">${count}</span>` : ''}
         </button>`;
       }).join('')}
     </div>` : '';
@@ -4355,7 +4353,7 @@ function interviewRequestRowHtml(r) {
       : '<span class="status-pill status-red">Rechazada</span>';
   return `
     <div class="list-card">
-      <span class="org-dot" style="background:${r.organizationColor}"></span>
+      <span class="org-dot" style="background:${esc(r.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(r.memberName)} ${statusPill}</div>
         <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
@@ -4383,7 +4381,7 @@ function interviewHistoryCardHtml(iv) {
   }).join('');
   return `
     <div class="list-card" data-id="${iv.id}">
-      <span class="org-dot" style="background:${iv.organizationColor}"></span>
+      <span class="org-dot" style="background:${esc(iv.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">
           ${namesHtml}
@@ -5282,7 +5280,7 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
     <div class="budget-card" data-cat-type="${cat.categoryType}" data-org-id="${cat.organizationId || ''}" data-cat-id="${cat.budgetCategoryId || ''}">
       <div class="budget-card-head">
         <div class="budget-card-name">
-          <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${cat.categoryColor};"></span>
+          <span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${esc(cat.categoryColor)};"></span>
           <strong style="font-size:15px;">${esc(cat.categoryName)}</strong>
         </div>
         <div class="budget-figures">
@@ -6037,7 +6035,7 @@ async function renderAdminUsersByOrg() {
       <div class="list-card" style="flex-direction:column; align-items:stretch; gap:8px;">
         <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
           <div style="display:flex; align-items:center; gap:8px; font-weight:600;">
-            <span class="org-dot" style="background:${o.color}; display:inline-block;"></span>
+            <span class="org-dot" style="background:${esc(o.color)}; display:inline-block;"></span>
             ${esc(o.name)}
             <span style="font-weight:400; font-size:12.5px; color:var(--ink-soft);">— ${members.length} persona${members.length === 1 ? '' : 's'}</span>
           </div>
@@ -6215,7 +6213,7 @@ async function renderAdminOrgs() {
       <tbody>
         ${state.organizations.map((o) => `
           <tr>
-            <td><span class="org-dot" style="background:${o.color}; display:inline-block;"></span></td>
+            <td><span class="org-dot" style="background:${esc(o.color)}; display:inline-block;"></span></td>
             <td>${esc(o.name)}</td>
             <td>${o.allowsInterviews ? 'Sí' : 'No'}</td>
             <td style="text-align:right;"><button class="btn btn-secondary btn-sm" data-edit-org="${o.id}">Editar</button></td>
@@ -6594,7 +6592,7 @@ async function renderAgreementsManage() {
 function agreementOrgChipsHtml(a) {
   return a.organizationNames.map((name, i) => `
     <span style="display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; margin-right:8px;">
-      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${a.organizationColors[i]};"></span>${esc(name)}
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(a.organizationColors[i])};"></span>${esc(name)}
     </span>`).join('');
 }
 
@@ -6641,7 +6639,7 @@ function agreementOrgsFieldHtml(existingIds, lockedOrgId) {
           return `
           <label style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:400; cursor:${isLocked ? 'default' : 'pointer'};">
             <input type="checkbox" name="agreementOrgIds" value="${o.id}" ${checked ? 'checked' : ''} ${isLocked ? 'disabled' : ''} />
-            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${o.color};"></span>${esc(o.name)}
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(o.color)};"></span>${esc(o.name)}
           </label>`;
         }).join('')}
       </div>
@@ -7299,6 +7297,17 @@ async function openMeetingModal(presetType) {
         notApplicable: row.querySelector('.ar-not-applicable')?.checked || false,
       }))
       .filter((a) => a.topic);
+    // Corrección (revisión de código): el servidor ya rechaza un horario
+    // "de término" anterior o igual al de inicio, pero antes eso solo se
+    // veía después de guardar (un error genérico) — se avisa acá mismo,
+    // antes de llamar a la API, igual que ya se hace en la agenda semanal
+    // de entrevistas (ver avail-save más arriba).
+    const startTimeVal = fd.get('startTime');
+    const endTimeVal = fd.get('endTime');
+    if (endTimeVal && startTimeVal && endTimeVal <= startTimeVal) {
+      document.getElementById('mt-error').innerHTML = `<div class="error-msg">La hora de término debe ser posterior a la de inicio</div>`;
+      return;
+    }
     try {
       await api('/meetings', {
         method: 'POST',
@@ -8090,7 +8099,7 @@ function welfareSelfRelianceFormHtml(c) {
         <div class="lc-sub">Adjuntado por ${esc(f.uploadedByName)} — ${esc(fmtDateHuman(f.uploadedAt.slice(0, 10)))}</div>
       </div>
       <div style="display:flex; gap:6px;">
-        <a href="${f.dataUri}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">Ver</a>
+        <a href="${esc(f.dataUri)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">Ver</a>
         <button class="btn btn-danger btn-sm" id="wfd-form-remove" type="button">${icon('trash')}</button>
       </div>
     </div>`;
@@ -9978,7 +9987,7 @@ async function renderStatsPending() {
 function pendingEvalCardHtml(ev) {
   return `
     <div class="list-card">
-      <span class="org-dot" style="background:${ev.organizationColor}"></span>
+      <span class="org-dot" style="background:${esc(ev.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(ev.title)}</div>
         <div class="lc-sub">${esc(ev.organizationName)} · ${esc(fmtDateHuman(ev.date))}${ev.purpose ? ' · ' + esc(ev.purpose) : ''}</div>
@@ -10409,7 +10418,15 @@ function openDiplomaModal(a) {
 // librería extra (coherente con que este proyecto no usa dependencias).
 function downloadCsv(filename, headers, rows) {
   const escCsv = (v) => {
-    const s = String(v ?? '');
+    let s = String(v ?? '');
+    // Corrección (revisión de código) — "CSV injection": si un valor
+    // ingresado por un usuario (nombre de un converso, nota de seguimiento,
+    // descripción de un gasto, etc.) empieza con =, +, -, @, tab o retorno
+    // de carro, Excel/Sheets pueden interpretarlo como el inicio de una
+    // fórmula al abrir el CSV exportado, ejecutando código en vez de
+    // mostrar el texto tal cual. Anteponerle un apóstrofo neutraliza eso
+    // sin cambiar lo que se ve en la celda.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   const lines = [headers.map(escCsv).join(','), ...rows.map((r) => r.map(escCsv).join(','))];

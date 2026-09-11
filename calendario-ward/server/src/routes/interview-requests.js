@@ -244,8 +244,16 @@ export function registerInterviewRequestRoutes(router) {
     const location = body?.location || '';
     const sala = ['Casa Capilla', 'Capilla'].includes(location) ? (body?.sala || '') : '';
     const now = new Date().toISOString();
+    // Corrección (revisión de código): el chequeo `status !== 'pending'` de
+    // arriba corre sobre `data0`, tomada antes de entrar a withDb — dos
+    // confirmaciones casi simultáneas de la misma solicitud (dos líderes de
+    // la misma organización decidiendo a la vez, o un doble clic) podían
+    // pasar ambas esa verificación y crear DOS entrevistas para una sola
+    // solicitud. Se vuelve a verificar el estado adentro del callback antes
+    // de crear la entrevista.
     const interview = await withDb((d) => {
       const r = d.interviewRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return null;
       const newId = nextId(d, 'interviews');
       const iv = {
         id: newId,
@@ -283,6 +291,7 @@ export function registerInterviewRequestRoutes(router) {
       Object.assign(r, { status: 'confirmed', decidedBy: req.user.id, decidedAt: now, resultingInterviewId: iv.id });
       return iv;
     });
+    if (!interview) return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const data = load();
     // Punto (WhatsApp): quien pidió la entrevista suele ser justamente una
     // cuenta registrada (la propia solicitante) — se avisa en segundo plano.
@@ -303,10 +312,16 @@ export function registerInterviewRequestRoutes(router) {
     }
     if (reqItem.status !== 'pending') return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const now = new Date().toISOString();
-    await withDb((d) => {
+    // Misma corrección que en /confirm: se revalida el estado adentro de
+    // withDb para no rechazar (ni pisar la decisión de) una solicitud que
+    // otra persona ya confirmó/rechazó casi al mismo tiempo.
+    const rejected = await withDb((d) => {
       const r = d.interviewRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return null;
       Object.assign(r, { status: 'rejected', decidedBy: req.user.id, decidedAt: now, decisionComment: String(body?.comment || '').trim() });
+      return r;
     });
+    if (!rejected) return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
     const data = load();
     sendJson(res, 200, withRequestInfo(data.interviewRequests.find((r) => r.id === id), data));
   }));

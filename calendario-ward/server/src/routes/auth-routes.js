@@ -90,6 +90,11 @@ export function registerAuthRoutes(router) {
   // en db.js) — por eso el cliente insiste en pedirlos si faltan, aunque
   // este endpoint en sí no los exige (para no bloquear, por ejemplo, que
   // alguien solo quiera actualizar su foto).
+  // Punto 40 — qué tipos de aviso puede prender/apagar cada persona desde
+  // "Mi Perfil". Se valida contra esta lista fija para no dejar guardar una
+  // clave inventada (que después no la respetaría ningún chequeo real).
+  const NOTIFICATION_PREF_KEYS = ['interviews', 'commitments', 'councilPrep', 'dailyDigest', 'push', 'eventConflicts'];
+
   router.put('/api/auth/me/profile', requireAuth(async (req, res, params, body) => {
     if (body?.sex !== undefined && body.sex !== null && body.sex !== 'M' && body.sex !== 'F') {
       return sendJson(res, 400, { error: 'Sexo inválido' });
@@ -99,6 +104,9 @@ export function registerAuthRoutes(router) {
       if (Number.isNaN(d.getTime()) || d > new Date()) {
         return sendJson(res, 400, { error: 'Fecha de nacimiento inválida' });
       }
+    }
+    if (body?.notificationPrefs !== undefined && (typeof body.notificationPrefs !== 'object' || body.notificationPrefs === null || Array.isArray(body.notificationPrefs))) {
+      return sendJson(res, 400, { error: 'Preferencias de notificación inválidas' });
     }
     const updated = await withDb((d) => {
       const u = d.users.find((x) => x.id === req.user.id);
@@ -110,6 +118,16 @@ export function registerAuthRoutes(router) {
       // guarda su propia clave desde acá, ver whatsapp.js.
       if (body?.whatsappPhone !== undefined) u.whatsappPhone = String(body.whatsappPhone || '').trim() || null;
       if (body?.whatsappApiKey !== undefined) u.whatsappApiKey = String(body.whatsappApiKey || '').trim() || null;
+      // Se combina (merge) con lo que ya había, en vez de reemplazar todo el
+      // objeto — así el formulario puede mandar solo la preferencia que la
+      // persona tocó, sin tener que reenviar las demás cada vez.
+      if (body?.notificationPrefs !== undefined) {
+        const merged = { ...(u.notificationPrefs || {}) };
+        for (const key of NOTIFICATION_PREF_KEYS) {
+          if (body.notificationPrefs[key] !== undefined) merged[key] = !!body.notificationPrefs[key];
+        }
+        u.notificationPrefs = merged;
+      }
       return u;
     });
     const data = load();
@@ -153,9 +171,16 @@ export function registerAuthRoutes(router) {
     if (!normalizedEmail) return sendJson(res, 400, { error: 'Escribe tu usuario' });
     const data0 = load();
     const user = data0.users.find((u) => u.email === normalizedEmail);
-    if (!user) return sendJson(res, 404, { error: 'No encontramos ninguna cuenta con ese usuario' });
-    if (!canSendWhatsApp(user)) {
-      return sendJson(res, 400, { error: 'Esta cuenta no tiene un WhatsApp vinculado — pide a un Administrador que te restablezca la contraseña desde Administración → Usuarios' });
+    // Corrección (revisión de código): antes, un usuario que NO existe
+    // recibía un 404 distinto ("No encontramos ninguna cuenta...") del que
+    // recibía una cuenta real sin WhatsApp vinculado (400 "Esta cuenta no
+    // tiene..."), aunque el comentario de arriba decía explícitamente que
+    // este endpoint "nunca revela si el usuario existe o no" — en la
+    // práctica sí lo hacía, y permitía enumerar usuarios válidos probando
+    // muchos "usuarios" y viendo cuál de los dos mensajes/códigos volvía.
+    // Ahora ambos casos devuelven exactamente la misma respuesta.
+    if (!user || !canSendWhatsApp(user)) {
+      return sendJson(res, 400, { error: 'No pudimos enviar un código a esa cuenta — puede que el usuario esté mal escrito o que no tenga un WhatsApp vinculado. Pide a un Administrador que te restablezca la contraseña desde Administración → Usuarios.' });
     }
     const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
     try {

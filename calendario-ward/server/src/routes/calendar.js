@@ -10,12 +10,22 @@ async function getOrCreateCalendarToken(userId) {
   const data = load();
   const existing = data.users.find((u) => u.id === userId)?.calendarToken;
   if (existing) return existing;
-  const token = crypto.randomBytes(24).toString('hex');
-  await withDb((d) => {
+  // Corrección (revisión de código): dos peticiones casi simultáneas a este
+  // endpoint (dos pestañas abriendo "Mi Perfil" a la vez, por ejemplo)
+  // podían ver ambas `existing` vacío y generar CADA UNA un token distinto
+  // — el que se guardara al final ganaba, dejando a la otra petición con un
+  // enlace de calendario que ya no coincide con lo guardado (dejaría de
+  // funcionar en silencio). Se vuelve a revisar adentro de withDb (que sí
+  // serializa) antes de generar uno nuevo, así la segunda petición
+  // simplemente reutiliza el que la primera ya guardó.
+  return withDb((d) => {
     const u = d.users.find((x) => x.id === userId);
-    if (u) u.calendarToken = token;
+    if (!u) return null;
+    if (u.calendarToken) return u.calendarToken;
+    const token = crypto.randomBytes(24).toString('hex');
+    u.calendarToken = token;
+    return token;
   });
-  return token;
 }
 
 async function regenerateCalendarToken(userId) {
@@ -38,7 +48,13 @@ async function regenerateCalendarToken(userId) {
 // privacidad de Reuniones.
 function myActivitiesItems(user, data) {
   let events = data.events.filter((e) => canSeeMeeting(user, e));
-  const myOrgId = user.role === 'leader' ? Number(user.organizationId) : null;
+  // Corrección (revisión de código): el Secretario Ejecutivo también puede
+  // agendar/conducir entrevistas de su propia organización (Obispado) — ver
+  // canScheduleOrg en interviews.js y canDecideFor en
+  // interview-requests.js — pero acá solo se incluía `role === 'leader'`,
+  // así que a ese rol le faltaban sus propias entrevistas conducidas tanto
+  // en "Mis Actividades" como en el feed .ics exportado.
+  const myOrgId = (user.role === 'leader' || user.role === 'executive_secretary') ? Number(user.organizationId) : null;
   const followedIds = (user.followedOrganizationIds || []).map(Number);
   events = events.filter(
     (ev) => ev.isWardActivity

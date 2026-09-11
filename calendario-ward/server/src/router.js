@@ -114,7 +114,7 @@ export function parseMultipart(buffer, contentType) {
 
 export function readJsonBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    const chunks = [];
     let size = 0;
     const MAX = 2 * 1024 * 1024; // 2MB
     req.on('data', (chunk) => {
@@ -124,10 +124,21 @@ export function readJsonBody(req) {
         req.destroy();
         return;
       }
-      raw += chunk;
+      chunks.push(chunk);
     });
     req.on('end', () => {
-      if (!raw) return resolve({});
+      if (!size) return resolve({});
+      // Corrección (revisión de código): antes se armaba el cuerpo
+      // concatenando STRINGS (`raw += chunk`), lo que obliga a Node a
+      // decodificar cada Buffer de cada paquete TCP como UTF-8 por
+      // separado — si un caracter multibyte (una tilde, la "ñ") queda
+      // partido justo en el borde entre dos paquetes de red (nada raro con
+      // nombres/textos largos), cada mitad se decodifica sola y sale como
+      // el caracter de reemplazo "�", corrompiendo el dato en silencio (el
+      // JSON sigue siendo válido, solo con el texto mal — nunca se ve un
+      // error). Ahora se acumulan los Buffers tal cual y se decodifica UNA
+      // SOLA VEZ al final, sobre el binario completo ya reensamblado.
+      const raw = Buffer.concat(chunks).toString('utf8');
       try {
         resolve(JSON.parse(raw));
       } catch (e) {

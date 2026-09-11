@@ -68,30 +68,48 @@ const PDFINFO_BIN = process.env.PDFINFO_BIN || 'pdfinfo';
 // endpoint por esto, solo puede perder tildes en los nombres.
 const TESSERACT_LANG = process.env.TESSERACT_LANG || 'spa+eng';
 
+// Corrección (revisión de código): pdftoppm y tesseract se invocaban con
+// execFileSync — SÍNCRONO, bloquea el proceso de Node COMPLETO (de un solo
+// hilo, sirviendo a todos los usuarios de la app a la vez) mientras corren —
+// sin ningún `timeout`, así que un PDF que hiciera colgar a cualquiera de
+// los dos binarios (una página corrupta, una imagen anormalmente grande)
+// dejaba el servidor entero sin responder indefinidamente, sin ninguna
+// forma de recuperarse salvo reiniciarlo a mano. Y sin ningún tope de
+// páginas: los dos informes que este parser realmente entiende (trimestral
+// y de instantánea) tienen como máximo 2 páginas, pero nada impedía subir
+// un PDF de cientos de páginas (por error, o a propósito) y bloquear el
+// servidor durante todo ese procesamiento. Se agregan ambas protecciones
+// abajo: un timeout por invocación y un tope duro de páginas procesadas.
+const OCR_PAGE_TIMEOUT_MS = 30_000; // de sobra para una sola hoja a 300dpi
+const PDFINFO_TIMEOUT_MS = 10_000;
+const MAX_OCR_PAGES = 10; // muy por encima de las 2 páginas que de verdad se usan
+
 // ---------------- Rasterizado + OCR (child_process, sin librerías) ----------------
 
 function getPageCount(pdfPath) {
-  const out = execFileSync(PDFINFO_BIN, [pdfPath], { encoding: 'utf8' });
+  const out = execFileSync(PDFINFO_BIN, [pdfPath], { encoding: 'utf8', timeout: PDFINFO_TIMEOUT_MS });
   const m = /^Pages:\s*(\d+)/m.exec(out);
   return m ? Number(m[1]) : 0;
 }
 
 function ocrPage(pdfPath, pageNumber, tmpDir) {
   const prefix = path.join(tmpDir, `page${pageNumber}`);
-  execFileSync(PDFTOPPM_BIN, ['-png', '-r', '300', '-f', String(pageNumber), '-l', String(pageNumber), pdfPath, prefix]);
+  execFileSync(PDFTOPPM_BIN, ['-png', '-r', '300', '-f', String(pageNumber), '-l', String(pageNumber), pdfPath, prefix], {
+    timeout: OCR_PAGE_TIMEOUT_MS,
+  });
   const files = fs.readdirSync(tmpDir).filter((f) => f.startsWith(`page${pageNumber}-`) && f.endsWith('.png'));
   if (!files.length) throw new Error(`No se pudo rasterizar la página ${pageNumber} del PDF`);
   const pngPath = path.join(tmpDir, files[0]);
   try {
     return execFileSync(TESSERACT_BIN, [pngPath, 'stdout', '--psm', '6', '-l', TESSERACT_LANG], {
-      encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: OCR_PAGE_TIMEOUT_MS,
     });
   } catch (err) {
     // Idioma no instalado (típico en este sandbox de desarrollo) — reintenta
     // en inglés solo, para no romper la extracción por esto.
     if (TESSERACT_LANG !== 'eng' && /Failed loading language|Error opening data file/i.test(String(err.stderr || err.message))) {
       return execFileSync(TESSERACT_BIN, [pngPath, 'stdout', '--psm', '6', '-l', 'eng'], {
-        encoding: 'utf8', maxBuffer: 10 * 1024 * 1024,
+        encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout: OCR_PAGE_TIMEOUT_MS,
       });
     }
     throw err;
@@ -108,12 +126,17 @@ export function extractFromPdfBuffer(buffer) {
     fs.writeFileSync(pdfPath, buffer);
     const pageCount = getPageCount(pdfPath);
     if (!pageCount) return { type: null, data: null, warnings: ['No se pudo leer el PDF (¿está corrupto o protegido?).'] };
+    const extraWarnings = [];
+    const pagesToProcess = Math.min(pageCount, MAX_OCR_PAGES);
+    if (pageCount > MAX_OCR_PAGES) {
+      extraWarnings.push(`El PDF tiene ${pageCount} páginas; por seguridad solo se procesaron las primeras ${MAX_OCR_PAGES}. Si el informe real tiene más contenido relevante, complétalo manualmente.`);
+    }
     const pageTexts = [];
-    for (let p = 1; p <= pageCount; p++) pageTexts.push(ocrPage(pdfPath, p, tmpDir));
+    for (let p = 1; p <= pagesToProcess; p++) pageTexts.push(ocrPage(pdfPath, p, tmpDir));
 
     const detected = detectReportType(pageTexts[0]);
     if (detected.type === 'quarter') {
-      const warnings = [];
+      const warnings = [...extraWarnings];
       const { indicators, warnings: iw } = parseIndicatorsPage(pageTexts[0]);
       warnings.push(...iw);
       let converts = [];
@@ -134,9 +157,9 @@ export function extractFromPdfBuffer(buffer) {
     }
     if (detected.type === 'snapshot') {
       const { data, warnings } = parseSnapshotPages(pageTexts[0], pageTexts[1] || '');
-      return { type: 'snapshot', data, warnings };
+      return { type: 'snapshot', data, warnings: [...extraWarnings, ...warnings] };
     }
-    return { type: null, data: null, warnings: ['No se reconoció el tipo de informe (se esperaba "Informe trimestral" o "Estadísticas de la unidad" en el encabezado del PDF).'] };
+    return { type: null, data: null, warnings: [...extraWarnings, 'No se reconoció el tipo de informe (se esperaba "Informe trimestral" o "Estadísticas de la unidad" en el encabezado del PDF).'] };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

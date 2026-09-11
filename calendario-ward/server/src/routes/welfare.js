@@ -116,10 +116,23 @@ export const WELFARE_AID_TYPES = ['unica_vez', 'periodo'];
 const WELFARE_REVIEW_INTERVAL_MONTHS = 1;
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+// Corrección (revisión de código): `Date.setMonth` no tiene noción de "el
+// mes destino tiene menos días" — si hoy es 31 de enero, `setMonth(mes+1)`
+// pide "31 de febrero", que JS interpreta desbordando al 2 o 3 de marzo (el
+// mes destino nunca tiene un día 31, ni casi nunca un día 30). Como este
+// cálculo corre CADA MES (cada evaluación de un caso de Bienestar en
+// seguimiento genera la siguiente `nextReviewDate` a partir de la fecha de
+// hoy), un caso cuya evaluación cae fin de mes se iba corriendo cada vez un
+// poco más adelante en vez de mantenerse ~1 mes exacto. Se recalcula a mano
+// con componentes de fecha y se clampea el día al último día real del mes
+// destino (31 ene + 1 mes → 28/29 feb, no 2/3 mar).
 function addMonthsISO(fromDateStr, months) {
-  const d = new Date(`${fromDateStr}T00:00:00`);
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  const [y, m, day] = fromDateStr.split('-').map(Number);
+  const targetMonthIndex = (m - 1) + months;
+  const lastDayOfTargetMonth = new Date(y, targetMonthIndex + 1, 0).getDate();
+  const clampedDay = Math.min(day, lastDayOfTargetMonth);
+  const d = new Date(y, targetMonthIndex, clampedDay);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // Crea el acta ad-hoc + su único compromiso (dentro de una transacción
@@ -335,8 +348,15 @@ export function registerWelfareRoutes(router) {
     if (file.data.length > SELF_RELIANCE_FORM_MAX_BYTES) {
       return sendJson(res, 400, { error: 'El archivo es demasiado grande (máximo 8MB)' });
     }
+    // Lista blanca ESTRICTA (regex exacta, no startsWith): el Content-Type de
+    // una parte multipart lo controla por completo quien arma la petición
+    // (no solo el navegador al elegir una foto) — un valor como
+    // 'image/png"><script>...' pasaba el chequeo anterior (empezaba con
+    // "image/") y quedaba embebido tal cual en el data: URI que se guarda y
+    // se muestra sin escapar en el cliente (ver href en app.js), permitiendo
+    // XSS almacenado en el módulo más restringido de toda la app.
     const mime = file.contentType || 'application/octet-stream';
-    if (!mime.startsWith('image/') && mime !== 'application/pdf') {
+    if (!/^image\/(png|jpe?g|webp|gif)$/i.test(mime) && mime !== 'application/pdf') {
       return sendJson(res, 400, { error: 'Solo se acepta una imagen (foto) o un PDF' });
     }
     const now = new Date().toISOString();
@@ -415,8 +435,15 @@ export function registerWelfareRoutes(router) {
     }
     const nextReviewDate = addMonthsISO(todayISO(), WELFARE_REVIEW_INTERVAL_MONTHS);
     const now = new Date().toISOString();
+    // Corrección (revisión de código): el chequeo de "ya tiene una ayuda en
+    // seguimiento" de arriba corre sobre `data0`, tomada antes de entrar a
+    // withDb — dos otorgamientos casi simultáneos sobre el mismo caso
+    // podrían pasar ambos esa verificación y crear dos compromisos de
+    // evaluación duplicados. Se vuelve a verificar adentro del callback
+    // (que sí serializa) antes de mutar nada.
     const updated = await withDb((data) => {
       const c = data.welfareCases.find((x) => x.id === id);
+      if (c.reviewCommitmentId && c.status !== 'cerrado') return null;
       const assignee = data.users.find((u) => u.id === responsible.id);
       const commitment = createWelfareReviewCommitment(data, c, assignee, nextReviewDate);
       Object.assign(c, {
@@ -437,6 +464,7 @@ export function registerWelfareRoutes(router) {
       });
       return c;
     });
+    if (!updated) return sendJson(res, 400, { error: 'Este caso ya tiene una ayuda en seguimiento — registra la evaluación pendiente antes de otorgar una nueva' });
     const data = load();
     sendJson(res, 200, withCaseInfo(data.welfareCases.find((c) => c.id === updated.id), data));
   }));
@@ -509,16 +537,22 @@ export function registerWelfareRoutes(router) {
     }
     const notes = String(body?.notes || '').trim();
     const now = new Date().toISOString();
+    // Corrección (revisión de código): antes, si el compromiso ya no estaba
+    // "pending" (por ejemplo, otra solicitud de evaluación casi simultánea
+    // ya lo había completado), este callback igual seguía registrando una
+    // segunda evaluación (reviews.push) y — según la decisión — creando OTRO
+    // compromiso de seguimiento duplicado o cerrando el caso dos veces. Se
+    // corta temprano si el compromiso ya no está pendiente, sin mutar nada,
+    // para que solo la primera evaluación "gane".
     const updated = await withDb((data) => {
       const c = data.welfareCases.find((x) => x.id === id);
       const f = findMeetingWithCommitment(data, c.reviewCommitmentId);
-      if (f && f.commitment.status === 'pending') {
-        Object.assign(f.commitment, {
-          status: 'completed',
-          completedAt: now,
-          completionComment: notes || (decision === 'extender' ? 'Se extiende la ayuda' : 'Caso solucionado'),
-        });
-      }
+      if (!f || f.commitment.status !== 'pending') return null;
+      Object.assign(f.commitment, {
+        status: 'completed',
+        completedAt: now,
+        completionComment: notes || (decision === 'extender' ? 'Se extiende la ayuda' : 'Caso solucionado'),
+      });
       c.reviews = c.reviews || [];
       c.reviews.push({ id: nextId(data, 'welfareActions'), date: todayISO(), decision, notes, byUserId: req.user.id, byName: req.user.name, createdAt: now });
       let noteText;
@@ -538,6 +572,7 @@ export function registerWelfareRoutes(router) {
       c.updatedAt = now;
       return c;
     });
+    if (!updated) return sendJson(res, 400, { error: 'Esta evaluación ya fue registrada' });
     const data = load();
     sendJson(res, 200, withCaseInfo(data.welfareCases.find((c) => c.id === updated.id), data));
   }));

@@ -417,6 +417,22 @@ export function registerInterviewRoutes(router) {
       return sendJson(res, 403, { error: 'No tienes permiso para editar esta entrevista' });
     }
     const nextOrganizationId = body.organizationId !== undefined ? Number(body.organizationId) : first.organizationId;
+    // Corrección (revisión de código): el permiso de arriba solo se validaba
+    // contra la organización ACTUAL de la entrevista — si el body traía un
+    // organizationId distinto, se guardaba sin volver a comprobar que quien
+    // edita tenga permiso sobre la organización NUEVA, ni que esa
+    // organización tenga las entrevistas habilitadas (orgAllowsInterviews,
+    // que sí se exige al crear pero no se revisaba al editar). Eso permitía
+    // que el líder de una organización "moviera" una entrevista propia hacia
+    // la cola de otra organización sin su consentimiento.
+    if (nextOrganizationId !== Number(first.organizationId)) {
+      if (!canScheduleOrg(req.user, nextOrganizationId)) {
+        return sendJson(res, 403, { error: 'No tienes permiso para asignar esta entrevista a esa organización' });
+      }
+      if (!orgAllowsInterviews(data, nextOrganizationId)) {
+        return sendJson(res, 400, { error: 'Esa organización no agenda entrevistas' });
+      }
+    }
     const members = (body.members !== undefined || body.memberName !== undefined)
       ? normalizeMembersInput(body, data.users)
       : existingRows.map((iv) => ({ memberName: iv.memberName, memberUserId: iv.memberUserId, memberPhone: iv.memberPhone, memberEmail: iv.memberEmail }));

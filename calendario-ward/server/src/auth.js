@@ -30,10 +30,26 @@ export async function createSession(userId) {
   return token;
 }
 
+// Corrección (revisión de código): buscar la sesión con `===` compara la
+// cadena caracter por caracter y corta apenas encuentra una diferencia — en
+// teoría (aunque explotarlo por red es difícil, no imposible con muchas
+// mediciones) eso filtra por cuánto tarda la comparación cuántos caracteres
+// iniciales de un token adivinado coinciden con uno real. Ya se usa
+// `crypto.timingSafeEqual` para la contraseña (ver verifyPassword arriba) —
+// se aplica el mismo criterio acá, por consistencia y como buena práctica,
+// aunque el token de sesión (32 bytes al azar) ya es difícil de adivinar de
+// entrada.
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a ?? ''));
+  const bufB = Buffer.from(String(b ?? ''));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export async function getUserFromToken(token) {
   if (!token) return null;
   const data = load();
-  const session = data.sessions.find((s) => s.token === token);
+  const session = data.sessions.find((s) => timingSafeStringEqual(s.token, token));
   if (!session) return null;
   if (session.expiresAt < Date.now()) return null;
   const user = data.users.find((u) => u.id === session.userId);
@@ -48,6 +64,13 @@ export async function destroySession(token) {
 
 export function publicUser(user) {
   if (!user) return null;
-  const { passwordHash, ...rest } = user;
+  // Corrección (revisión de código): `passwordReset` guarda, mientras está
+  // activo, el código de 6 dígitos de recuperación de contraseña en texto
+  // plano (ver auth-routes.js) — antes se filtraba tal cual en cualquier
+  // respuesta que incluyera a este usuario (GET /api/users, /api/auth/me,
+  // etc.), visible para cualquier Administrador mientras alguien tuviera
+  // una recuperación en curso. Se quita del objeto público igual que ya se
+  // hace con `passwordHash`.
+  const { passwordHash, passwordReset, ...rest } = user;
   return rest;
 }

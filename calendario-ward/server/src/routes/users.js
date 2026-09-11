@@ -74,7 +74,14 @@ export function registerUserRoutes(router) {
     const { calling, isPresident } = resolveCallingAndPresident(data, {
       organizationId, role, callingInput: body.calling, isPresidentInput: body.isPresident,
     });
+    // Corrección (revisión de código): la verificación de email duplicado de
+    // arriba corre sobre `data`, tomada antes de entrar a withDb — dos
+    // creaciones casi simultáneas del mismo usuario (dos administradores, o
+    // un doble clic en "Crear") podían pasar ambas esa verificación y crear
+    // dos cuentas con el mismo email. Se vuelve a verificar adentro del
+    // callback (que sí serializa) antes de crear la cuenta.
     const user = await withDb((d) => {
+      if (d.users.some((u) => u.email === normalizedEmail)) return null;
       const u = {
         id: nextId(d, 'users'),
         name,
@@ -103,6 +110,7 @@ export function registerUserRoutes(router) {
       d.users.push(u);
       return u;
     });
+    if (!user) return sendJson(res, 409, { error: 'Ya existe un usuario con ese nombre de usuario' });
     sendJson(res, 201, publicUser(user));
   }));
 
@@ -121,11 +129,26 @@ export function registerUserRoutes(router) {
     }
     const staffOrgError = validateStaffOrg(data, resolvedRole, resolvedOrgId);
     if (staffOrgError) return sendJson(res, 400, { error: staffOrgError });
+    // Corrección (revisión de código): este endpoint dejaba cambiar el email
+    // de un usuario a CUALQUIER valor, sin revisar si ya pertenecía a otra
+    // cuenta — a diferencia de /api/users (crear) y /api/auth/register, que
+    // sí lo exigen. Dos usuarios con el mismo email rompen el login (que
+    // busca por email) de forma impredecible. Se agrega la misma
+    // verificación acá, y se repite adentro de withDb por la misma razón de
+    // condición de carrera que en los otros endpoints (dos ediciones casi
+    // simultáneas apuntando al mismo email nuevo).
+    const newEmail = body.email ? String(body.email).toLowerCase().trim() : null;
+    if (newEmail && newEmail !== existing.email && data.users.some((u) => u.id !== id && u.email === newEmail)) {
+      return sendJson(res, 409, { error: 'Ya existe un usuario con ese nombre de usuario' });
+    }
     const updated = await withDb((d) => {
       const u = d.users.find((x) => x.id === id);
+      if (newEmail && newEmail !== u.email && d.users.some((x) => x.id !== id && x.email === newEmail)) {
+        return null;
+      }
       Object.assign(u, {
         name: body.name ?? u.name,
-        email: body.email ? String(body.email).toLowerCase().trim() : u.email,
+        email: newEmail || u.email,
         role: body.role ?? u.role,
         organizationId: body.organizationId !== undefined ? (body.organizationId ? Number(body.organizationId) : null) : u.organizationId,
         phone: body.phone ?? u.phone,
@@ -153,6 +176,7 @@ export function registerUserRoutes(router) {
       }
       return u;
     });
+    if (!updated) return sendJson(res, 409, { error: 'Ya existe un usuario con ese nombre de usuario' });
     sendJson(res, 200, publicUser(updated));
   }));
 
