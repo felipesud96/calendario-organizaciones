@@ -3540,8 +3540,15 @@ async function renderMyActivitiesView() {
 function myActLeaderSubHtml(it, myOrgId) {
   const parts = [];
   if (it.kind === 'interview') {
-    parts.push(`Te entrevista ${esc(it.organizationName)}`);
-    if (it.interviewerName) parts.push(esc(it.interviewerName));
+    if (Number(it.organizationId) === myOrgId) {
+      // Entrevista de tu propia organización (la conduces tú o algún
+      // consejero de tu presidencia) — el título ya muestra a quién se
+      // entrevista, así que acá solo hace falta decir quién la hace.
+      if (it.interviewerName) parts.push(`🧑‍💼 ${esc(it.interviewerName)}`);
+    } else {
+      parts.push(`Te entrevista ${esc(it.organizationName)}`);
+      if (it.interviewerName) parts.push(esc(it.interviewerName));
+    }
   } else if (Number(it.organizationId) !== myOrgId) {
     parts.push(esc(it.organizationName));
   }
@@ -3575,14 +3582,27 @@ async function renderMyActivitiesLeaderView() {
   // persona y yo no fui la primera en agendarse, mi propio memberUserId
   // puede no coincidir con el `memberUserId` de nivel superior (que es el de
   // la primera persona del grupo) — por eso se revisa dentro de `members`.
-  const myOwnInterviews = interviews.filter((iv) => (Array.isArray(iv.members) && iv.members.length ? iv.members : [iv]).some((m) => Number(m.memberUserId) === Number(state.user.id)));
+  // Además de esas (en las que a mí me entrevistan), también deben aparecer
+  // acá las entrevistas de mi PROPIA organización — las que yo mismo (u otro
+  // consejero de mi presidencia) agenda para entrevistar a alguien más —
+  // mismo criterio que ya usa GET /api/interviews para la pestaña
+  // Entrevistas, para que "Mis Actividades" muestre toda mi agenda real.
+  const myOwnInterviews = interviews.filter((iv) => Number(iv.organizationId) === myOrgId
+    || (Array.isArray(iv.members) && iv.members.length ? iv.members : [iv]).some((m) => Number(m.memberUserId) === Number(state.user.id)));
   const todayIso = toISODate(new Date());
   // Las actividades cuya fecha ya pasó desaparecen de este listado para
   // mantener la pantalla limpia (siguen existiendo — se pueden seguir
   // viendo en el Calendario si hace falta revisar el historial).
   const list = [
     ...events.map((ev) => ({ ...ev, kind: 'event' })),
-    ...myOwnInterviews.map((iv) => ({ ...iv, kind: 'interview', title: iv.description || 'Entrevista' })),
+    ...myOwnInterviews.map((iv) => ({
+      ...iv,
+      kind: 'interview',
+      // Si la entrevista es de mi organización y yo no soy el entrevistado,
+      // la estoy conduciendo — el título debe decir a QUIÉN entrevisto, no
+      // solo "Entrevista" a secas (que asume que a mí me entrevistan).
+      title: Number(iv.organizationId) === myOrgId ? (iv.memberNames || iv.memberName || 'Entrevista') : (iv.description || 'Entrevista'),
+    })),
   ].filter((it) => it.date >= todayIso).sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
   const grouped = {};
   for (const it of list) { (grouped[it.date] ||= []).push(it); }

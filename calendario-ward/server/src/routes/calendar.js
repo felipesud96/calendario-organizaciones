@@ -46,7 +46,15 @@ function myActivitiesItems(user, data) {
       || followedIds.includes(Number(ev.organizationId))
       || (ev.involvedOrganizationIds || []).map(Number).some((id) => id === myOrgId || followedIds.includes(id)),
   );
-  const myInterviews = data.interviews.filter((iv) => Number(iv.memberUserId) === Number(user.id));
+  // Además de las entrevistas en las que a la propia persona la entrevistan
+  // (en cualquier organización), un Líder también ve acá las que agenda su
+  // PROPIA organización — las que él mismo (o algún consejero de su
+  // presidencia) conduce como entrevistador — mismo criterio que ya aplica
+  // GET /api/interviews para la pestaña Entrevistas, así su agenda queda
+  // completa en un solo lugar/enlace.
+  const myInterviews = data.interviews.filter(
+    (iv) => Number(iv.memberUserId) === Number(user.id) || (myOrgId !== null && Number(iv.organizationId) === myOrgId),
+  );
 
   const orgName = (id) => data.organizations.find((o) => o.id === Number(id))?.name || '';
 
@@ -68,21 +76,32 @@ function myActivitiesItems(user, data) {
   const othersInGroup = (iv) => data.interviews
     .filter((o) => o.groupId === iv.groupId && o.id !== iv.id)
     .map((o) => o.memberName);
-  const interviewItems = myInterviews.map((iv) => ({
-    id: iv.id,
-    kind: 'interview',
-    date: iv.date,
-    startTime: iv.startTime,
-    endTime: iv.endTime,
-    summary: `👤 Entrevista${iv.description ? ': ' + iv.description : ''}`,
-    location: iv.location || '',
-    description: [
-      iv.interviewerName ? `Te entrevista: ${iv.interviewerName}` : '',
-      orgName(iv.organizationId) ? `Organización: ${orgName(iv.organizationId)}` : '',
-      othersInGroup(iv).length ? `Junto con: ${joinNames(othersInGroup(iv))}` : '',
-    ].filter(Boolean).join('\n'),
-    organizationName: orgName(iv.organizationId),
-  }));
+  const interviewItems = myInterviews.map((iv) => {
+    // Si la entrevista es de tu propia organización y tú no eres el
+    // entrevistado, la estás conduciendo tú (o algún consejero de tu
+    // presidencia) — el resumen debe decir a QUIÉN se entrevista, no "te
+    // entrevista", que sería confuso/incorrecto en ese caso.
+    const conducting = myOrgId !== null && Number(iv.organizationId) === myOrgId && Number(iv.memberUserId) !== Number(user.id);
+    return {
+      id: iv.id,
+      kind: 'interview',
+      date: iv.date,
+      startTime: iv.startTime,
+      endTime: iv.endTime,
+      summary: conducting
+        ? `👤 Entrevista a ${iv.memberName}${iv.description ? ': ' + iv.description : ''}`
+        : `👤 Entrevista${iv.description ? ': ' + iv.description : ''}`,
+      location: iv.location || '',
+      description: [
+        conducting
+          ? (iv.interviewerName ? `Entrevistador: ${iv.interviewerName}` : '')
+          : (iv.interviewerName ? `Te entrevista: ${iv.interviewerName}` : ''),
+        !conducting && orgName(iv.organizationId) ? `Organización: ${orgName(iv.organizationId)}` : '',
+        othersInGroup(iv).length ? `Junto con: ${joinNames(othersInGroup(iv))}` : '',
+      ].filter(Boolean).join('\n'),
+      organizationName: orgName(iv.organizationId),
+    };
+  });
 
   return [...eventItems, ...interviewItems].sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
 }
