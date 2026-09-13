@@ -138,6 +138,36 @@ function commitmentVisibleFully(user, meeting, commitment, data) {
   return !meeting.confidential && !commitment.confidential;
 }
 
+// Compromiso "grupal" (pedido explícito: "compromisos que varios puedan
+// hacer, ejemplo dar un nombre para ayudar, y anotar varias personas porque
+// cada uno debe dar un nombre"): en vez de inventar un compromiso con una
+// lista de participantes anidada, se crea UNA fila de compromiso POR
+// PERSONA (mismo `groupId`, igual criterio que `recurrenceGroupId` en
+// events.js) — así "Mis Asignaciones", el recordatorio de WhatsApp del día
+// de vencimiento, y el ranking de Logros por compromisos completados siguen
+// funcionando sin ningún cambio, porque todos ya asumen "un compromiso = un
+// responsable". Lo único nuevo es este resumen `group`, que junta de vuelta
+// a los "hermanos" de fila para mostrar en el acta cuántos de la lista ya
+// cumplieron (ej. "3 de 5").
+function commitmentGroupSummary(c, meeting, data) {
+  if (!c.groupId) return null;
+  const members = (meeting.commitments || []).filter((x) => x.groupId === c.groupId);
+  return {
+    groupId: c.groupId,
+    total: members.length,
+    completedCount: members.filter((x) => x.status === 'completed').length,
+    members: members.map((x) => ({
+      id: x.id,
+      assignedToUserId: x.assignedToUserId,
+      assignedToName: userName(data, x.assignedToUserId),
+      status: x.status,
+      displayStatus: x.status === 'pending' && x.dueDate && x.dueDate < todayISO() ? 'overdue' : x.status,
+      completedAt: x.completedAt,
+      completionComment: x.completionComment,
+    })),
+  };
+}
+
 function withCommitmentInfo(c, data, meeting, viewer) {
   const isOverdue = c.status === 'pending' && !!c.dueDate && c.dueDate < todayISO();
   const visible = !viewer || !meeting || commitmentVisibleFully(viewer, meeting, c, data);
@@ -159,6 +189,9 @@ function withCommitmentInfo(c, data, meeting, viewer) {
     isOverdue: visible && isOverdue,
     displayStatus: c.status === 'pending' ? (visible && isOverdue ? 'overdue' : 'pending') : c.status,
     redacted: !visible,
+    // Un compromiso grupal confidencial no debe filtrar de todos modos la
+    // lista de quiénes participan ni su avance individual.
+    group: visible && meeting ? commitmentGroupSummary(c, meeting, data) : null,
   };
 }
 
@@ -222,16 +255,25 @@ const EMPTY_AGENDA_ITEM_NOTES = {
   quienNecesita: '', queSeHara: '', quienLoHara: '', notApplicable: false,
 };
 
+// Acepta un responsable único (assignedToUserId, tal como antes) o varios
+// (assignedToUserIds — pedido explícito: "compromisos que varios puedan
+// hacer... cada uno debe dar un nombre"). Cuando son varios, cada uno recibe
+// su propia fila de compromiso (ver el POST de más abajo), para que cada
+// persona marque SU PROPIA parte por su cuenta.
 function validCommitmentInput(raw, assignableIds) {
   const description = String(raw?.description || '').trim();
   const dueDate = String(raw?.dueDate || '').trim();
-  const assignedToUserId = Number(raw?.assignedToUserId);
   if (!description) return { error: 'Falta la descripción del compromiso' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { error: 'Falta la fecha límite / de verificación del compromiso' };
-  if (!Number.isFinite(assignedToUserId) || !assignableIds.has(assignedToUserId)) {
-    return { error: 'El responsable elegido no es válido para quien está creando el acta' };
+  const rawIds = Array.isArray(raw?.assignedToUserIds) && raw.assignedToUserIds.length
+    ? raw.assignedToUserIds
+    : (raw?.assignedToUserId !== undefined && raw?.assignedToUserId !== null && raw?.assignedToUserId !== '' ? [raw.assignedToUserId] : []);
+  const assignedToUserIds = [...new Set(rawIds.map(Number))].filter((n) => Number.isFinite(n));
+  if (!assignedToUserIds.length) return { error: 'Falta elegir al menos un responsable para el compromiso' };
+  for (const uid of assignedToUserIds) {
+    if (!assignableIds.has(uid)) return { error: 'El responsable elegido no es válido para quien está creando el acta' };
   }
-  return { value: { description, dueDate, assignedToUserId } };
+  return { value: { description, dueDate, assignedToUserIds } };
 }
 
 export function registerMeetingRoutes(router) {
@@ -357,15 +399,24 @@ export function registerMeetingRoutes(router) {
 
     const now = new Date().toISOString();
     const meeting = await withDb((data) => {
-      const commitments = commitmentsInput.map((c) => ({
-        id: nextId(data, 'commitments'),
-        ...c,
-        confidential: false,
-        status: 'pending',
-        completedAt: null,
-        completionComment: '',
-        whatsappDueTodaySent: false,
-      }));
+      // Compromiso grupal: un `groupId` compartido solo cuando hay más de un
+      // responsable (así un compromiso normal, de un solo responsable, sigue
+      // guardándose exactamente igual que antes, con groupId null).
+      const commitments = commitmentsInput.flatMap((c) => {
+        const groupId = c.assignedToUserIds.length > 1 ? `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+        return c.assignedToUserIds.map((assignedToUserId) => ({
+          id: nextId(data, 'commitments'),
+          description: c.description,
+          dueDate: c.dueDate,
+          assignedToUserId,
+          groupId,
+          confidential: false,
+          status: 'pending',
+          completedAt: null,
+          completionComment: '',
+          whatsappDueTodaySent: false,
+        }));
+      });
       const agendaItems = agendaItemsInput.map((a) => ({ id: nextId(data, 'agendaItems'), ...a }));
       const m = {
         id: nextId(data, 'meetings'),
@@ -407,7 +458,21 @@ export function registerMeetingRoutes(router) {
 
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
-      m.commitments.push({ id: nextId(data, 'commitments'), ...check.value, confidential: !!body?.confidential, status: 'pending', completedAt: null, completionComment: '', whatsappDueTodaySent: false });
+      const groupId = check.value.assignedToUserIds.length > 1 ? `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+      for (const assignedToUserId of check.value.assignedToUserIds) {
+        m.commitments.push({
+          id: nextId(data, 'commitments'),
+          description: check.value.description,
+          dueDate: check.value.dueDate,
+          assignedToUserId,
+          groupId,
+          confidential: !!body?.confidential,
+          status: 'pending',
+          completedAt: null,
+          completionComment: '',
+          whatsappDueTodaySent: false,
+        });
+      }
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -509,11 +574,99 @@ export function registerMeetingRoutes(router) {
     if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
     if (!canEditMeeting(req.user, found.meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede cambiar su confidencialidad' });
     await withDb((data) => {
-      findMeetingWithCommitment(data, id).commitment.confidential = !!body?.confidential;
+      const f = findMeetingWithCommitment(data, id);
+      // Un compromiso grupal es UNA sola cosa de cara al usuario, aunque
+      // esté guardado como varias filas — la confidencialidad se marca (o se
+      // quita) en las filas de todo el grupo a la vez, nunca solo en una.
+      const targets = f.commitment.groupId
+        ? f.meeting.commitments.filter((c) => c.groupId === f.commitment.groupId)
+        : [f.commitment];
+      targets.forEach((c) => { c.confidential = !!body?.confidential; });
     });
     const data = load();
     const f2 = findMeetingWithCommitment(data, id);
     sendJson(res, 200, withCommitmentInfo(f2.commitment, data, f2.meeting, req.user));
+  }));
+
+  // Editar el acta (Punto pedido explícitamente: "que el acta pueda ser
+  // editable, después de que se cree") — título, fecha, horario y tipo,
+  // mismo permiso y las mismas validaciones que al crearla. Solo mientras
+  // sigue activa, igual que agregar compromisos/temas — una vez archivada,
+  // el acta es el registro histórico y ya no se toca.
+  router.put('/api/meetings/:id', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const meeting = data0.meetings.find((m) => m.id === id);
+    if (!meeting) return sendJson(res, 404, { error: 'Acta no encontrada' });
+    if (!canEditMeeting(req.user, meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede editarla' });
+    if (meeting.status !== 'active') return sendJson(res, 400, { error: 'Esta acta ya está archivada — no se puede editar' });
+    const title = String(body?.title || '').trim();
+    const date = String(body?.date || '').trim();
+    const startTime = String(body?.startTime || '').trim();
+    const endTime = String(body?.endTime || '').trim();
+    if (!title) return sendJson(res, 400, { error: 'Falta el título del acta' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendJson(res, 400, { error: 'Falta la fecha de la reunión' });
+    if (!/^\d{2}:\d{2}$/.test(startTime)) return sendJson(res, 400, { error: 'Falta la hora de inicio de la reunión' });
+    if (endTime && !/^\d{2}:\d{2}$/.test(endTime)) return sendJson(res, 400, { error: 'Hora de término inválida' });
+    if (endTime && endTime <= startTime) return sendJson(res, 400, { error: 'La hora de término debe ser posterior a la de inicio' });
+    const requestedType = MEETING_TYPES.includes(body?.type) ? body.type : meeting.type;
+    if (OBISPADO_ONLY_TYPES.includes(requestedType) && !isObispadoLeader(req.user, data0) && req.user.role !== 'ward_clerk') {
+      return sendJson(res, 403, { error: 'Solo el Obispado (o el Secretario de Barrio) puede registrar un Consejo de Barrio o una Coordinación de Ministración' });
+    }
+    await withDb((data) => {
+      const m = data.meetings.find((x) => x.id === id);
+      Object.assign(m, { title, date, startTime, endTime: endTime || null, type: requestedType });
+    });
+    const data = load();
+    sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
+  }));
+
+  // Editar un compromiso ya creado (descripción / fecha límite) — mismo
+  // permiso que el resto de la edición del acta. En uno grupal, se
+  // propaga a todas las filas del grupo (todas comparten la misma
+  // descripción y fecha; lo único que varía por fila es el responsable y su
+  // propio avance).
+  router.put('/api/commitments/:id', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const found = findMeetingWithCommitment(data0, id);
+    if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
+    if (!canEditMeeting(req.user, found.meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede editar sus compromisos' });
+    if (found.meeting.status !== 'active') return sendJson(res, 400, { error: 'Esta acta ya está archivada' });
+    const description = String(body?.description || '').trim();
+    const dueDate = String(body?.dueDate || '').trim();
+    if (!description) return sendJson(res, 400, { error: 'Falta la descripción del compromiso' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return sendJson(res, 400, { error: 'Falta la fecha límite / de verificación del compromiso' });
+    await withDb((data) => {
+      const f = findMeetingWithCommitment(data, id);
+      const targets = f.commitment.groupId
+        ? f.meeting.commitments.filter((c) => c.groupId === f.commitment.groupId)
+        : [f.commitment];
+      targets.forEach((c) => { c.description = description; c.dueDate = dueDate; });
+    });
+    const data = load();
+    const f2 = findMeetingWithCommitment(data, id);
+    sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === f2.meeting.id), data, req.user));
+  }));
+
+  // Eliminar un compromiso — si es grupal, borra solo a ESA persona del
+  // grupo (las demás filas del grupo quedan intactas); si es individual,
+  // elimina el compromiso completo. Mismo permiso y misma restricción de
+  // acta activa que el resto de la edición.
+  router.delete('/api/commitments/:id', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const found = findMeetingWithCommitment(data0, id);
+    if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
+    if (!canEditMeeting(req.user, found.meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede eliminar compromisos' });
+    if (found.meeting.status !== 'active') return sendJson(res, 400, { error: 'Esta acta ya está archivada' });
+    const meetingId = found.meeting.id;
+    await withDb((data) => {
+      const m = data.meetings.find((x) => x.id === meetingId);
+      m.commitments = m.commitments.filter((c) => c.id !== id);
+    });
+    const data = load();
+    sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === meetingId), data, req.user));
   }));
 
   // El responsable marca su propio compromiso como completado, dejando un

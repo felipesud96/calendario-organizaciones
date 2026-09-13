@@ -532,11 +532,35 @@ function eventTypeFieldHtml(idPrefix, isMeeting) {
     </div>`;
 }
 
-// ---------------- Repetición: semanal o fechas específicas ----------------
+// ---------------- Repetición: semanal, mensual por posición, o fechas específicas ----------------
 // Al crear (no al editar) se puede generar de una vez varias ocurrencias:
-// todas las semanas hasta una fecha, o un listado de fechas puntuales
-// elegidas a mano (ej. viernes de esta semana, jueves de la próxima, sábado
-// en 3 semanas). Cada ocurrencia queda como una actividad independiente.
+// todas las semanas hasta una fecha, el mismo patrón "n-ésimo día de la
+// semana de cada mes" (pedido explícito: "el segundo martes de cada mes"),
+// o un listado de fechas puntuales elegidas a mano (ej. viernes de esta
+// semana, jueves de la próxima, sábado en 3 semanas). Cada ocurrencia queda
+// como una actividad independiente — mismo criterio que ya usan `weekly` y
+// `custom` (no hay una "regla" que persista: se calculan las fechas acá
+// mismo y el servidor solo recibe la lista final, ver POST /events/recurring).
+const EVENT_MONTHLY_NTH_OPTIONS = [
+  ['1', 'primer'], ['2', 'segundo'], ['3', 'tercer'], ['4', 'cuarto'], ['5', 'quinto'], ['last', 'último'],
+];
+// El n-ésimo (o último) día de la semana de un mes dado, como fecha ISO — o
+// null si ese mes no llega a tener, por ejemplo, un 5to domingo. En hora
+// LOCAL (no UTC) para calzar con el resto de este bloque de repetición (ver
+// la rama "weekly" de computeRecurrenceDates, que también arma sus fechas
+// en local).
+function nthWeekdayOfMonthISO(year, month, weekday, nth) {
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  if (nth === 'last') {
+    const lastWeekday = new Date(year, month, daysInMonth).getDay();
+    const diff = (lastWeekday - weekday + 7) % 7;
+    return toISODate(new Date(year, month, daysInMonth - diff));
+  }
+  const day = 1 + ((weekday - firstWeekday + 7) % 7) + (nth - 1) * 7;
+  if (day > daysInMonth) return null;
+  return toISODate(new Date(year, month, day));
+}
 function recurrenceFieldHtml(idPrefix) {
   return `
     <div class="field">
@@ -544,12 +568,26 @@ function recurrenceFieldHtml(idPrefix) {
       <select id="${idPrefix}-recurrence-select">
         <option value="none" selected>No se repite</option>
         <option value="weekly">Semanal (mismo día todas las semanas)</option>
+        <option value="monthlyWeekday">Mensual (ej: el segundo martes de cada mes)</option>
         <option value="custom">Fechas específicas</option>
       </select>
     </div>
     <div class="field" id="${idPrefix}-recurrence-weekly-field" style="display:none;">
       <label>Repetir cada semana hasta</label>
       <input type="date" id="${idPrefix}-recurrence-until" />
+    </div>
+    <div class="field" id="${idPrefix}-recurrence-monthly-field" style="display:none;">
+      <label>Repetir el</label>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <select id="${idPrefix}-recurrence-monthly-nth">
+          ${EVENT_MONTHLY_NTH_OPTIONS.map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}
+        </select>
+        <select id="${idPrefix}-recurrence-monthly-weekday">
+          ${WEEKDAY_NAMES.map((name, i) => `<option value="${i}">${name}</option>`).join('')}
+        </select>
+        <span>de cada mes, hasta</span>
+        <input type="date" id="${idPrefix}-recurrence-monthly-until" />
+      </div>
     </div>
     <div class="field" id="${idPrefix}-recurrence-custom-field" style="display:none;">
       <label>Fechas adicionales (además del "Día" de más abajo)</label>
@@ -562,12 +600,14 @@ function recurrenceFieldHtml(idPrefix) {
 function wireRecurrenceField(idPrefix) {
   const select = document.getElementById(`${idPrefix}-recurrence-select`);
   const weeklyField = document.getElementById(`${idPrefix}-recurrence-weekly-field`);
+  const monthlyField = document.getElementById(`${idPrefix}-recurrence-monthly-field`);
   const customField = document.getElementById(`${idPrefix}-recurrence-custom-field`);
   const hint = document.getElementById(`${idPrefix}-recurrence-hint`);
   const datesContainer = document.getElementById(`${idPrefix}-recurrence-dates`);
   const addBtn = document.getElementById(`${idPrefix}-recurrence-add-date`);
   const applyState = () => {
     weeklyField.style.display = select.value === 'weekly' ? '' : 'none';
+    monthlyField.style.display = select.value === 'monthlyWeekday' ? '' : 'none';
     customField.style.display = select.value === 'custom' ? '' : 'none';
     hint.style.display = select.value === 'none' ? 'none' : '';
   };
@@ -595,6 +635,27 @@ function computeRecurrenceDates(idPrefix, firstDate) {
     while (cur <= end) {
       dates.push(toISODate(cur));
       cur.setDate(cur.getDate() + 7);
+    }
+    return dates.length ? dates : [firstDate];
+  }
+  if (mode === 'monthlyWeekday') {
+    const nthRaw = document.getElementById(`${idPrefix}-recurrence-monthly-nth`).value;
+    const nth = nthRaw === 'last' ? 'last' : Number(nthRaw);
+    const weekday = Number(document.getElementById(`${idPrefix}-recurrence-monthly-weekday`).value);
+    const until = document.getElementById(`${idPrefix}-recurrence-monthly-until`).value;
+    if (!firstDate || !until) return [firstDate].filter(Boolean);
+    const dates = [];
+    const [fy, fm] = firstDate.split('-').map(Number);
+    // Tope de 36 meses (3 años) para no quedar en un loop enorme si alguien
+    // pone una fecha "hasta" absurdamente lejana — de sobra para cualquier
+    // uso real de "repetir cada mes".
+    for (let i = 0; i < 36; i++) {
+      const totalMonth = (fm - 1) + i;
+      const year = fy + Math.floor(totalMonth / 12);
+      const month = ((totalMonth % 12) + 12) % 12;
+      const iso = nthWeekdayOfMonthISO(year, month, weekday, nth);
+      if (iso && iso > until) break;
+      if (iso && iso >= firstDate) dates.push(iso);
     }
     return dates.length ? dates : [firstDate];
   }
@@ -6949,6 +7010,35 @@ async function openPizarraOcrPanel(file, assignable, onAccept) {
   });
 }
 
+// Compromisos grupales (pedido explícito: "compromisos que varios puedan
+// hacer, ejemplo dar un nombre para ayudar, y anotar varias personas porque
+// cada uno debe dar un nombre") — en vez del <select> de un solo responsable
+// de antes, una lista de checkboxes deja marcar a VARIAS personas para el
+// mismo compromiso; el servidor crea una fila independiente por cada una
+// (mismo groupId), para que cada quien marque su propia parte por su cuenta.
+// Reutilizado tanto al crear el acta (openMeetingModal) como al agregar un
+// compromiso a una ya existente (openAddCommitmentModal).
+function commitmentAssigneesFieldHtml(assignable) {
+  return `
+    <div class="field">
+      <label>Responsable(s) <span style="font-weight:400; font-size:11.5px; color:var(--ink-soft);">— marca a varios si cada uno debe cumplirlo por su cuenta</span></label>
+      <div class="cr-assignees" style="display:flex; flex-wrap:wrap; gap:6px 14px; max-height:150px; overflow-y:auto; padding:8px; border:1px solid var(--border-color, #e2e8f0); border-radius:8px;">
+        ${assignable.map((u) => `
+          <label style="display:flex; align-items:center; gap:5px; font-size:12.5px; font-weight:400; cursor:pointer;">
+            <input type="checkbox" class="cr-assignee-cb" value="${u.id}" style="width:auto;" />
+            ${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}
+          </label>`).join('')}
+      </div>
+    </div>`;
+}
+// Ids marcados en la lista de checkboxes de una fila de compromiso — se usa
+// tanto para leer la selección al guardar como para validar que haya al
+// menos un responsable elegido (los checkboxes no tienen un "required" nativo
+// tipo "al menos uno de este grupo", así que se valida a mano).
+function commitmentRowAssigneeIds(row) {
+  return Array.from(row.querySelectorAll('.cr-assignee-cb:checked')).map((cb) => Number(cb.value));
+}
+
 async function openMeetingModal(presetType) {
   let assignable;
   try { assignable = await api('/meetings/assignable-users'); }
@@ -6962,18 +7052,10 @@ async function openMeetingModal(presetType) {
         <label>Compromiso</label>
         <input type="text" class="cr-desc" required placeholder="Ej: Coordinar transporte" />
       </div>
-      <div class="two-col">
-        <div class="field">
-          <label>Responsable</label>
-          <select class="cr-assignee" required>
-            <option value="" disabled selected>Elegir…</option>
-            ${assignable.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field">
-          <label>Fecha límite / verificación</label>
-          <input type="date" class="cr-due" required />
-        </div>
+      ${commitmentAssigneesFieldHtml(assignable)}
+      <div class="field">
+        <label>Fecha límite / verificación</label>
+        <input type="date" class="cr-due" required />
       </div>
       <button type="button" class="btn btn-ghost btn-sm cr-remove">${icon('trash')} Quitar compromiso</button>
     </div>`;
@@ -7253,7 +7335,7 @@ async function openMeetingModal(presetType) {
       const existingRows = Array.from(commitmentsBox.querySelectorAll('.commitment-row'));
       if (existingRows.length === 1) {
         const only = existingRows[0];
-        const isUntouched = !only.querySelector('.cr-desc').value.trim() && !only.querySelector('.cr-assignee').value;
+        const isUntouched = !only.querySelector('.cr-desc').value.trim() && !commitmentRowAssigneeIds(only).length;
         if (isUntouched) only.remove();
       }
       rows.forEach(({ description, assigneeId }) => {
@@ -7266,9 +7348,8 @@ async function openMeetingModal(presetType) {
         // (si no, cancelar después de leer la pizarra no preguntaría nada).
         descInput.dispatchEvent(new Event('input', { bubbles: true }));
         if (assigneeId) {
-          const select = row.querySelector('.cr-assignee');
-          select.value = String(assigneeId);
-          select.dispatchEvent(new Event('change', { bubbles: true }));
+          const cb = row.querySelector(`.cr-assignee-cb[value="${assigneeId}"]`);
+          if (cb) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
         }
       });
     });
@@ -7283,13 +7364,21 @@ async function openMeetingModal(presetType) {
     const form = document.getElementById('mt-form');
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
-    const commitments = Array.from(document.querySelectorAll('#mt-commitments .commitment-row'))
-      .map((row) => ({
-        description: row.querySelector('.cr-desc').value.trim(),
-        assignedToUserId: Number(row.querySelector('.cr-assignee').value),
-        dueDate: row.querySelector('.cr-due').value,
-      }))
-      .filter((c) => c.description);
+    const commitmentRows = Array.from(document.querySelectorAll('#mt-commitments .commitment-row'))
+      .filter((row) => row.querySelector('.cr-desc').value.trim());
+    // Corrección: con la lista de checkboxes, un compromiso sin ningún
+    // responsable marcado ya no lo bloquea el "required" nativo del <select>
+    // de antes — se avisa acá mismo, antes de llamar a la API.
+    const rowMissingAssignee = commitmentRows.find((row) => !commitmentRowAssigneeIds(row).length);
+    if (rowMissingAssignee) {
+      document.getElementById('mt-error').innerHTML = `<div class="error-msg">Elige al menos un responsable para cada compromiso</div>`;
+      return;
+    }
+    const commitments = commitmentRows.map((row) => ({
+      description: row.querySelector('.cr-desc').value.trim(),
+      assignedToUserIds: commitmentRowAssigneeIds(row),
+      dueDate: row.querySelector('.cr-due').value,
+    }));
     const agendaItems = Array.from(document.querySelectorAll('#mt-agenda .commitment-row'))
       .map((row) => ({
         topic: row.querySelector('.ar-topic').value.trim(),
@@ -7632,10 +7721,32 @@ async function shareMinutaAsImage(m, triggerBtn) {
   }
 }
 
+// Compromisos grupales (ver commitmentAssigneesFieldHtml): el acta trae una
+// fila por persona, todas con el mismo `group.groupId` — para no mostrar la
+// misma descripción repetida una vez por persona, se agrupan de vuelta acá
+// en UNA sola entrada por groupId (quedándose con la primera fila como
+// "representante" para editar/mostrar la descripción y fecha, iguales en
+// todo el grupo).
+function meetingCommitmentDisplayEntries(m) {
+  const seenGroups = new Set();
+  const entries = [];
+  for (const c of m.commitments) {
+    if (c.group) {
+      if (seenGroups.has(c.group.groupId)) continue;
+      seenGroups.add(c.group.groupId);
+      entries.push({ isGroup: true, c, group: c.group });
+    } else {
+      entries.push({ isGroup: false, c });
+    }
+  }
+  return entries;
+}
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   const agendaPattern = agendaPatternFor(m.type);
+  const commitmentEntries = meetingCommitmentDisplayEntries(m);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
@@ -7689,8 +7800,35 @@ async function openMeetingDetailModal(m) {
           </div>
           ${canEdit ? `<div style="margin:10px 0 14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-agenda">+ Agregar tema a la agenda</button></div>` : ''}
           <div id="md-commitments">
-            ${m.commitments.length ? m.commitments.map((c) => `
-              <div class="commitment-detail-row">
+            ${commitmentEntries.length ? commitmentEntries.map(({ isGroup, c, group }) => {
+              if (isGroup) {
+                return `
+              <div class="commitment-detail-row" data-commitment-id="${c.id}">
+                <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+                  <div style="min-width:0;">
+                    <div style="font-weight:600; font-size:13.5px;">${c.redacted ? icon('lock') + ' ' : ''}👥 ${esc(c.description)}</div>
+                    <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">vence ${esc(fmtDateHuman(c.dueDate))} · ${group.completedCount} de ${group.total} completado${group.total === 1 ? '' : 's'}</div>
+                    ${!c.redacted ? `
+                    <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+                      ${group.members.map((mem) => `
+                      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                        <div style="min-width:0; font-size:12.5px;">
+                          <span>${esc(mem.assignedToName)}</span>
+                          ${mem.status === 'completed' && mem.completionComment ? `<div style="color:var(--ink-soft); font-style:italic;">💬 "${esc(mem.completionComment)}"</div>` : ''}
+                        </div>
+                        <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                          ${commitmentStatusPillHtml({ displayStatus: mem.displayStatus })}
+                          ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${mem.id}" title="Quitar a ${esc(mem.assignedToName)} de este compromiso">${icon('trash')}</button>` : ''}
+                        </div>
+                      </div>`).join('')}
+                    </div>` : ''}
+                  </div>
+                </div>
+                ${canEdit ? `<div style="margin-top:6px;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar compromiso</button></div>` : ''}
+              </div>`;
+              }
+              return `
+              <div class="commitment-detail-row" data-commitment-id="${c.id}">
                 <div style="display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
                   <div style="min-width:0;">
                     <div style="font-weight:600; font-size:13.5px;">${c.redacted ? icon('lock') + ' ' : ''}${esc(c.description)}</div>
@@ -7699,7 +7837,9 @@ async function openMeetingDetailModal(m) {
                   </div>
                   ${commitmentStatusPillHtml(c)}
                 </div>
-              </div>`).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null, '🎯')}
+                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar</button><button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${c.id}">${icon('trash')} Eliminar</button></div>` : ''}
+              </div>`;
+            }).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null, '🎯')}
           </div>
           ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
           `}
@@ -7707,6 +7847,7 @@ async function openMeetingDetailModal(m) {
         <div class="modal-footer">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">🖼️ Compartir minuta</button><button class="btn btn-ghost btn-sm" id="md-share-minuta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
+            ${canEdit ? `<button class="btn btn-ghost" id="md-edit-meeting">✏️ Editar acta</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
           </div>
@@ -7750,6 +7891,30 @@ async function openMeetingDetailModal(m) {
     });
     const addCommitmentBtn = document.getElementById('md-add-commitment');
     if (addCommitmentBtn) addCommitmentBtn.addEventListener('click', () => openAddCommitmentModal(m));
+    document.getElementById('md-edit-meeting').addEventListener('click', () => openEditMeetingModal(m));
+    document.querySelectorAll('.commitment-edit').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        const c = m.commitments.find((x) => x.id === commitmentId);
+        if (c) openEditCommitmentModal(m, c);
+      });
+    });
+    // Elimina UNA fila de compromiso — si es grupal, saca solo a esa persona
+    // del grupo (las demás quedan igual); si no, borra el compromiso
+    // completo. Mismo botón/clase para ambos casos, ver el HTML de arriba.
+    document.querySelectorAll('.commitment-member-remove').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        const c = m.commitments.find((x) => x.id === commitmentId);
+        const label = c?.group ? `Quitar a ${c.assignedToName} de este compromiso` : 'Eliminar este compromiso';
+        if (!(await confirmModal(`¿${label}?`, { title: 'Eliminar', confirmText: 'Eliminar' }))) return;
+        try {
+          const updated = await api(`/commitments/${commitmentId}`, { method: 'DELETE' });
+          toast('Compromiso eliminado');
+          openMeetingDetailModal(updated);
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
     document.getElementById('md-archive').addEventListener('click', async () => {
       if (!(await confirmModal('¿Verificar y archivar esta acta? Los compromisos que sigan pendientes quedarán documentados como "no cumplida" y ya no aparecerán en "Mis Asignaciones" de nadie.', { title: 'Verificar y archivar', confirmText: 'Verificar y archivar' }))) return;
       try {
@@ -7760,6 +7925,128 @@ async function openMeetingDetailModal(m) {
       } catch (e) { toast(e.message, 'error'); }
     });
   }
+}
+
+// "Editar acta" (pedido explícito: "que el acta pueda ser editable, después
+// de que se cree") — reusa los mismos campos y validaciones de "Nueva acta"
+// (título, fecha, horario y, si corresponde, tipo), solo que aquí ya vienen
+// precargados. Mismo permiso que el resto de la edición (canEditMeeting del
+// servidor); solo mientras el acta sigue activa.
+function openEditMeetingModal(m) {
+  const isObispadoTier = isObispadoUser() || state.user.role === 'ward_clerk';
+  const typeOptionsHtml = isObispadoTier ? `
+    <div class="field">
+      <label>Tipo de acta</label>
+      <select name="type" id="em-type">
+        <option value="general" ${m.type === 'general' ? 'selected' : ''}>General (ej. presidencia de una organización)</option>
+        <option value="consejo_barrio" ${m.type === 'consejo_barrio' ? 'selected' : ''}>Consejo de Barrio</option>
+        <option value="coordinacion_ministracion" ${m.type === 'coordinacion_ministracion' ? 'selected' : ''}>Coordinación de Ministración (trimestral)</option>
+      </select>
+    </div>` : '';
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="em-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Editar acta</h3><button class="modal-close" id="em-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="em-error"></div>
+          <form id="em-form">
+            <div class="field"><label>Título del acta</label><input type="text" name="title" required value="${esc(m.title)}" /></div>
+            <div class="field"><label>Fecha de la reunión</label><input type="date" name="date" required value="${esc(m.date)}" /></div>
+            <div class="two-col">
+              <div class="field"><label>Hora de inicio</label><input type="time" name="startTime" required value="${esc(m.startTime || '')}" /></div>
+              <div class="field"><label>Hora de término (opcional)</label><input type="time" name="endTime" value="${esc(m.endTime || '')}" /></div>
+            </div>
+            ${typeOptionsHtml}
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="em-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="em-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const emGuardedClose = wireUnsavedChangesGuard(document.getElementById('em-form'));
+  document.getElementById('em-modal-close').addEventListener('click', emGuardedClose);
+  document.getElementById('em-cancel').addEventListener('click', emGuardedClose);
+  document.getElementById('em-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'em-modal-backdrop') emGuardedClose(); });
+  document.getElementById('em-save').addEventListener('click', async () => {
+    const form = document.getElementById('em-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    const startTimeVal = fd.get('startTime');
+    const endTimeVal = fd.get('endTime');
+    if (endTimeVal && startTimeVal && endTimeVal <= startTimeVal) {
+      document.getElementById('em-error').innerHTML = `<div class="error-msg">La hora de término debe ser posterior a la de inicio</div>`;
+      return;
+    }
+    try {
+      const updated = await api(`/meetings/${m.id}`, {
+        method: 'PUT',
+        body: {
+          title: fd.get('title'),
+          date: fd.get('date'),
+          startTime: fd.get('startTime'),
+          endTime: fd.get('endTime') || null,
+          type: isObispadoTier ? fd.get('type') : m.type,
+        },
+      });
+      closeModal();
+      toast('Acta actualizada');
+      openMeetingDetailModal(updated);
+      renderMeetingsManage();
+    } catch (e) {
+      document.getElementById('em-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Editar descripción/fecha límite de un compromiso ya creado. Si es grupal
+// (c.group), el cambio se aplica a TODAS las filas del grupo — se avisa acá
+// mismo para que no sea una sorpresa.
+function openEditCommitmentModal(m, c) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="ec-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Editar compromiso</h3><button class="modal-close" id="ec-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="ec-error"></div>
+          ${c.group ? `<div class="hint-box" style="margin-top:0;">Este compromiso lo comparten ${c.group.total} personas — el cambio se aplica a todas.</div>` : ''}
+          <form id="ec-form">
+            <div class="field"><label>Compromiso</label><input type="text" name="description" required value="${esc(c.description)}" /></div>
+            <div class="field"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required value="${esc(c.dueDate || '')}" /></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="ec-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="ec-save">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  const ecGuardedClose = wireUnsavedChangesGuard(document.getElementById('ec-form'));
+  document.getElementById('ec-modal-close').addEventListener('click', ecGuardedClose);
+  document.getElementById('ec-cancel').addEventListener('click', ecGuardedClose);
+  document.getElementById('ec-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ec-modal-backdrop') ecGuardedClose(); });
+  document.getElementById('ec-save').addEventListener('click', async () => {
+    const form = document.getElementById('ec-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      const updated = await api(`/commitments/${c.id}`, { method: 'PUT', body: { description: fd.get('description'), dueDate: fd.get('dueDate') } });
+      closeModal();
+      toast('Compromiso actualizado');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('ec-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
 }
 
 function openAddAgendaItemModal(m) {
@@ -7896,13 +8183,7 @@ async function openAddCommitmentModal(m) {
           <div id="ac-error"></div>
           <form id="ac-form">
             <div class="field"><label>Compromiso</label><input type="text" name="description" required placeholder="Ej: Coordinar transporte" /></div>
-            <div class="field">
-              <label>Responsable</label>
-              <select name="assignedToUserId" required>
-                <option value="" disabled selected>Elegir…</option>
-                ${assignable.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
-              </select>
-            </div>
+            ${commitmentAssigneesFieldHtml(assignable)}
             <div class="field"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required /></div>
           </form>
         </div>
@@ -7922,9 +8203,14 @@ async function openAddCommitmentModal(m) {
   document.getElementById('ac-save').addEventListener('click', async () => {
     const form = document.getElementById('ac-form');
     if (!form.reportValidity()) return;
+    const assignedToUserIds = commitmentRowAssigneeIds(form);
+    if (!assignedToUserIds.length) {
+      document.getElementById('ac-error').innerHTML = `<div class="error-msg">Elige al menos un responsable</div>`;
+      return;
+    }
     const fd = new FormData(form);
     try {
-      const updated = await api(`/meetings/${m.id}/commitments`, { method: 'POST', body: Object.fromEntries(fd.entries()) });
+      const updated = await api(`/meetings/${m.id}/commitments`, { method: 'POST', body: { ...Object.fromEntries(fd.entries()), assignedToUserIds } });
       closeModal();
       toast('Compromiso agregado');
       openMeetingDetailModal(updated);
