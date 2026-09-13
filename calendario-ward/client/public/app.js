@@ -7672,17 +7672,23 @@ function buildMinutaImageNode(m) {
   return wrap;
 }
 
-async function shareMinutaAsImage(m, triggerBtn) {
+// Pedido explícito: compartir no solo la minuta (temas a tratar, antes de la
+// reunión) sino también los compromisos (quién quedó a cargo de qué, para
+// after de la reunión) — "de igual formato", así que se factoriza toda la
+// mecánica de html2canvas/Web Share/descarga de shareMinutaAsImage en esta
+// función genérica, y cada "tarjeta" (minuta o compromisos) solo aporta
+// cómo armar su nodo/texto y su nombre de archivo.
+async function shareCardAsImage({ triggerBtn, buildNode, buildText, filenamePrefix, orgName, date, shareTitle }) {
   if (typeof html2canvas === 'undefined') {
     // Sin internet (o el CDN no cargó): cae de vuelta a compartir como texto
     // en vez de dejar el botón sin hacer nada.
     toast('No se pudo cargar el generador de imágenes — se comparte como texto', 'error');
-    window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildText())}`, '_blank');
     return;
   }
   const originalLabel = triggerBtn ? triggerBtn.textContent : null;
   if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = '⏳ Generando imagen...'; }
-  const node = buildMinutaImageNode(m);
+  const node = buildNode();
   node.style.position = 'fixed';
   node.style.top = '0';
   node.style.left = '-9999px';
@@ -7692,13 +7698,13 @@ async function shareMinutaAsImage(m, triggerBtn) {
     const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#fffdf7', useCORS: true });
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('no se pudo generar el archivo de imagen');
-    const safeOrg = (m.organizationName || 'reunion').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    const filename = `minuta-${safeOrg || 'reunion'}-${m.date}.png`;
+    const safeOrg = (orgName || 'reunion').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const filename = `${filenamePrefix}-${safeOrg || 'reunion'}-${date}.png`;
     const file = new File([blob], filename, { type: 'image/png' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       // En celular: abre directamente el cuadro de compartir del sistema
       // (WhatsApp, etc.) con la imagen ya adjunta.
-      await navigator.share({ files: [file], title: `Minuta — ${m.title}` });
+      await navigator.share({ files: [file], title: shareTitle });
     } else {
       // Escritorio u otros navegadores sin Web Share de archivos: se
       // descarga la imagen (mismo mecanismo que downloadCsv) para que la
@@ -7719,6 +7725,81 @@ async function shareMinutaAsImage(m, triggerBtn) {
     document.body.removeChild(node);
     if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = originalLabel; }
   }
+}
+
+async function shareMinutaAsImage(m, triggerBtn) {
+  return shareCardAsImage({
+    triggerBtn,
+    buildNode: () => buildMinutaImageNode(m),
+    buildText: () => buildMinutaShareText(m),
+    filenamePrefix: 'minuta',
+    orgName: m.organizationName,
+    date: m.date,
+    shareTitle: `Minuta — ${m.title}`,
+  });
+}
+
+// Compromisos compartibles: cada línea junta al nombre (o a TODOS los
+// nombres, si es un compromiso grupal — ver meetingCommitmentDisplayEntries)
+// con su fecha límite. Nunca incluye un compromiso marcado confidencial ni
+// uno redactado (mismo criterio de "nunca nada confidencial" que ya aplica
+// a la minuta), ni el comentario/estado de cumplimiento — es solo el aviso
+// de quién quedó a cargo de qué, para compartir apenas termina la reunión.
+function shareableCommitmentEntries(m) {
+  return meetingCommitmentDisplayEntries(m).filter(({ c }) => !c.confidential && !c.redacted);
+}
+function commitmentEntryAssigneeNames(entry) {
+  return entry.isGroup ? entry.group.members.map((mem) => mem.assignedToName).join(', ') : entry.c.assignedToName;
+}
+
+function buildCommitmentsShareText(m) {
+  const entries = shareableCommitmentEntries(m);
+  const lines = entries.map((entry, i) => `${i + 1}. ${entry.c.description} — ${commitmentEntryAssigneeNames(entry)} — vence ${fmtDateHuman(entry.c.dueDate)}`);
+  const out = [
+    `🎯 Compromisos — ${m.title}`,
+    `${m.organizationName} · ${fmtMeetingWhen(m)}`,
+    '',
+    ...(lines.length ? lines : ['(sin compromisos todavía)']),
+    '',
+    '¡Gracias por su compromiso!',
+  ];
+  return out.join('\n');
+}
+
+function buildCommitmentsImageNode(m) {
+  const entries = shareableCommitmentEntries(m);
+  const wrap = document.createElement('div');
+  wrap.className = 'minuta-img-card';
+  wrap.innerHTML = `
+    <img class="minuta-img-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
+    <div class="minuta-img-eyebrow">${esc(APP_NAME)}</div>
+    <div class="minuta-img-org">${esc(m.organizationName)}</div>
+    <div class="minuta-img-title">${esc(m.title)}</div>
+    <div class="minuta-img-date">📅 ${esc(fmtMeetingWhen(m))}</div>
+    <div class="minuta-img-heading">Compromisos</div>
+    ${entries.length ? entries.map((entry, i) => `
+      <div class="minuta-img-item">
+        <span class="minuta-img-item-num">${i + 1}</span>
+        <span class="minuta-img-item-text">
+          <span class="minuta-img-item-topic">${esc(entry.c.description)}</span>
+          <span class="minuta-img-item-presenter">👤 ${esc(commitmentEntryAssigneeNames(entry))} · vence ${esc(fmtDateHuman(entry.c.dueDate))}</span>
+        </span>
+      </div>`).join('') : `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin compromisos todavía)</span></div>`}
+    <div class="minuta-img-footer">¡Gracias por su compromiso! · Generado con ${esc(APP_NAME)}</div>
+  `;
+  return wrap;
+}
+
+async function shareCommitmentsAsImage(m, triggerBtn) {
+  return shareCardAsImage({
+    triggerBtn,
+    buildNode: () => buildCommitmentsImageNode(m),
+    buildText: () => buildCommitmentsShareText(m),
+    filenamePrefix: 'compromisos',
+    orgName: m.organizationName,
+    date: m.date,
+    shareTitle: `Compromisos — ${m.title}`,
+  });
 }
 
 // Compromisos grupales (ver commitmentAssigneesFieldHtml): el acta trae una
@@ -7747,6 +7828,7 @@ async function openMeetingDetailModal(m) {
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   const agendaPattern = agendaPatternFor(m.type);
   const commitmentEntries = meetingCommitmentDisplayEntries(m);
+  const hasShareableCommitments = !m.contentRedacted && shareableCommitmentEntries(m).length > 0;
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
@@ -7847,6 +7929,7 @@ async function openMeetingDetailModal(m) {
         <div class="modal-footer">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">🖼️ Compartir minuta</button><button class="btn btn-ghost btn-sm" id="md-share-minuta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
+            ${hasShareableCommitments ? `<button class="btn btn-ghost" id="md-share-commitments">🖼️ Compartir compromisos</button><button class="btn btn-ghost btn-sm" id="md-share-commitments-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-edit-meeting">✏️ Editar acta</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
@@ -7868,6 +7951,16 @@ async function openMeetingDetailModal(m) {
   });
   document.getElementById('md-share-minuta-text')?.addEventListener('click', () => {
     window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
+  });
+  // Pedido explícito: compartir también los compromisos (quién quedó a
+  // cargo de qué, para después de la reunión), "de igual formato" que la
+  // minuta — misma imagen/texto, mismo criterio de nunca incluir nada
+  // confidencial (ver shareableCommitmentEntries).
+  document.getElementById('md-share-commitments')?.addEventListener('click', (e) => {
+    shareCommitmentsAsImage(m, e.currentTarget);
+  });
+  document.getElementById('md-share-commitments-text')?.addEventListener('click', () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildCommitmentsShareText(m))}`, '_blank');
   });
   if (!m.contentRedacted) wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
   if (canEdit) {
