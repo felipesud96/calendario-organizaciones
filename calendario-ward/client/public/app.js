@@ -7499,7 +7499,7 @@ function isCouncilMeetingType(type) {
 // oración, sigue con un pensamiento espiritual o lectura del Manual
 // General, y termina con oración — esto va tanto en el acta como en la
 // minuta que se comparte antes con los consejeros (ver
-// PRESIDENCY_FIXED_OPENING/THOUGHT/CLOSING y buildMinutaShareText).
+// PRESIDENCY_FIXED_OPENING/THOUGHT/CLOSING y buildActaShareText).
 const PRESIDENCY_FIXED_OPENING = 'Oración inicial';
 const PRESIDENCY_FIXED_THOUGHT = 'Pensamiento espiritual o lectura del Manual General';
 const PRESIDENCY_FIXED_CLOSING = 'Oración final';
@@ -7627,57 +7627,128 @@ function fmtMeetingWhen(m) {
 // corre entero en el navegador de la persona — no se manda nada a ningún
 // servidor, y es la persona quien elige a quién enviárselo desde su propio
 // WhatsApp.
-function buildMinutaShareText(m) {
-  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable).map((a, i) => `${i + 1}. ${a.topic}${a.presenter ? ` — ${a.presenter}` : ''}`);
-  const lines = [
-    `📋 Minuta — ${m.title}`,
-    `${m.organizationName} · ${fmtMeetingWhen(m)}`,
-    '',
-    'Temas a tratar (para venir preparados):',
-    ...(topics.length ? topics : ['(sin temas todavía)']),
-    '',
-    '¡Gracias por su preparación!',
-  ];
+// Pedido explícito: "quiero que se pueda compartir todo unificado" — en vez
+// de dos botones separados (uno para los temas de agenda, otro para los
+// compromisos formales), UN solo "compartir acta" que junta ambas cosas.
+// Punto importante: los temas de Consejo de Barrio / Coordinación de
+// Ministración no son solo un título — llevan un ACUERDO (o el patrón de 3
+// campos de ministración, o notas libres) que antes NO se compartía (la
+// "minuta" de antes solo mostraba tema + presentador, pensada para
+// compartir ANTES de la reunión). Ahora, si esos campos ya se llenaron
+// (después de tratarlo en la reunión), también se incluyen — así compartir
+// el acta sirve tanto antes (solo aparecen los temas, sin acuerdo todavía)
+// como después (con lo que se acordó). Nunca se incluye nada marcado
+// confidencial.
+function shareableAgendaItems(m) {
+  return (m.agendaItems || []).filter((a) => !a.notApplicable);
+}
+// Arma el título de un tema de agenda + las líneas de detalle que
+// correspondan según el patrón de esa acta (consejo / ministración / notas
+// libres) — reutilizado tanto por el texto como por la imagen para
+// compartir, para no duplicar qué campos van en cada patrón (mismo criterio
+// que openMeetingDetailModal ya usa para mostrarlos en pantalla).
+function agendaItemShareLines(a, agendaPattern) {
+  const header = `${a.topic}${a.presenter ? ` — ${a.presenter}` : ''}`;
+  let detailLines;
+  if (agendaPattern === 'consejo') {
+    detailLines = [
+      a.necesidad ? `🧩 Necesidad: ${a.necesidad}` : null,
+      a.analisis ? `🔎 Análisis: ${a.analisis}` : null,
+      a.acuerdo ? `✅ Acuerdo: ${a.acuerdo}` : null,
+      a.seguimiento ? `👣 Seguimiento: ${a.seguimiento}` : null,
+    ].filter(Boolean);
+  } else if (agendaPattern === 'ministracion') {
+    detailLines = [
+      a.quienNecesita ? `🙋 Quién necesita ayuda: ${a.quienNecesita}` : null,
+      a.queSeHara ? `🛠️ Qué se hará: ${a.queSeHara}` : null,
+      a.quienLoHara ? `🤝 Quién lo hará: ${a.quienLoHara}` : null,
+    ].filter(Boolean);
+  } else {
+    detailLines = a.notes ? [a.notes] : [];
+  }
+  return { header, detailLines };
+}
+
+function buildActaShareText(m) {
+  const agendaPattern = agendaPatternFor(m.type);
+  const items = shareableAgendaItems(m);
+  const commitmentEntries = shareableCommitmentEntries(m);
+  const lines = [`📋 ${m.title}`, `${m.organizationName} · ${fmtMeetingWhen(m)}`, ''];
+  if (items.length) {
+    lines.push('Temas y acuerdos:');
+    items.forEach((a, i) => {
+      const { header, detailLines } = agendaItemShareLines(a, agendaPattern);
+      lines.push(`${i + 1}. ${header}`);
+      detailLines.forEach((d) => lines.push(`   ${d}`));
+    });
+    lines.push('');
+  }
+  if (commitmentEntries.length) {
+    lines.push('Compromisos:');
+    commitmentEntries.forEach((entry, i) => {
+      lines.push(`${i + 1}. ${entry.c.description} — ${commitmentEntryAssigneeNames(entry)} — vence ${fmtDateHuman(entry.c.dueDate)}`);
+    });
+    lines.push('');
+  }
+  if (!items.length && !commitmentEntries.length) lines.push('(sin temas ni compromisos todavía)');
+  lines.push('¡Gracias por su preparación y su compromiso!');
   return lines.join('\n');
 }
 
-// Punto (Felipe): la minuta también se puede compartir como IMAGEN — una
-// tarjeta prolija con los mismos temas de buildMinutaShareText (mismo
-// orden, saltando "no aplica"), rasterizada con html2canvas (cargado por
-// CDN en index.html) para que se vea profesional al compartirla por
-// WhatsApp. La tarjeta se arma fuera de la pantalla (nunca se muestra al
-// usuario tal cual) solo para poder "fotografiarla"; todo corre en el
-// navegador de la persona, no se sube nada a ningún servidor.
-function buildMinutaImageNode(m) {
-  const topics = (m.agendaItems || []).filter((a) => !a.notApplicable);
+// Misma tarjeta de siempre (rasterizada con html2canvas, cargado por CDN en
+// index.html) pero ahora con dos secciones — "Temas y acuerdos" y
+// "Compromisos" — cada una se salta si no tiene nada que mostrar, para que
+// compartir antes de la reunión (solo temas) se vea igual de prolijo que
+// compartir después (con acuerdos y compromisos). La tarjeta se arma fuera
+// de la pantalla (nunca se muestra al usuario tal cual) solo para poder
+// "fotografiarla"; todo corre en el navegador de la persona, no se sube
+// nada a ningún servidor.
+function buildActaImageNode(m) {
+  const agendaPattern = agendaPatternFor(m.type);
+  const items = shareableAgendaItems(m);
+  const commitmentEntries = shareableCommitmentEntries(m);
   const wrap = document.createElement('div');
   wrap.className = 'minuta-img-card';
+  const agendaSectionHtml = items.length ? `
+    <div class="minuta-img-heading">Temas y acuerdos</div>
+    ${items.map((a, i) => {
+      const { header, detailLines } = agendaItemShareLines(a, agendaPattern);
+      return `
+      <div class="minuta-img-item">
+        <span class="minuta-img-item-num">${i + 1}</span>
+        <span class="minuta-img-item-text">
+          <span class="minuta-img-item-topic">${esc(header)}</span>
+          ${detailLines.map((d) => `<span class="minuta-img-item-presenter">${esc(d)}</span>`).join('')}
+        </span>
+      </div>`;
+    }).join('')}` : '';
+  const commitmentsSectionHtml = commitmentEntries.length ? `
+    <div class="minuta-img-heading" style="margin-top:${items.length ? '18px' : '0'};">Compromisos</div>
+    ${commitmentEntries.map((entry, i) => `
+      <div class="minuta-img-item">
+        <span class="minuta-img-item-num">${i + 1}</span>
+        <span class="minuta-img-item-text">
+          <span class="minuta-img-item-topic">${esc(entry.c.description)}</span>
+          <span class="minuta-img-item-presenter">👤 ${esc(commitmentEntryAssigneeNames(entry))} · vence ${esc(fmtDateHuman(entry.c.dueDate))}</span>
+        </span>
+      </div>`).join('')}` : '';
   wrap.innerHTML = `
     <img class="minuta-img-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
     <div class="minuta-img-eyebrow">${esc(APP_NAME)}</div>
     <div class="minuta-img-org">${esc(m.organizationName)}</div>
     <div class="minuta-img-title">${esc(m.title)}</div>
     <div class="minuta-img-date">📅 ${esc(fmtMeetingWhen(m))}</div>
-    <div class="minuta-img-heading">Temas a tratar (para venir preparados)</div>
-    ${topics.length ? topics.map((a, i) => `
-      <div class="minuta-img-item">
-        <span class="minuta-img-item-num">${i + 1}</span>
-        <span class="minuta-img-item-text">
-          <span class="minuta-img-item-topic">${esc(a.topic)}</span>
-          ${a.presenter ? `<span class="minuta-img-item-presenter">👤 ${esc(a.presenter)}</span>` : ''}
-        </span>
-      </div>`).join('') : `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin temas todavía)</span></div>`}
-    <div class="minuta-img-footer">¡Gracias por su preparación! · Generado con ${esc(APP_NAME)}</div>
+    ${agendaSectionHtml}
+    ${commitmentsSectionHtml}
+    ${!items.length && !commitmentEntries.length ? `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin temas ni compromisos todavía)</span></div>` : ''}
+    <div class="minuta-img-footer">¡Gracias por su preparación y su compromiso! · Generado con ${esc(APP_NAME)}</div>
   `;
   return wrap;
 }
 
-// Pedido explícito: compartir no solo la minuta (temas a tratar, antes de la
-// reunión) sino también los compromisos (quién quedó a cargo de qué, para
-// after de la reunión) — "de igual formato", así que se factoriza toda la
-// mecánica de html2canvas/Web Share/descarga de shareMinutaAsImage en esta
-// función genérica, y cada "tarjeta" (minuta o compromisos) solo aporta
-// cómo armar su nodo/texto y su nombre de archivo.
+// Toda la mecánica de html2canvas/Web Share/descarga, reutilizable para
+// cualquier "tarjeta" compartible — cada llamador solo aporta cómo armar su
+// nodo/texto y su nombre de archivo.
 async function shareCardAsImage({ triggerBtn, buildNode, buildText, filenamePrefix, orgName, date, shareTitle }) {
   if (typeof html2canvas === 'undefined') {
     // Sin internet (o el CDN no cargó): cae de vuelta a compartir como texto
@@ -7727,24 +7798,12 @@ async function shareCardAsImage({ triggerBtn, buildNode, buildText, filenamePref
   }
 }
 
-async function shareMinutaAsImage(m, triggerBtn) {
-  return shareCardAsImage({
-    triggerBtn,
-    buildNode: () => buildMinutaImageNode(m),
-    buildText: () => buildMinutaShareText(m),
-    filenamePrefix: 'minuta',
-    orgName: m.organizationName,
-    date: m.date,
-    shareTitle: `Minuta — ${m.title}`,
-  });
-}
-
 // Compromisos compartibles: cada línea junta al nombre (o a TODOS los
 // nombres, si es un compromiso grupal — ver meetingCommitmentDisplayEntries)
 // con su fecha límite. Nunca incluye un compromiso marcado confidencial ni
-// uno redactado (mismo criterio de "nunca nada confidencial" que ya aplica
-// a la minuta), ni el comentario/estado de cumplimiento — es solo el aviso
-// de quién quedó a cargo de qué, para compartir apenas termina la reunión.
+// uno redactado (mismo criterio de "nunca nada confidencial"), ni el
+// comentario/estado de cumplimiento — es solo el aviso de quién quedó a
+// cargo de qué.
 function shareableCommitmentEntries(m) {
   return meetingCommitmentDisplayEntries(m).filter(({ c }) => !c.confidential && !c.redacted);
 }
@@ -7752,53 +7811,15 @@ function commitmentEntryAssigneeNames(entry) {
   return entry.isGroup ? entry.group.members.map((mem) => mem.assignedToName).join(', ') : entry.c.assignedToName;
 }
 
-function buildCommitmentsShareText(m) {
-  const entries = shareableCommitmentEntries(m);
-  const lines = entries.map((entry, i) => `${i + 1}. ${entry.c.description} — ${commitmentEntryAssigneeNames(entry)} — vence ${fmtDateHuman(entry.c.dueDate)}`);
-  const out = [
-    `🎯 Compromisos — ${m.title}`,
-    `${m.organizationName} · ${fmtMeetingWhen(m)}`,
-    '',
-    ...(lines.length ? lines : ['(sin compromisos todavía)']),
-    '',
-    '¡Gracias por su compromiso!',
-  ];
-  return out.join('\n');
-}
-
-function buildCommitmentsImageNode(m) {
-  const entries = shareableCommitmentEntries(m);
-  const wrap = document.createElement('div');
-  wrap.className = 'minuta-img-card';
-  wrap.innerHTML = `
-    <img class="minuta-img-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
-    <div class="minuta-img-eyebrow">${esc(APP_NAME)}</div>
-    <div class="minuta-img-org">${esc(m.organizationName)}</div>
-    <div class="minuta-img-title">${esc(m.title)}</div>
-    <div class="minuta-img-date">📅 ${esc(fmtMeetingWhen(m))}</div>
-    <div class="minuta-img-heading">Compromisos</div>
-    ${entries.length ? entries.map((entry, i) => `
-      <div class="minuta-img-item">
-        <span class="minuta-img-item-num">${i + 1}</span>
-        <span class="minuta-img-item-text">
-          <span class="minuta-img-item-topic">${esc(entry.c.description)}</span>
-          <span class="minuta-img-item-presenter">👤 ${esc(commitmentEntryAssigneeNames(entry))} · vence ${esc(fmtDateHuman(entry.c.dueDate))}</span>
-        </span>
-      </div>`).join('') : `<div class="minuta-img-item"><span style="font-style:italic; color:#94a3b8;">(sin compromisos todavía)</span></div>`}
-    <div class="minuta-img-footer">¡Gracias por su compromiso! · Generado con ${esc(APP_NAME)}</div>
-  `;
-  return wrap;
-}
-
-async function shareCommitmentsAsImage(m, triggerBtn) {
+async function shareActaAsImage(m, triggerBtn) {
   return shareCardAsImage({
     triggerBtn,
-    buildNode: () => buildCommitmentsImageNode(m),
-    buildText: () => buildCommitmentsShareText(m),
-    filenamePrefix: 'compromisos',
+    buildNode: () => buildActaImageNode(m),
+    buildText: () => buildActaShareText(m),
+    filenamePrefix: 'acta',
     orgName: m.organizationName,
     date: m.date,
-    shareTitle: `Compromisos — ${m.title}`,
+    shareTitle: m.title,
   });
 }
 
@@ -7828,7 +7849,12 @@ async function openMeetingDetailModal(m) {
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   const agendaPattern = agendaPatternFor(m.type);
   const commitmentEntries = meetingCommitmentDisplayEntries(m);
-  const hasShareableCommitments = !m.contentRedacted && shareableCommitmentEntries(m).length > 0;
+  // "Compartir acta" — pedido explícito: unificar en un solo botón lo que
+  // antes eran dos ("Compartir minuta" solo con temas, "Compartir
+  // compromisos" solo con compromisos) — ahora un único share junta temas
+  // (con su acuerdo/seguimiento, si ya se completó) y compromisos. Aparece
+  // apenas haya algo compartible de cualquiera de los dos tipos.
+  const hasShareableActa = !m.contentRedacted && (shareableAgendaItems(m).length > 0 || shareableCommitmentEntries(m).length > 0);
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="md-modal-backdrop">
@@ -7928,8 +7954,7 @@ async function openMeetingDetailModal(m) {
         </div>
         <div class="modal-footer">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            ${!m.contentRedacted && m.agendaItems && m.agendaItems.length ? `<button class="btn btn-ghost" id="md-share-minuta">🖼️ Compartir minuta</button><button class="btn btn-ghost btn-sm" id="md-share-minuta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
-            ${hasShareableCommitments ? `<button class="btn btn-ghost" id="md-share-commitments">🖼️ Compartir compromisos</button><button class="btn btn-ghost btn-sm" id="md-share-commitments-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
+            ${hasShareableActa ? `<button class="btn btn-ghost" id="md-share-acta">🖼️ Compartir acta</button><button class="btn btn-ghost btn-sm" id="md-share-acta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-edit-meeting">✏️ Editar acta</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
@@ -7941,26 +7966,18 @@ async function openMeetingDetailModal(m) {
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
-  // Punto (Felipe): "Compartir minuta" — antes de la reunión, el presidente
-  // de la organización manda por WhatsApp los temas a tratar (nunca notas ni
-  // nada confidencial) para que sus consejeros lleguen preparados. Visible
-  // para cualquiera que vea el contenido del acta (no solo quien la creó),
-  // porque cualquier miembro de la presidencia podría ser quien la comparta.
-  document.getElementById('md-share-minuta')?.addEventListener('click', (e) => {
-    shareMinutaAsImage(m, e.currentTarget);
+  // "Compartir acta": junta temas (con su acuerdo/seguimiento si ya se
+  // completó) y compromisos en un solo mensaje/imagen — sirve tanto para
+  // mandarlo ANTES de la reunión (ahí solo van a aparecer los temas, porque
+  // los acuerdos y compromisos todavía no existen) como DESPUÉS (ya con lo
+  // que se acordó). Nunca incluye nada marcado confidencial. Visible para
+  // cualquiera que vea el contenido del acta (no solo quien la creó), porque
+  // cualquier miembro de la presidencia podría ser quien la comparta.
+  document.getElementById('md-share-acta')?.addEventListener('click', (e) => {
+    shareActaAsImage(m, e.currentTarget);
   });
-  document.getElementById('md-share-minuta-text')?.addEventListener('click', () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(buildMinutaShareText(m))}`, '_blank');
-  });
-  // Pedido explícito: compartir también los compromisos (quién quedó a
-  // cargo de qué, para después de la reunión), "de igual formato" que la
-  // minuta — misma imagen/texto, mismo criterio de nunca incluir nada
-  // confidencial (ver shareableCommitmentEntries).
-  document.getElementById('md-share-commitments')?.addEventListener('click', (e) => {
-    shareCommitmentsAsImage(m, e.currentTarget);
-  });
-  document.getElementById('md-share-commitments-text')?.addEventListener('click', () => {
-    window.open(`https://wa.me/?text=${encodeURIComponent(buildCommitmentsShareText(m))}`, '_blank');
+  document.getElementById('md-share-acta-text')?.addEventListener('click', () => {
+    window.open(`https://wa.me/?text=${encodeURIComponent(buildActaShareText(m))}`, '_blank');
   });
   if (!m.contentRedacted) wireEmptyStateCta('md-empty-add', () => openAddCommitmentModal(m));
   if (canEdit) {
