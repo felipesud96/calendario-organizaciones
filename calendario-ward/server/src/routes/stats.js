@@ -171,6 +171,16 @@ export function registerStatsRoutes(router) {
       return { month: monthNum, pct: expSum > 0 ? Math.round((actSum / expSum) * 1000) / 10 : null, count: monthItems.length };
     });
 
+    // Punto 11: ranking de qué organización cumple más sus compromisos —
+    // solo tiene sentido comparando organizaciones ENTRE SÍ, así que se
+    // calcula únicamente en la vista "Todo el Barrio" (orgId === null); si
+    // se acotó a una sola organización, no aplica y queda null. Acotado al
+    // mismo año elegido en este panel (por dueDate del compromiso, igual
+    // criterio de rango que el resto de Rachas y Logros).
+    const orgCommitmentsRanking = orgId === null
+      ? commitmentsOrgRanking(data, { start: `${year}-01-01`, end: `${year}-12-31` })
+      : null;
+
     sendJson(res, 200, {
       year,
       years: [...yearsWithData].sort((a, b) => b - a),
@@ -188,6 +198,7 @@ export function registerStatsRoutes(router) {
       topActivity,
       bottomActivity,
       monthlyAttendance,
+      orgCommitmentsRanking,
     });
   }));
 
@@ -241,6 +252,46 @@ export function commitmentsRanking(data, range) {
       return {
         userId: uid,
         userName: user?.name || '(usuario eliminado)',
+        completed: e.completed,
+        notFulfilled: e.notFulfilled,
+        total,
+        pct: total > 0 ? Math.round((e.completed / total) * 1000) / 10 : null,
+      };
+    })
+    .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.total - a.total);
+}
+
+// Punto 11: mismo criterio que commitmentsRanking de arriba (compromisos ya
+// RESUELTOS — completados o no cumplidos — agrupados por su dueDate para
+// poder acotar a un período), pero agrupado por la ORGANIZACIÓN del
+// responsable en vez de por la persona — para ver qué organización, como
+// conjunto, cumple más sus compromisos. Los compromisos de alguien sin
+// organización (Administrador, Secretario de Barrio, etc.) se juntan bajo
+// "Administración", igual que withMeetingInfo hace con el nombre de
+// organización de un acta sin organizationId.
+export function commitmentsOrgRanking(data, range) {
+  const inRange = (date) => !range || (date >= range.start && date <= range.end);
+  const byOrg = new Map();
+  for (const m of data.meetings) {
+    for (const c of (m.commitments || [])) {
+      if (c.status !== 'completed' && c.status !== 'not_fulfilled') continue;
+      if (!inRange(c.dueDate)) continue;
+      const user = data.users.find((u) => u.id === Number(c.assignedToUserId));
+      const orgId = user?.organizationId ?? null;
+      const key = orgId ?? 'admin';
+      if (!byOrg.has(key)) byOrg.set(key, { orgId, completed: 0, notFulfilled: 0 });
+      const entry = byOrg.get(key);
+      if (c.status === 'completed') entry.completed += 1; else entry.notFulfilled += 1;
+    }
+  }
+  return [...byOrg.values()]
+    .map((e) => {
+      const org = e.orgId != null ? data.organizations.find((o) => o.id === Number(e.orgId)) : null;
+      const total = e.completed + e.notFulfilled;
+      return {
+        organizationId: e.orgId,
+        organizationName: org?.name || 'Administración',
+        organizationColor: org?.color || '#999999',
         completed: e.completed,
         notFulfilled: e.notFulfilled,
         total,

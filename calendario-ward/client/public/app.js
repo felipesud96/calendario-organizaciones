@@ -6418,7 +6418,10 @@ function assignmentCardHtml(c) {
               <div class="lc-sub">${esc(c.meetingTitle)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
             </div>
           </div>
-          <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
+          <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+            <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
+            ${commitmentPriorityBadgeHtml(c.priority)}
+          </div>
         </div>
         <div>
           <button type="button" class="btn btn-secondary btn-sm assignment-complete-toggle">✅ Completar</button>
@@ -7039,6 +7042,28 @@ function commitmentRowAssigneeIds(row) {
   return Array.from(row.querySelectorAll('.cr-assignee-cb:checked')).map((cb) => Number(cb.value));
 }
 
+// Punto 14: prioridad de un compromiso — para ordenar "Mis Asignaciones" por
+// importancia y no solo por fecha límite (ver PRIORITY_RANK en meetings.js
+// del servidor, que debe mantenerse igual). "Media" es el valor por
+// defecto, tanto acá como en el servidor.
+const COMMITMENT_PRIORITY_OPTIONS = [
+  ['alta', '🔴 Alta'],
+  ['media', '🟡 Media'],
+  ['baja', '🟢 Baja'],
+];
+function commitmentPriorityFieldHtml(existingPriority) {
+  const current = existingPriority || 'media';
+  return `
+    <div class="field">
+      <label>Prioridad</label>
+      <select class="cr-priority">${COMMITMENT_PRIORITY_OPTIONS.map(([v, label]) => `<option value="${v}" ${current === v ? 'selected' : ''}>${label}</option>`).join('')}</select>
+    </div>`;
+}
+function commitmentPriorityBadgeHtml(priority) {
+  const found = COMMITMENT_PRIORITY_OPTIONS.find(([v]) => v === (priority || 'media'));
+  return `<span class="status-pill status-gray" style="font-weight:600;">${found ? found[1] : ''}</span>`;
+}
+
 async function openMeetingModal(presetType) {
   let assignable;
   try { assignable = await api('/meetings/assignable-users'); }
@@ -7053,9 +7078,12 @@ async function openMeetingModal(presetType) {
         <input type="text" class="cr-desc" required placeholder="Ej: Coordinar transporte" />
       </div>
       ${commitmentAssigneesFieldHtml(assignable)}
-      <div class="field">
-        <label>Fecha límite / verificación</label>
-        <input type="date" class="cr-due" required />
+      <div class="two-col">
+        <div class="field" style="margin-bottom:0;">
+          <label>Fecha límite / verificación</label>
+          <input type="date" class="cr-due" required />
+        </div>
+        ${commitmentPriorityFieldHtml('media')}
       </div>
       <button type="button" class="btn btn-ghost btn-sm cr-remove">${icon('trash')} Quitar compromiso</button>
     </div>`;
@@ -7378,6 +7406,7 @@ async function openMeetingModal(presetType) {
       description: row.querySelector('.cr-desc').value.trim(),
       assignedToUserIds: commitmentRowAssigneeIds(row),
       dueDate: row.querySelector('.cr-due').value,
+      priority: row.querySelector('.cr-priority')?.value || 'media',
     }));
     const agendaItems = Array.from(document.querySelectorAll('#mt-agenda .commitment-row'))
       .map((row) => ({
@@ -7861,7 +7890,7 @@ async function openMeetingDetailModal(m) {
       <div class="modal" style="max-width:560px;">
         <div class="modal-header"><h3>${esc(m.title)}</h3><button class="modal-close" id="md-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}</div>
+          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}${m.lastEditedByName ? `<br><span style="font-size:11.5px; opacity:0.8;">✏️ Editado por ${esc(m.lastEditedByName)} el ${esc(fmtDateHuman((m.lastEditedAt || '').slice(0, 10)))}</span>` : ''}</div>
           ${m.contentRedacted ? `<div class="empty-state">🔒 Esta acta es confidencial — solo el Obispado, el Administrador o quien la creó pueden ver su contenido.</div>` : `
           <div id="md-agenda">
             ${m.agendaItems && m.agendaItems.length ? `
@@ -7878,7 +7907,7 @@ async function openMeetingDetailModal(m) {
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
-                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button>` : ''}
+                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
                 }
                 if (agendaPattern === 'ministracion') {
@@ -7894,14 +7923,14 @@ async function openMeetingDetailModal(m) {
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${ministeringFields.length ? ministeringFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin quién/qué/quién todavía</div>` : '')}
-                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button>` : ''}
+                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
                 }
                 return `
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
                   ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
-                  ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm agenda-edit-notes" style="margin-top:4px;">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button>` : ''}
+                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
               }).join('')}
             ` : ''}
@@ -7926,13 +7955,15 @@ async function openMeetingDetailModal(m) {
                         </div>
                         <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
                           ${commitmentStatusPillHtml({ displayStatus: mem.displayStatus })}
+                          ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-reassign" data-commitment-id="${mem.id}" title="Reasignar a ${esc(mem.assignedToName)}">🔄</button>` : ''}
                           ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${mem.id}" title="Quitar a ${esc(mem.assignedToName)} de este compromiso">${icon('trash')}</button>` : ''}
                         </div>
                       </div>`).join('')}
                     </div>` : ''}
                   </div>
+                  ${commitmentPriorityBadgeHtml(c.priority)}
                 </div>
-                ${canEdit ? `<div style="margin-top:6px;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar compromiso</button></div>` : ''}
+                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar compromiso</button>${!c.redacted ? `<button type="button" class="btn btn-ghost btn-sm commitment-add-member" data-commitment-id="${c.id}">+ Agregar persona</button>` : ''}</div>` : ''}
               </div>`;
               }
               return `
@@ -7943,9 +7974,12 @@ async function openMeetingDetailModal(m) {
                     <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Responsable: ${esc(c.assignedToName)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
                     ${c.status === 'completed' && c.completionComment ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">💬 "${esc(c.completionComment)}"</div>` : ''}
                   </div>
-                  ${commitmentStatusPillHtml(c)}
+                  <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+                    ${commitmentStatusPillHtml(c)}
+                    ${commitmentPriorityBadgeHtml(c.priority)}
+                  </div>
                 </div>
-                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar</button><button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${c.id}">${icon('trash')} Eliminar</button></div>` : ''}
+                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar</button>${!c.redacted ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-reassign" data-commitment-id="${c.id}">🔄 Reasignar</button><button type="button" class="btn btn-ghost btn-sm commitment-add-member" data-commitment-id="${c.id}">+ Agregar persona</button>` : ''}<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${c.id}">${icon('trash')} Eliminar</button></div>` : ''}
               </div>`;
             }).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null, '🎯')}
           </div>
@@ -7999,6 +8033,20 @@ async function openMeetingDetailModal(m) {
         openEditAgendaNotesModal(m, item);
       });
     });
+    // Punto 6: convertir un tema de agenda directamente en un compromiso,
+    // sin reescribirlo — precarga la descripción con lo más concreto que
+    // ya se haya escrito para ese tema (seguimiento/acuerdo/qué se hará),
+    // o si no con el título del tema.
+    document.querySelectorAll('.agenda-to-commitment').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('[data-agenda-id]');
+        const itemId = Number(row.dataset.agendaId);
+        const item = m.agendaItems.find((a) => a.id === itemId);
+        if (!item) return;
+        const description = item.seguimiento || item.acuerdo || item.queSeHara || item.notes || item.topic;
+        openAddCommitmentModal(m, { description });
+      });
+    });
     const addCommitmentBtn = document.getElementById('md-add-commitment');
     if (addCommitmentBtn) addCommitmentBtn.addEventListener('click', () => openAddCommitmentModal(m));
     document.getElementById('md-edit-meeting').addEventListener('click', () => openEditMeetingModal(m));
@@ -8007,6 +8055,24 @@ async function openMeetingDetailModal(m) {
         const commitmentId = Number(btn.dataset.commitmentId);
         const c = m.commitments.find((x) => x.id === commitmentId);
         if (c) openEditCommitmentModal(m, c);
+      });
+    });
+    // Punto 2: reasignar SIN borrar/crear — conserva el id (y el historial
+    // de reasignaciones) del compromiso.
+    document.querySelectorAll('.commitment-member-reassign').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        const c = m.commitments.find((x) => x.id === commitmentId);
+        if (c) openReassignCommitmentModal(m, c);
+      });
+    });
+    // Punto 3: sumar a alguien nuevo a un compromiso ya creado — si todavía
+    // era individual, queda "ascendido" a grupal recién ahora.
+    document.querySelectorAll('.commitment-add-member').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        const c = m.commitments.find((x) => x.id === commitmentId);
+        if (c) openAddMemberModal(m, c);
       });
     });
     // Elimina UNA fila de compromiso — si es grupal, saca solo a esa persona
@@ -8128,7 +8194,10 @@ function openEditCommitmentModal(m, c) {
           ${c.group ? `<div class="hint-box" style="margin-top:0;">Este compromiso lo comparten ${c.group.total} personas — el cambio se aplica a todas.</div>` : ''}
           <form id="ec-form">
             <div class="field"><label>Compromiso</label><input type="text" name="description" required value="${esc(c.description)}" /></div>
-            <div class="field"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required value="${esc(c.dueDate || '')}" /></div>
+            <div class="two-col">
+              <div class="field" style="margin-bottom:0;"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required value="${esc(c.dueDate || '')}" /></div>
+              ${commitmentPriorityFieldHtml(c.priority)}
+            </div>
           </form>
         </div>
         <div class="modal-footer">
@@ -8148,13 +8217,129 @@ function openEditCommitmentModal(m, c) {
     const form = document.getElementById('ec-form');
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
+    const priority = form.querySelector('.cr-priority')?.value || 'media';
     try {
-      const updated = await api(`/commitments/${c.id}`, { method: 'PUT', body: { description: fd.get('description'), dueDate: fd.get('dueDate') } });
+      const updated = await api(`/commitments/${c.id}`, { method: 'PUT', body: { description: fd.get('description'), dueDate: fd.get('dueDate'), priority } });
       closeModal();
       toast('Compromiso actualizado');
       openMeetingDetailModal(updated);
     } catch (e) {
       document.getElementById('ec-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Punto 2: reasignar un compromiso a otra persona SIN borrarlo ni crear uno
+// nuevo — conserva su id y su historial (ver reassignHistory, que el
+// servidor arma en cada reasignación). Si el compromiso ya tenía un
+// avance/comentario, se avisa que se pierde porque la persona nueva todavía
+// no lo ha hecho.
+async function openReassignCommitmentModal(m, c) {
+  let assignable;
+  try { assignable = await api('/meetings/assignable-users'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const others = assignable.filter((u) => Number(u.id) !== Number(c.assignedToUserId));
+  if (!others.length) { toast('No hay otra persona disponible para reasignar este compromiso', 'error'); return; }
+  const historyHtml = (c.reassignHistory || []).length
+    ? `<div class="hint-box">Historial: ${c.reassignHistory.map((h) => `${esc(h.fromName)} → ${esc(h.toName)} (${esc(fmtDateHuman(h.at.slice(0, 10)))})`).join(' · ')}</div>`
+    : '';
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="rc-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Reasignar compromiso</h3><button class="modal-close" id="rc-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="rc-error"></div>
+          <div class="hint-box" style="margin-top:0;">"${esc(c.description)}" — actualmente de ${esc(c.assignedToName)}. Al reasignarlo, vuelve a quedar pendiente para la nueva persona (se pierde cualquier avance/comentario que tuviera).</div>
+          ${historyHtml}
+          <form id="rc-form">
+            <div class="field">
+              <label>Nueva persona responsable</label>
+              <select name="newAssigneeId" required>
+                <option value="">Elegir...</option>
+                ${others.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="rc-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="rc-save">Reasignar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('rc-modal-close').addEventListener('click', closeModal);
+  document.getElementById('rc-cancel').addEventListener('click', closeModal);
+  document.getElementById('rc-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'rc-modal-backdrop') closeModal(); });
+  document.getElementById('rc-save').addEventListener('click', async () => {
+    const form = document.getElementById('rc-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      const updated = await api(`/commitments/${c.id}/reassign`, { method: 'PUT', body: { newAssigneeId: fd.get('newAssigneeId') } });
+      closeModal();
+      toast('Compromiso reasignado');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('rc-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+    }
+  });
+}
+
+// Punto 3: sumar a alguien nuevo a un compromiso ya creado — si era
+// individual, esto lo convierte recién ahora en grupal (ver
+// POST /commitments/:id/add-member); si ya era grupal, agrega una fila más.
+async function openAddMemberModal(m, c) {
+  let assignable;
+  try { assignable = await api('/meetings/assignable-users'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  const existingIds = c.group ? c.group.members.map((mem) => Number(mem.assignedToUserId)) : [Number(c.assignedToUserId)];
+  const candidates = assignable.filter((u) => !existingIds.includes(Number(u.id)));
+  if (!candidates.length) { toast('No hay otra persona disponible para sumar a este compromiso', 'error'); return; }
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="am-modal-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>Agregar persona al compromiso</h3><button class="modal-close" id="am-modal-close">×</button></div>
+        <div class="modal-body">
+          <div id="am-error"></div>
+          <div class="hint-box" style="margin-top:0;">"${esc(c.description)}" — esta persona va a recibir su propia fila de este mismo compromiso, con la misma fecha límite.</div>
+          <form id="am-form">
+            <div class="field">
+              <label>Persona a sumar</label>
+              <select name="userId" required>
+                <option value="">Elegir...</option>
+                ${candidates.map((u) => `<option value="${u.id}">${esc(u.name)}${u.role === 'admin' ? ' (Administrador)' : ''}</option>`).join('')}
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <div></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary" id="am-cancel">Cancelar</button>
+            <button class="btn btn-primary" id="am-save">Agregar</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('am-modal-close').addEventListener('click', closeModal);
+  document.getElementById('am-cancel').addEventListener('click', closeModal);
+  document.getElementById('am-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'am-modal-backdrop') closeModal(); });
+  document.getElementById('am-save').addEventListener('click', async () => {
+    const form = document.getElementById('am-form');
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      const updated = await api(`/commitments/${c.id}/add-member`, { method: 'POST', body: { userId: fd.get('userId') } });
+      closeModal();
+      toast('Persona agregada al compromiso');
+      openMeetingDetailModal(updated);
+    } catch (e) {
+      document.getElementById('am-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
     }
   });
 }
@@ -8280,7 +8465,10 @@ function openEditAgendaNotesModal(m, item) {
   });
 }
 
-async function openAddCommitmentModal(m) {
+// Punto 6: `prefill`, si se pasa, precarga la descripción (ej. desde el
+// seguimiento/acuerdo de un tema de agenda, ver openMeetingDetailModal —
+// "Convertir en compromiso") sin reescribirlo a mano.
+async function openAddCommitmentModal(m, prefill) {
   let assignable;
   try { assignable = await api('/meetings/assignable-users'); }
   catch (e) { toast(e.message, 'error'); return; }
@@ -8292,9 +8480,12 @@ async function openAddCommitmentModal(m) {
         <div class="modal-body">
           <div id="ac-error"></div>
           <form id="ac-form">
-            <div class="field"><label>Compromiso</label><input type="text" name="description" required placeholder="Ej: Coordinar transporte" /></div>
+            <div class="field"><label>Compromiso</label><input type="text" name="description" required placeholder="Ej: Coordinar transporte" value="${esc(prefill?.description || '')}" /></div>
             ${commitmentAssigneesFieldHtml(assignable)}
-            <div class="field"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required /></div>
+            <div class="two-col">
+              <div class="field" style="margin-bottom:0;"><label>Fecha límite / verificación</label><input type="date" name="dueDate" required /></div>
+              ${commitmentPriorityFieldHtml('media')}
+            </div>
           </form>
         </div>
         <div class="modal-footer">
@@ -8319,8 +8510,9 @@ async function openAddCommitmentModal(m) {
       return;
     }
     const fd = new FormData(form);
+    const priority = form.querySelector('.cr-priority')?.value || 'media';
     try {
-      const updated = await api(`/meetings/${m.id}/commitments`, { method: 'POST', body: { ...Object.fromEntries(fd.entries()), assignedToUserIds } });
+      const updated = await api(`/meetings/${m.id}/commitments`, { method: 'POST', body: { ...Object.fromEntries(fd.entries()), assignedToUserIds, priority } });
       closeModal();
       toast('Compromiso agregado');
       openMeetingDetailModal(updated);
@@ -10536,7 +10728,30 @@ function statsDashboardBlockHtml(d, deltaVs) {
         <div class="ranking-label">📉 Menos exitosa</div>
         ${d.bottomActivity ? `<div class="ranking-title">${esc(d.bottomActivity.title)}</div><div class="ranking-sub">${esc(fmtDateHuman(d.bottomActivity.date))} · ${d.bottomActivity.pct}% (${d.bottomActivity.actualAttendance}/${d.bottomActivity.expectedAttendance})</div>` : '<div class="ranking-sub">Sin datos suficientes</div>'}
       </div>
-    </div>`;
+    </div>
+    ${orgCommitmentsRankingHtml(d.orgCommitmentsRanking)}`;
+}
+
+// Punto 11: solo viene calculado cuando se está viendo "Todo el Barrio"
+// (ver orgCommitmentsRanking en stats.js — comparar organizaciones entre sí
+// no tiene sentido acotado a una sola). Mismo criterio de "compromisos ya
+// resueltos" que Rachas y Logros, pero agrupado por organización.
+function orgCommitmentsRankingHtml(ranking) {
+  if (!ranking) return '';
+  return `
+    <div class="hint-box" style="margin-top:18px; margin-bottom:0;"><strong>🏆 Qué organización cumple más sus compromisos</strong></div>
+    ${ranking.length ? `
+    <div class="card-list" style="margin-top:8px;">
+      ${ranking.map((r, i) => `
+        <div class="list-card">
+          <span class="org-dot" style="background:${esc(r.organizationColor)}"></span>
+          <div class="lc-main">
+            <div class="lc-title">${i + 1}. ${esc(r.organizationName)}</div>
+            <div class="lc-sub">${r.completed} cumplido${r.completed === 1 ? '' : 's'} de ${r.total} resuelto${r.total === 1 ? '' : 's'}</div>
+          </div>
+          <div class="lc-when">${r.pct !== null ? r.pct + '%' : '—'}</div>
+        </div>`).join('')}
+    </div>` : emptyStateHtml('Todavía no hay compromisos resueltos este año', null, '🎯')}`;
 }
 
 async function renderStatsDashboard() {
@@ -10945,8 +11160,8 @@ function rankingMeetingRowHtml(r, i) {
 async function renderBishopricPanelView() {
   const container = document.getElementById('view-root');
   container.innerHTML = skeletonViewHtml('Panel de Obispado', { cards: 2, stats: 4 });
-  let data;
-  try { data = await api('/dashboard/overview'); }
+  let data, followups;
+  try { [data, followups] = await Promise.all([api('/dashboard/overview'), api('/meetings/council-followups')]); }
   catch (e) { toast(e.message, 'error'); container.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
 
   container.innerHTML = `
@@ -10988,9 +11203,34 @@ async function renderBishopricPanelView() {
         </div>
       </div>
     </div>
+    <div style="margin-top:22px;">
+      <h3 style="font-size:14px; color:var(--celeste-darker); margin-bottom:8px;">👣 Seguimientos de Consejo de Barrio sin resolver</h3>
+      <div class="hint-box" style="margin-top:0;">A diferencia del aviso de "Consejo de Barrio atrasado" de arriba, esto junta el seguimiento pendiente de TODOS los consejos históricos, no solo el más reciente.</div>
+      <div class="card-list">${followups.length ? followups.map(bpFollowupRowHtml).join('') : emptyStateHtml('Ninguno sin resolver — al día', null, '🎉', true)}</div>
+    </div>
   `;
-  wireBishopricPanelActions();
+  wireBishopricPanelActions(followups);
   wireBishopricScrollDots();
+}
+
+// Punto 12: cada fila es el seguimiento pendiente de un tema puntual de un
+// Consejo de Barrio (activo o ya archivado — la fecha del consejo mismo
+// avisa qué tan antiguo es). "✅ Marcar resuelto" reutiliza el mismo PUT de
+// agenda-items de siempre, solo que ahora también acepta seguimientoResuelto
+// (ver meetings.js) — y el Obispado puede usarlo aunque no haya sido quien
+// creó esa acta en particular.
+function bpFollowupRowHtml(f) {
+  return `
+    <div class="list-card" style="flex-direction:column; align-items:stretch; gap:6px;" data-meeting-id="${f.meetingId}" data-agenda-id="${f.agendaItemId}">
+      <div class="lc-main">
+        <div class="lc-title">${esc(f.topic)}</div>
+        <div class="lc-sub">"${esc(f.meetingTitle)}" · ${esc(fmtDateHuman(f.meetingDate))}${f.meetingStatus === 'archived' ? ' · 📁 archivada' : ''}</div>
+        <div style="font-size:12.5px; margin-top:4px;"><strong>👣 Seguimiento:</strong> ${esc(f.seguimiento)}</div>
+      </div>
+      <div>
+        <button type="button" class="btn btn-secondary btn-sm bp-followup-resolve">✅ Marcar resuelto</button>
+      </div>
+    </div>`;
 }
 
 // Punto 10 — aviso de Consejo de Barrio pendiente: la frecuencia esperada
@@ -11111,7 +11351,10 @@ function bpCommitmentRowHtml(c) {
           <div class="lc-title">${esc(c.description)}</div>
           <div class="lc-sub">${esc(c.organizationName)} · "${esc(c.meetingTitle)}" · responsable: ${esc(c.assignedToName)} · vencía ${esc(fmtDateHuman(c.dueDate))}</div>
         </div>
-        <span class="status-pill status-red">Atrasado</span>
+        <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+          <span class="status-pill status-red">Atrasado</span>
+          ${commitmentPriorityBadgeHtml(c.priority)}
+        </div>
       </div>
       ${isMine ? `
       <div>
@@ -11146,6 +11389,22 @@ function bpCleaningRowHtml(s) {
 }
 
 function wireBishopricPanelActions() {
+  // Punto 12: marcar un seguimiento histórico como resuelto — reutiliza el
+  // mismo PUT de agenda-items de siempre (ver meetings.js), que ahora
+  // también deja pasar al Obispado aunque no haya creado esa acta.
+  document.querySelectorAll('.bp-followup-resolve').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('[data-meeting-id]');
+      const meetingId = row.dataset.meetingId;
+      const agendaId = row.dataset.agendaId;
+      btn.disabled = true;
+      try {
+        await api(`/meetings/${meetingId}/agenda-items/${agendaId}`, { method: 'PUT', body: { seguimientoResuelto: true } });
+        toast('Seguimiento marcado como resuelto');
+        await renderBishopricPanelView();
+      } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+    });
+  });
   document.getElementById('bp-create-council')?.addEventListener('click', () => goCreateMeetingOfType('consejo_barrio'));
   document.getElementById('bp-create-ministering')?.addEventListener('click', () => goCreateMeetingOfType('coordinacion_ministracion'));
   document.getElementById('bp-create-bishopric')?.addEventListener('click', () => goCreateMeetingOfType('general'));

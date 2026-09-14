@@ -49,6 +49,7 @@ export function computeBishopricOverview(data) {
           organizationName: org?.name || 'Administración',
           description: c.description,
           dueDate: c.dueDate,
+          priority: c.priority || 'media',
           assignedToName: assignee?.name || '(usuario eliminado)',
           // El cliente lo usa para saber si quien ve el panel es justo el
           // responsable de este compromiso — en ese caso (y solo en ese

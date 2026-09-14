@@ -168,6 +168,21 @@ function commitmentGroupSummary(c, meeting, data) {
   };
 }
 
+// Punto 2: historial de reasignación de un compromiso — cada vez que
+// PUT /api/commitments/:id/reassign cambia el responsable, se agrega una
+// entrada acá (sin borrar el compromiso ni crear uno nuevo, para no perder
+// su historial). Se traduce a nombres recién acá, al mostrarlo, igual que
+// el resto de la info de un compromiso.
+function reassignHistoryWithNames(c, data) {
+  return (c.reassignHistory || []).map((h) => ({
+    fromUserId: h.fromUserId,
+    fromName: userName(data, h.fromUserId),
+    toUserId: h.toUserId,
+    toName: userName(data, h.toUserId),
+    at: h.at,
+  }));
+}
+
 function withCommitmentInfo(c, data, meeting, viewer) {
   const isOverdue = c.status === 'pending' && !!c.dueDate && c.dueDate < todayISO();
   const visible = !viewer || !meeting || commitmentVisibleFully(viewer, meeting, c, data);
@@ -189,6 +204,8 @@ function withCommitmentInfo(c, data, meeting, viewer) {
     isOverdue: visible && isOverdue,
     displayStatus: c.status === 'pending' ? (visible && isOverdue ? 'overdue' : 'pending') : c.status,
     redacted: !visible,
+    priority: normalizePriority(c.priority),
+    reassignHistory: visible ? reassignHistoryWithNames(c, data) : [],
     // Un compromiso grupal confidencial no debe filtrar de todos modos la
     // lista de quiénes participan ni su avance individual.
     group: visible && meeting ? commitmentGroupSummary(c, meeting, data) : null,
@@ -202,6 +219,10 @@ function withMeetingInfo(m, data, viewer) {
     ...m,
     organizationName: org?.name || (m.organizationId ? '' : 'Administración'),
     createdByName: userName(data, m.createdBy),
+    // Punto 8: "editado por X el [fecha]" — null hasta la primera edición
+    // (ver touchMeetingEdit); nunca se marca por el solo hecho de crearla.
+    lastEditedByName: m.lastEditedBy ? userName(data, m.lastEditedBy) : null,
+    lastEditedAt: m.lastEditedAt || null,
     agendaItems: (m.agendaItems || []).map((a) => (fullAccess ? a : { id: a.id, topic: '(Tema confidencial)', presenter: '', ...EMPTY_AGENDA_ITEM_NOTES })),
     commitments: (m.commitments || []).map((c) => withCommitmentInfo(c, data, m, viewer)),
     contentRedacted: !fullAccess,
@@ -253,7 +274,34 @@ export function canSeeMeetingRecord(user, meeting, data) {
 const EMPTY_AGENDA_ITEM_NOTES = {
   notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '',
   quienNecesita: '', queSeHara: '', quienLoHara: '', notApplicable: false,
+  // Punto 12: marca si el "Seguimiento" de un tema de Consejo de Barrio ya
+  // quedó resuelto — usado por el panel histórico de seguimientos sin
+  // resolver del Obispado (ver GET /api/meetings/council-followups), que
+  // junta el seguimiento pendiente de TODOS los consejos históricos, no
+  // solo el más reciente.
+  seguimientoResuelto: false,
 };
+
+// Punto 14: prioridad de un compromiso (alta/media/baja) — se usa para
+// ordenar "Mis Asignaciones" por importancia y no solo por fecha límite.
+// `media` es el valor por defecto (y el que se asume para compromisos
+// creados antes de que existiera este campo).
+const COMMITMENT_PRIORITIES = ['alta', 'media', 'baja'];
+const PRIORITY_RANK = { alta: 0, media: 1, baja: 2 };
+function normalizePriority(raw) {
+  return COMMITMENT_PRIORITIES.includes(raw) ? raw : 'media';
+}
+
+// Punto 8: "editado por X el [fecha]" al pie de un acta editada — se llama
+// desde CUALQUIER mutación del acta (editar acta, agregar/editar/eliminar
+// compromiso o tema de agenda, cambiar confidencialidad, reasignar, sumar a
+// alguien a un compromiso grupal) para que quede siempre al día. No se
+// llama al CREAR el acta — recién queda marcada la primera vez que alguien
+// la modifica después de creada.
+function touchMeetingEdit(m, userId) {
+  m.lastEditedBy = userId;
+  m.lastEditedAt = new Date().toISOString();
+}
 
 // Acepta un responsable único (assignedToUserId, tal como antes) o varios
 // (assignedToUserIds — pedido explícito: "compromisos que varios puedan
@@ -273,7 +321,8 @@ function validCommitmentInput(raw, assignableIds) {
   for (const uid of assignedToUserIds) {
     if (!assignableIds.has(uid)) return { error: 'El responsable elegido no es válido para quien está creando el acta' };
   }
-  return { value: { description, dueDate, assignedToUserIds } };
+  const priority = normalizePriority(raw?.priority);
+  return { value: { description, dueDate, assignedToUserIds, priority } };
 }
 
 export function registerMeetingRoutes(router) {
@@ -320,6 +369,40 @@ export function registerMeetingRoutes(router) {
         assignedToName: userName(data, c.assignedToUserId),
       }));
     sendJson(res, 200, { previousMeeting: { id: previous.id, title: previous.title, date: previous.date }, pending });
+  }));
+
+  // Punto 12: panel del Obispado con los "Seguimiento" de Consejo de Barrio
+  // que quedaron sin resolver — de TODOS los consejos históricos (no solo
+  // el más reciente, a diferencia del aviso de "consejo atrasado" del
+  // Panel de Obispado). Se registra antes de /api/meetings/:id para que el
+  // router (que hace match por orden, ver router.js) no confunda
+  // "council-followups" con un :id.
+  router.get('/api/meetings/council-followups', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res) => {
+    const data = load();
+    if (!isObispadoLeader(req.user, data)) {
+      return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver este panel' });
+    }
+    const items = [];
+    for (const m of data.meetings) {
+      if (m.type !== 'consejo_barrio') continue;
+      for (const a of (m.agendaItems || [])) {
+        if (a.notApplicable || a.seguimientoResuelto) continue;
+        const seguimiento = String(a.seguimiento || '').trim();
+        if (!seguimiento) continue;
+        items.push({
+          meetingId: m.id,
+          meetingTitle: m.title,
+          meetingDate: m.date,
+          meetingStatus: m.status,
+          agendaItemId: a.id,
+          topic: a.topic,
+          acuerdo: a.acuerdo || '',
+          seguimiento,
+        });
+      }
+    }
+    items.sort((x, y) => x.meetingDate.localeCompare(y.meetingDate));
+    sendJson(res, 200, items);
   }));
 
   // Listado de actas — cada organización ve las suyas (como el libro de
@@ -411,10 +494,12 @@ export function registerMeetingRoutes(router) {
           assignedToUserId,
           groupId,
           confidential: false,
+          priority: c.priority,
           status: 'pending',
           completedAt: null,
           completionComment: '',
           whatsappDueTodaySent: false,
+          reassignHistory: [],
         }));
       });
       const agendaItems = agendaItemsInput.map((a) => ({ id: nextId(data, 'agendaItems'), ...a }));
@@ -431,6 +516,9 @@ export function registerMeetingRoutes(router) {
         createdBy: req.user.id,
         createdAt: now,
         archivedAt: null,
+        // Punto 8: "editado por X el [fecha]" — sin editar todavía.
+        lastEditedBy: null,
+        lastEditedAt: null,
         agendaItems,
         commitments,
         // Punto 18: para no reenviar el mismo recordatorio de compromisos
@@ -467,12 +555,15 @@ export function registerMeetingRoutes(router) {
           assignedToUserId,
           groupId,
           confidential: !!body?.confidential,
+          priority: check.value.priority,
           status: 'pending',
           completedAt: null,
           completionComment: '',
           whatsappDueTodaySent: false,
+          reassignHistory: [],
         });
       }
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -494,6 +585,7 @@ export function registerMeetingRoutes(router) {
       const m = data.meetings.find((x) => x.id === id);
       m.agendaItems = m.agendaItems || [];
       m.agendaItems.push({ id: nextId(data, 'agendaItems'), topic, presenter: String(body?.presenter || '').trim(), ...EMPTY_AGENDA_ITEM_NOTES, notApplicable: !!body?.notApplicable });
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -507,7 +599,14 @@ export function registerMeetingRoutes(router) {
     const data0 = load();
     const meeting = data0.meetings.find((m) => m.id === id);
     if (!meeting) return sendJson(res, 404, { error: 'Acta no encontrada' });
-    if (!canEditMeeting(req.user, meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede editar la agenda' });
+    // Punto 12: el panel histórico de seguimientos sin resolver del Obispado
+    // deja marcar como resuelto el seguimiento de un Consejo de Barrio
+    // ANTIGUO, que puede haber sido creado por alguien que ya no ostenta ese
+    // llamamiento — por eso, además de quien creó el acta (o Administrador),
+    // también se le permite editar la agenda al líder de Obispado.
+    if (!canEditMeeting(req.user, meeting) && !isObispadoLeader(req.user, data0)) {
+      return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador, o el Obispado) puede editar la agenda' });
+    }
     const item = (meeting.agendaItems || []).find((a) => a.id === itemId);
     if (!item) return sendJson(res, 404, { error: 'Tema de agenda no encontrado' });
     await withDb((data) => {
@@ -530,7 +629,11 @@ export function registerMeetingRoutes(router) {
         quienLoHara: body?.quienLoHara !== undefined ? String(body.quienLoHara).trim() : it.quienLoHara,
         // Fase 6: "no aplica este tema" — ver nota en EMPTY_AGENDA_ITEM_NOTES.
         notApplicable: body?.notApplicable !== undefined ? !!body.notApplicable : it.notApplicable,
+        // Punto 12: marca el seguimiento de este tema como resuelto (o lo
+        // reabre) — ver GET /api/meetings/council-followups.
+        seguimientoResuelto: body?.seguimientoResuelto !== undefined ? !!body.seguimientoResuelto : it.seguimientoResuelto,
       });
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -547,6 +650,7 @@ export function registerMeetingRoutes(router) {
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
       m.agendaItems = (m.agendaItems || []).filter((a) => a.id !== itemId);
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -561,7 +665,9 @@ export function registerMeetingRoutes(router) {
     if (!meeting) return sendJson(res, 404, { error: 'Acta no encontrada' });
     if (!canEditMeeting(req.user, meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede cambiar su confidencialidad' });
     await withDb((data) => {
-      data.meetings.find((x) => x.id === id).confidential = !!body?.confidential;
+      const m = data.meetings.find((x) => x.id === id);
+      m.confidential = !!body?.confidential;
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -582,6 +688,7 @@ export function registerMeetingRoutes(router) {
         ? f.meeting.commitments.filter((c) => c.groupId === f.commitment.groupId)
         : [f.commitment];
       targets.forEach((c) => { c.confidential = !!body?.confidential; });
+      touchMeetingEdit(f.meeting, req.user.id);
     });
     const data = load();
     const f2 = findMeetingWithCommitment(data, id);
@@ -616,6 +723,7 @@ export function registerMeetingRoutes(router) {
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === id);
       Object.assign(m, { title, date, startTime, endTime: endTime || null, type: requestedType });
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === id), data, req.user));
@@ -637,16 +745,115 @@ export function registerMeetingRoutes(router) {
     const dueDate = String(body?.dueDate || '').trim();
     if (!description) return sendJson(res, 400, { error: 'Falta la descripción del compromiso' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return sendJson(res, 400, { error: 'Falta la fecha límite / de verificación del compromiso' });
+    // Punto 14: la prioridad también se comparte entre todo el grupo, igual
+    // que descripción y fecha — es opcional en el body para no romper a
+    // ningún llamador viejo que todavía no la mande; si no viene, se deja
+    // la que ya tenía.
+    const priority = body?.priority !== undefined ? normalizePriority(body.priority) : null;
     await withDb((data) => {
       const f = findMeetingWithCommitment(data, id);
       const targets = f.commitment.groupId
         ? f.meeting.commitments.filter((c) => c.groupId === f.commitment.groupId)
         : [f.commitment];
-      targets.forEach((c) => { c.description = description; c.dueDate = dueDate; });
+      targets.forEach((c) => { c.description = description; c.dueDate = dueDate; if (priority) c.priority = priority; });
+      touchMeetingEdit(f.meeting, req.user.id);
     });
     const data = load();
     const f2 = findMeetingWithCommitment(data, id);
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === f2.meeting.id), data, req.user));
+  }));
+
+  // Punto 2: reasignar un compromiso a otra persona SIN borrarlo ni crear
+  // uno nuevo — así conserva su id (y ahora también su reassignHistory, ver
+  // reassignHistoryWithNames) en vez de perder todo rastro de que alguien lo
+  // tuvo antes. Al reasignar, el compromiso vuelve a quedar "pending" (la
+  // persona nueva todavía no lo ha hecho) y se limpia cualquier
+  // completado/comentario que tuviera la persona anterior. Si el compromiso
+  // es grupal, esto solo cambia LA FILA de esa persona puntual — las demás
+  // del grupo no se ven afectadas (usar "sumar a alguien" / "quitar" para
+  // cambiar quiénes integran el grupo).
+  router.put('/api/commitments/:id/reassign', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const found = findMeetingWithCommitment(data0, id);
+    if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
+    if (!canEditMeeting(req.user, found.meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede reasignar compromisos' });
+    if (found.meeting.status !== 'active') return sendJson(res, 400, { error: 'Esta acta ya está archivada' });
+    const newAssigneeId = Number(body?.newAssigneeId);
+    if (!Number.isFinite(newAssigneeId)) return sendJson(res, 400, { error: 'Falta elegir a la nueva persona responsable' });
+    const assignableIds = new Set(assignableUsersFor(req.user, data0).map((u) => u.id));
+    if (!assignableIds.has(newAssigneeId)) return sendJson(res, 400, { error: 'La persona elegida no es válida para quien está editando esta acta' });
+    if (Number(found.commitment.assignedToUserId) === newAssigneeId) return sendJson(res, 400, { error: 'Ese compromiso ya está asignado a esa persona' });
+    if (found.commitment.groupId) {
+      const alreadyInGroup = found.meeting.commitments.some((c) => c.groupId === found.commitment.groupId && Number(c.assignedToUserId) === newAssigneeId);
+      if (alreadyInGroup) return sendJson(res, 400, { error: 'Esa persona ya forma parte de este compromiso grupal' });
+    }
+    await withDb((data) => {
+      const f = findMeetingWithCommitment(data, id);
+      const fromUserId = f.commitment.assignedToUserId;
+      f.commitment.reassignHistory = f.commitment.reassignHistory || [];
+      f.commitment.reassignHistory.push({ fromUserId, toUserId: newAssigneeId, at: new Date().toISOString() });
+      Object.assign(f.commitment, {
+        assignedToUserId: newAssigneeId,
+        status: 'pending',
+        completedAt: null,
+        completionComment: '',
+      });
+      touchMeetingEdit(f.meeting, req.user.id);
+    });
+    const data = load();
+    const f2 = findMeetingWithCommitment(data, id);
+    sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === f2.meeting.id), data, req.user));
+  }));
+
+  // Punto 3: sumar a alguien nuevo a un compromiso ya creado — si todavía
+  // era individual (sin groupId), esto lo "asciende" a grupal recién ahora,
+  // generando un groupId compartido entre la fila original y la nueva; si
+  // ya era grupal, solo agrega una fila más con el mismo groupId. La nueva
+  // fila arranca "pending", como cualquier compromiso nuevo.
+  router.post('/api/commitments/:id/add-member', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const found = findMeetingWithCommitment(data0, id);
+    if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
+    if (!canEditMeeting(req.user, found.meeting)) return sendJson(res, 403, { error: 'Solo quien creó el acta (o un Administrador) puede sumar a alguien a este compromiso' });
+    if (found.meeting.status !== 'active') return sendJson(res, 400, { error: 'Esta acta ya está archivada' });
+    const newUserId = Number(body?.userId);
+    if (!Number.isFinite(newUserId)) return sendJson(res, 400, { error: 'Falta elegir a la persona a sumar' });
+    const assignableIds = new Set(assignableUsersFor(req.user, data0).map((u) => u.id));
+    if (!assignableIds.has(newUserId)) return sendJson(res, 400, { error: 'La persona elegida no es válida para quien está editando esta acta' });
+    const groupMembers = found.commitment.groupId
+      ? found.meeting.commitments.filter((c) => c.groupId === found.commitment.groupId)
+      : [found.commitment];
+    if (groupMembers.some((c) => Number(c.assignedToUserId) === newUserId)) {
+      return sendJson(res, 400, { error: 'Esa persona ya forma parte de este compromiso' });
+    }
+    await withDb((data) => {
+      const f = findMeetingWithCommitment(data, id);
+      // Si todavía no era grupal, se le asigna un groupId nuevo A LA FILA
+      // EXISTENTE recién ahora — antes de esto, un compromiso individual
+      // simplemente no tenía groupId (ver POST /api/meetings/:id/commitments).
+      const groupId = f.commitment.groupId || `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      if (!f.commitment.groupId) f.commitment.groupId = groupId;
+      f.meeting.commitments.push({
+        id: nextId(data, 'commitments'),
+        description: f.commitment.description,
+        dueDate: f.commitment.dueDate,
+        assignedToUserId: newUserId,
+        groupId,
+        confidential: f.commitment.confidential,
+        priority: f.commitment.priority,
+        status: 'pending',
+        completedAt: null,
+        completionComment: '',
+        whatsappDueTodaySent: false,
+        reassignHistory: [],
+      });
+      touchMeetingEdit(f.meeting, req.user.id);
+    });
+    const data = load();
+    const f2 = findMeetingWithCommitment(data, id);
+    sendJson(res, 201, withMeetingInfo(data.meetings.find((m) => m.id === f2.meeting.id), data, req.user));
   }));
 
   // Eliminar un compromiso — si es grupal, borra solo a ESA persona del
@@ -664,6 +871,7 @@ export function registerMeetingRoutes(router) {
     await withDb((data) => {
       const m = data.meetings.find((x) => x.id === meetingId);
       m.commitments = m.commitments.filter((c) => c.id !== id);
+      touchMeetingEdit(m, req.user.id);
     });
     const data = load();
     sendJson(res, 200, withMeetingInfo(data.meetings.find((m) => m.id === meetingId), data, req.user));
@@ -749,7 +957,10 @@ export function registerMeetingRoutes(router) {
         mine.push({ ...withCommitmentInfo(c, data, m, req.user), meetingId: m.id, meetingTitle: m.title });
       }
     }
-    mine.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    // Punto 14: se ordena primero por prioridad (alta → media → baja) y
+    // recién dentro de una misma prioridad, por fecha límite — así lo más
+    // importante queda arriba aunque venza más tarde que algo trivial.
+    mine.sort((a, b) => (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) || a.dueDate.localeCompare(b.dueDate));
     const pendingCount = mine.filter((c) => c.displayStatus === 'pending').length;
     const overdueCount = mine.filter((c) => c.displayStatus === 'overdue').length;
     sendJson(res, 200, { commitments: mine, pendingCount, overdueCount, total: mine.length });
