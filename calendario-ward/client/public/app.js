@@ -7873,11 +7873,37 @@ function meetingCommitmentDisplayEntries(m) {
   return entries;
 }
 
+// Recordado (id + mode) para que el modal conserve el modo elegido cuando
+// se vuelve a renderizar tras editar una nota/convertir un compromiso, pero
+// arranque siempre en "resumen" (la vista limpia) cada vez que se abre un
+// acta distinta o la misma después de haberla cerrado.
+let meetingDetailViewState = { id: null, mode: 'resumen' };
+
+// Las oraciones (inicial/final) nunca llevan notas ni se convierten en
+// compromiso — mostrarles esos controles solo ensucia el acta sin aportar
+// nada, así que se excluyen siempre, en cualquier modo.
+function isFixedPrayerTopic(topic) {
+  return topic === PRESIDENCY_FIXED_OPENING || topic === PRESIDENCY_FIXED_CLOSING;
+}
+
+function agendaItemHasContent(a, agendaPattern) {
+  if (agendaPattern === 'consejo') return !!(a.necesidad || a.analisis || a.acuerdo || a.seguimiento);
+  if (agendaPattern === 'ministracion') return !!(a.quienNecesita || a.queSeHara || a.quienLoHara);
+  return !!a.notes;
+}
+
 async function openMeetingDetailModal(m) {
   const canEdit = (state.user.role === 'admin' || Number(state.user.id) === Number(m.createdBy)) && m.status === 'active';
   const typeLabel = MEETING_TYPE_LABELS[m.type] || '';
   const agendaPattern = agendaPatternFor(m.type);
   const commitmentEntries = meetingCommitmentDisplayEntries(m);
+  if (meetingDetailViewState.id !== m.id) meetingDetailViewState = { id: m.id, mode: 'resumen' };
+  const summaryMode = meetingDetailViewState.mode === 'resumen';
+  const visibleAgendaItems = (m.agendaItems || []).filter((a) => {
+    if (isFixedPrayerTopic(a.topic)) return !summaryMode; // en resumen, las oraciones no aportan nada que mostrar
+    if (!summaryMode) return true;
+    return agendaItemHasContent(a, agendaPattern) || a.notApplicable;
+  });
   // "Compartir acta" — pedido explícito: unificar en un solo botón lo que
   // antes eran dos ("Compartir minuta" solo con temas, "Compartir
   // compromisos" solo con compromisos) — ahora un único share junta temas
@@ -7894,9 +7920,14 @@ async function openMeetingDetailModal(m) {
           ${m.contentRedacted ? `<div class="empty-state">🔒 Esta acta es confidencial — solo el Obispado, el Administrador o quien la creó pueden ver su contenido.</div>` : `
           <div id="md-agenda">
             ${m.agendaItems && m.agendaItems.length ? `
-              <div style="font-weight:600; font-size:13px; color:var(--celeste-darker); margin-bottom:6px;">📋 Agenda</div>
-              ${m.agendaItems.map((a) => {
-                if (agendaPattern === 'consejo') {
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+                <div style="font-weight:600; font-size:13px; color:var(--celeste-darker);">📋 Agenda</div>
+                <button type="button" class="btn btn-ghost btn-sm" id="md-toggle-agenda-mode">${summaryMode ? '📝 Ver todo / editar' : '👁️ Ver solo lo acordado'}</button>
+              </div>
+              ${visibleAgendaItems.length ? visibleAgendaItems.map((a) => {
+                const isPrayer = isFixedPrayerTopic(a.topic);
+                const showEditControls = canEdit && !summaryMode && !isPrayer;
+                if (agendaPattern === 'consejo' && !isPrayer) {
                   const councilFields = [
                     ['🧩 Necesidad', a.necesidad],
                     ['🔎 Análisis', a.analisis],
@@ -7906,11 +7937,11 @@ async function openMeetingDetailModal(m) {
                   return `
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
-                  ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
-                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
+                  ${councilFields.length ? councilFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit && !summaryMode ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin necesidad/análisis/acuerdo/seguimiento todavía</div>` : '')}
+                  ${showEditControls ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${councilFields.length ? 'Editar' : 'Completar'} patrón de consejo</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
                 }
-                if (agendaPattern === 'ministracion') {
+                if (agendaPattern === 'ministracion' && !isPrayer) {
                   // Punto 64: patrón propio de Coordinación de Ministración
                   // (Manual General 21.2) — más operativo que el de Consejo
                   // de Barrio: quién necesita ayuda, qué se hará, quién lo hará.
@@ -7922,20 +7953,24 @@ async function openMeetingDetailModal(m) {
                   return `
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
-                  ${ministeringFields.length ? ministeringFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin quién/qué/quién todavía</div>` : '')}
-                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
+                  ${ministeringFields.length ? ministeringFields.map(([label, v]) => `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;"><strong>${label}:</strong> ${esc(v)}</div>`).join('') : (canEdit && !summaryMode ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin quién/qué/quién todavía</div>` : '')}
+                  ${showEditControls ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${ministeringFields.length ? 'Editar' : 'Completar'} seguimiento de ministración</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
                 }
+                // Ítem general — incluye el caso de las oraciones (isPrayer):
+                // solo topic + presentador, sin placeholder de notas ni
+                // botones, porque una oración nunca lleva notas ni se
+                // convierte en compromiso.
                 return `
                 <div class="commitment-detail-row${a.notApplicable ? ' agenda-na' : ''}" data-agenda-id="${a.id}">
                   <div style="font-weight:600; font-size:13.5px;">${esc(a.topic)}${a.presenter ? ` <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">— ${esc(a.presenter)}</span>` : ''}${a.notApplicable ? ' <span class="agenda-na-badge">No aplica</span>' : ''}</div>
-                  ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
-                  ${canEdit ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
+                  ${a.notes ? `<div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">${esc(a.notes)}</div>` : (canEdit && !summaryMode && !isPrayer ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">Sin notas todavía</div>` : '')}
+                  ${showEditControls ? `<div style="margin-top:4px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm agenda-edit-notes">📝 ${a.notes ? 'Editar' : 'Agregar'} notas</button><button type="button" class="btn btn-ghost btn-sm agenda-to-commitment">➕ Convertir en compromiso</button></div>` : ''}
                 </div>`;
-              }).join('')}
+              }).join('') : `<div class="hint-box" style="font-size:12.5px;">Todavía no hay nada acordado en la agenda — cambia a "Ver todo / editar" para completar los temas.</div>`}
             ` : ''}
           </div>
-          ${canEdit ? `<div style="margin:10px 0 14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-agenda">+ Agregar tema a la agenda</button></div>` : ''}
+          ${canEdit && !summaryMode ? `<div style="margin:10px 0 14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-agenda">+ Agregar tema a la agenda</button></div>` : ''}
           <div id="md-commitments">
             ${commitmentEntries.length ? commitmentEntries.map(({ isGroup, c, group }) => {
               if (isGroup) {
@@ -8000,6 +8035,10 @@ async function openMeetingDetailModal(m) {
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
+  document.getElementById('md-toggle-agenda-mode')?.addEventListener('click', () => {
+    meetingDetailViewState = { id: m.id, mode: summaryMode ? 'completo' : 'resumen' };
+    openMeetingDetailModal(m);
+  });
   // "Compartir acta": junta temas (con su acuerdo/seguimiento si ya se
   // completó) y compromisos en un solo mensaje/imagen — sirve tanto para
   // mandarlo ANTES de la reunión (ahí solo van a aparecer los temas, porque
