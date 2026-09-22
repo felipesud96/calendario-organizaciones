@@ -109,7 +109,7 @@ function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  // CORS abierto (útil si el frontend se sirve por separado en desarrollo)
+  // CORS abierto
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -124,45 +124,50 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/health') {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
-if (pathname === '/api/chat' && req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
-      req.on('end', async () => {
-        try {
-          const { mensaje } = JSON.parse(body || '{}');
-          const respuestaIA = await procesarPreguntaChat(mensaje);
-          return sendJson(res, 200, { respuesta: respuestaIA });
-        } catch (error) {
-          console.error('Error en chat IA:', error);
-          const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
-          return sendJson(res, 200, { respuesta: mensajeError });
-        }
-      });
-      return;
-    }
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    req.token = token;
-    req.user = token ? await getUserFromToken(token) : null;
-    req.query = Object.fromEntries(url.searchParams.entries());
 
-    let body = {};
-    if (['POST', 'PUT'].includes(req.method)) {
-      const contentType = req.headers['content-type'] || '';
-      if (contentType.startsWith('multipart/form-data')) {
-        const raw = await readRawBody(req, 20 * 1024 * 1024);
-        body = parseMultipart(raw, contentType);
-      } else {
-        body = await readJsonBody(req);
+  // Ruta del Chat protegida para que el cliente NUNCA reciba un error HTTP 500
+  if (pathname === '/api/chat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body || '{}');
+        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '');
+        return sendJson(res, 200, { respuesta: respuestaIA });
+      } catch (error) {
+        console.error('Error en endpoint chat IA:', error);
+        const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
+        return sendJson(res, 200, { respuesta: mensajeError });
       }
-    }
+    });
+    return;
+  }
 
+  if (pathname.startsWith('/api/')) {
     try {
+      const match = router.match(req.method, pathname);
+      if (!match) {
+        return sendJson(res, 404, { error: 'Ruta no encontrada' });
+      }
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      req.token = token;
+      req.user = token ? await getUserFromToken(token) : null;
+      req.query = Object.fromEntries(url.searchParams.entries());
+
+      let body = {};
+      if (['POST', 'PUT'].includes(req.method)) {
+        const contentType = req.headers['content-type'] || '';
+        if (contentType.startsWith('multipart/form-data')) {
+          const raw = await readRawBody(req, 20 * 1024 * 1024);
+          body = parseMultipart(raw, contentType);
+        } else {
+          body = await readJsonBody(req);
+        }
+      }
       await match.handler(req, res, match.params, body);
     } catch (err) {
       console.error('Error en request:', err);
-      return sendJson(res, 500, { error: 'Error interno del servidor' });
-    }
       if (!res.headersSent) {
         sendJson(res, 500, { error: 'Error interno del servidor' });
       }
