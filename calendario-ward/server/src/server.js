@@ -132,13 +132,10 @@ if (pathname === '/api/chat' && req.method === 'POST') {
       const { mensaje } = JSON.parse(body);
       const respuestaIA = await procesarPreguntaChat(mensaje);
       
-      // Siempre respondemos 200 con la propiedad 'respuesta'
       return sendJson(res, 200, { respuesta: respuestaIA });
     } catch (error) {
       console.error('Error en chat IA:', error);
       
-      // Si la API falla (por cuota 429 o saturación 503), respondemos 200 
-      // pero le entregamos el mensaje amigable a la abeja Deseret
       const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
       
       return sendJson(res, 200, { respuesta: mensajeError });
