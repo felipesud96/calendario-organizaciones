@@ -1,39 +1,45 @@
 import { GoogleGenAI } from '@google/genai';
-import { getDb } from './db.js';
+import { load } from './db.js';
 
 export async function procesarPreguntaChat(mensaje) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY no configurada.");
 
-    // Consultamos la base de datos real
-    const db = await getDb();
-    const actividades = await db.all(`
-      SELECT a.id, a.titulo, a.fecha, a.hora_inicio, a.lugar, o.nombre AS organizacion
-      FROM actividades a
-      LEFT JOIN organizaciones o ON a.organizacion_id = o.id
-      ORDER BY a.fecha ASC
-    `);
+    // 1. Cargamos la base de datos JSON de tu aplicación usando tu propia función
+    const db = load();
+    
+    // 2. Extraemos y combinamos manualmente las actividades (events) y las organizaciones
+    const actividadesFormateadas = db.events.map(evento => {
+      const org = db.organizations.find(o => Number(o.id) === Number(evento.organizationId));
+      return {
+        titulo: evento.title,
+        fecha: evento.date,
+        hora_inicio: evento.startTime,
+        lugar: evento.location,
+        organizacion: org ? org.name : 'General'
+      };
+    });
 
-    const contextoActividades = JSON.stringify(actividades);
+    const contextoActividades = JSON.stringify(actividadesFormateadas);
 
+    // 3. Inicializamos Gemini con el modelo oficial
     const ai = new GoogleGenAI({ apiKey });
 
-    // AQUÍ ESTÁ LA CORRECCIÓN CLAVE: gemini-1.5-flash
     const response = await ai.models.generateContent({
       model: 'gemini-1.5-flash',
       contents: mensaje,
       config: {
         systemInstruction: `Eres Deseret, la abeja asistente amigable de la aplicación OrganizaSion del barrio.
-Tu trabajo es responder preguntas de los miembros sobre el calendario y actividades.
+Tu trabajo es responder preguntas de los miembros sobre el calendario y las actividades del barrio.
 
-Esta es la lista actualizada de actividades en la base de datos del barrio en formato JSON:
+Esta es la lista actualizada de actividades en formato JSON:
 ${contextoActividades}
 
 Instrucciones:
-- Usa ÚNICAMENTE los datos provistos en el JSON anterior para responder sobre cantidades, fechas y detalles de las actividades.
-- Si te preguntan por las actividades del "Cuórum de Élderes", "Primaria", "Sociedad de Socorro", etc., filtra los datos por el campo 'organizacion'.
-- Responde de forma breve, clara, amable y con un tono cercano de miembro de la iglesia.`
+- Usa ÚNICAMENTE los datos provistos en el JSON anterior para responder.
+- Si preguntan por "Cuórum de Élderes", "Primaria", etc., filtra los datos por el campo 'organizacion'.
+- Responde de forma amable, clara y breve.`
       }
     });
 
