@@ -125,18 +125,25 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
 
-  // Ruta del Chat protegida para que el cliente NUNCA reciba un error HTTP 500
+ // Ruta del Chat con control de usuario autenticado
   if (pathname === '/api/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
         const parsed = JSON.parse(body || '{}');
-        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '');
+        
+        // Extraer usuario desde el token JWT si está presente
+        const authHeader = req.headers.authorization || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+        const usuario = token ? await getUserFromToken(token) : null;
+
+        // Pasamos el mensaje y el objeto usuario
+        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '', usuario);
         return sendJson(res, 200, { respuesta: respuestaIA });
       } catch (error) {
         console.error('Error en endpoint chat IA:', error);
-        const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
+        const mensajeError = "🐝 Ocurrió un inconveniente al validar la consulta. Por favor, intenta de nuevo.";
         return sendJson(res, 200, { respuesta: mensajeError });
       }
     });
