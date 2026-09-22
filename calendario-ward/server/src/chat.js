@@ -1,174 +1,105 @@
 import { GoogleGenAI } from '@google/genai';
-import { load, save } from './db.js';
+import { load } from './db.js';
 
-// Memoria temporal en servidor para rastrear la fase del agendamiento por usuario
-const borradoresPendientes = {};
-
-export async function procesarPreguntaChat(mensaje, usuario) {
+export async function procesarPreguntaChat(mensaje) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY no configurada.");
 
+    // 1. Cargamos la base de datos JSON
     const db = load();
     const hoy = new Date().toISOString().split('T')[0];
-    const userId = usuario?.id || usuario?.email || 'anonimo';
-    
-    // Normalización para ignorar tildes y mayúsculas
-    const normalizar = (str) => str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : "";
-    const mensajeNorm = normalizar(mensaje);
+    const mensajeMinusculas = mensaje.toLowerCase();
 
-    // --- FASE 2: EL USUARIO SELECCIONÓ O ESCRIBIÓ EL LUGAR ---
-    if (borradoresPendientes[userId] && borradoresPendientes[userId].paso === 'PREGUNTAR_LUGAR') {
-      const borrador = borradoresPendientes[userId];
-      borrador.location = mensaje.replace(/^(en\s+|el\s+|la\s+)/i, '').trim();
-
-      // Si seleccionó Capilla, mostramos el segundo nivel de opciones (Salas)
-      if (normalizar(borrador.location).includes('capilla')) {
-        borrador.paso = 'PREGUNTAR_SALA';
-        
-        return {
-          texto: `📍 **Ubicación:** Capilla seleccionada.\n\n🏛️ **¿En qué sala o espacio de la capilla se realizará?**`,
-          opciones: [
-            "Salón Sacramental",
-            "Salón Cultural",
-            "Oficina del Obispo",
-            "Salón de Primaria",
-            "Cocina / Comedor"
-          ]
-        };
-      }
-
-      // Si fue otro lugar (Casa, Zoom, etc.), guardamos el evento inmediatamente
-      return guardarEventoFinal(db, userId, borrador, borrador.location, usuario);
-    }
-
-    // --- FASE 3: EL USUARIO SELECCIONÓ LA SALA DE LA CAPILLA ---
-    if (borradoresPendientes[userId] && borradoresPendientes[userId].paso === 'PREGUNTAR_SALA') {
-      const borrador = borradoresPendientes[userId];
-      const salaElegida = mensaje.trim();
-      const lugarCompleto = `Capilla - ${salaElegida}`;
-
-      return guardarEventoFinal(db, userId, borrador, lugarCompleto, usuario);
-    }
-
-    // --- FASE 1: INICIO DE SOLICITUD DE AGENDAMIENTO ---
-    if (mensajeNorm.match(/(agendar|crear|programar|anotar|registrar|actividad|reunion|evento)/) && mensajeNorm.match(/(el|la|fecha|mañana|hoy|\d{1,2})/)) {
-      
-      // Permisos ultra flexibles (reconoce Presidencia de Quórum, Obispado, SocSoc, etc.)
-      const rolLimpio = normalizar(usuario?.role || usuario?.cargo || '');
-      const esLider = /(obispo|cuorum|quorum|sociedad|soc_soc|admin|presidente|consejero|secretario|elderes)/.test(rolLimpio);
-
-      if (!esLider) {
-        return "🔒 Lo siento, solo los miembros del Obispado, Presidencias y Secretarios tienen permisos para agendar actividades en el calendario.";
-      }
-
-      const buscaHora = mensaje.match(/(\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm|hrs|horas))/i);
-      const buscaFecha = mensaje.match(/(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}|\d{1,2}\s+de\s+[a-z]+)/i);
-
-      const tituloLimpio = mensaje
-        .replace(/(agendar|crear|programar|anotar|registrar)\s+(una\s+)?(reunion|actividad|evento)\s*/i, '')
-        .replace(/(\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm|hrs|horas))/i, '')
-        .trim();
-
-      const hora = buscaHora ? buscaHora[1].trim() : "19:00";
-      const fecha = buscaFecha ? buscaFecha[1] : hoy;
-
-      // Se guarda el borrador temporal
-      borradoresPendientes[userId] = {
-        title: tituloLimpio || 'Actividad de Organización',
-        date: fecha,
-        time: hora,
-        paso: 'PREGUNTAR_LUGAR'
-      };
-
-      return {
-        texto: `🐝 ¡Excelente! Voy a agendar **"${tituloLimpio}"** para la fecha **${fecha}** a las **${hora}**.\n\n📍 **¿Dónde se llevará a cabo?**`,
-        opciones: [
-          "Capilla del Barrio",
-          "Casa de un miembro",
-          "Oficina del Obispo",
-          "Virtual / Zoom"
-        ]
-      };
-    }
-
-    // --- BÚSQUEDAS REGULARES Y CONSULTAS EN BASE DE DATOS ---
     let contextoDinamico = "";
 
-    if (mensajeNorm.match(/(actividad|calendario|cuorum|sociedad|primaria|jovenes|hoy|manana|semana|mes)/)) {
-      const actividades = db.events.filter(e => e.date >= hoy);
-      contextoDinamico += "\n--- ACTIVIDADES EN CALENDARIO ---\n" + JSON.stringify(actividades);
+    // --- MÓDULO 1: ACTIVIDADES Y CALENDARIO ---
+    if (mensajeMinusculas.match(/(actividad|actividades|calendario|cuórum|cuorum|élderes|elderes|sociedad|primaria|jóvenes|jovenes|hoy|mañana|semana|mes)/)) {
+      const actividades = db.events
+        .filter(e => e.date >= hoy) // Filtramos eventos futuros para máxima velocidad
+        .map(e => {
+          const org = db.organizations.find(o => Number(o.id) === Number(e.organizationId));
+          return { titulo: e.title, fecha: e.date, organizacion: org ? org.name : 'General' };
+        });
+      contextoDinamico += "\n--- ACTIVIDADES PRÓXIMAS EN EL CALENDARIO ---\n" + JSON.stringify(actividades);
     }
 
-    if (mensajeNorm.match(/(aseo|limpieza|capilla|turno)/)) {
-      const turnos = db.cleaningShifts.filter(t => t.date >= hoy);
-      contextoDinamico += "\n--- TURNOS DE ASEO ---\n" + JSON.stringify(turnos);
+    // --- MÓDULO 2: ASEO DEL EDIFICIO ---
+    if (mensajeMinusculas.match(/(aseo|limpieza|limpiar|edificio|capilla|turno)/)) {
+      const turnosAseo = db.cleaningShifts
+        .filter(t => t.date >= hoy)
+        .map(t => {
+           const fam = db.families.find(f => Number(f.id) === Number(t.familyId));
+           return { fecha: t.date, familia: fam ? fam.name : 'Sin asignar' };
+        });
+      contextoDinamico += "\n--- TURNOS DE ASEO ---\n" + JSON.stringify(turnosAseo);
     }
 
-    if (mensajeNorm.match(/(recomendacion|templo|hombres|adultos|hermano|miembro)/)) {
-      const rolUsuario = normalizar(usuario?.role || usuario?.cargo || '');
-      const esAutorizado = /(obispo|cuorum|quorum|sociedad|soc_soc|admin|presidente|consejero|secretario|elderes)/.test(rolUsuario);
-
-      if (esAutorizado) {
-        const directorio = db.directoryMembers.map(m => ({
-            nombre: m.fullName || m.name,
-            recomendacion: m.templeRecommend ? 'Vigente' : 'No vigente'
-        }));
-        contextoDinamico += "\n--- DIRECTORIO DE MIEMBROS ---\n" + JSON.stringify(directorio);
-      } else {
-        return "🔒 Esta información está reservada exclusivamente para los miembros del Obispado y Presidencias.";
-      }
+    // --- MÓDULO 3: RECOMENDACIONES DEL TEMPLO Y DIRECTORIO ---
+    if (mensajeMinusculas.match(/(recomendación|recomendacion|templo|hombres|adultos|hermano|miembro)/)) {
+      const directorio = db.directoryMembers.map(m => ({
+          nombre: m.fullName || m.name,
+          genero: m.sex,
+          fechaNacimiento: m.birthDate,
+          recomendacion: m.templeRecommend ? 'Vigente' : 'No vigente / Desconocida'
+      }));
+      contextoDinamico += "\n--- DIRECTORIO DE MIEMBROS ---\n" + JSON.stringify(directorio);
     }
 
+    // --- MENSAJE GENERAL SI NO HAY COINCIDENCIA ---
     if (contextoDinamico === "") {
-      contextoDinamico = "Responde amablemente. Si el usuario quiere agendar un evento, recuérdale incluir Título, Fecha y Hora.";
+      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo amablemente a consultar sobre las actividades del calendario, los turnos de aseo o las recomendaciones del templo.";
     }
 
+    // 2. Inicializamos la conexión a Google Gemini
     const ai = new GoogleGenAI({ apiKey });
 
+    // 3. Reglas de Comportamiento e Instrucciones del Sistema
+    const systemInstruction = `Eres Deseret, la abeja asistente de la app OrganizaSion.
+Aquí tienes la información disponible de la base de datos:
+${contextoDinamico}
+
+REGLAS DE COMPORTAMIENTO (ESTRICTAS):
+1. El usuario SOLO te está haciendo preguntas de CONSULTA E INFORMACIÓN.
+2. JAMÁS respondas diciendo que faltan permisos, roles o accesos para ver/consultar datos, sin importar si la persona es presidente, miembro o visitante.
+3. Responde directamente la pregunta contando o listando los datos entregados en la información de arriba.
+4. Si te preguntan cuántas actividades tiene una organización (ej: Cuórum de Élderes), cuenta cuántas hay en la lista y muestra sus detalles.
+
+REGLAS DE DISEÑO DE RESPUESTA:
+1. NUNCA respondas con un solo párrafo gigante.
+2. Usa listas con viñetas o números para mostrar actividades, turnos o nombres, un elemento por línea.
+3. Resalta SIEMPRE en **negrita** los títulos de actividades, nombres de personas/familias y las fechas.
+4. Usa emojis amigables (ej: 🐝, 📅, 🧹, 🏛️).
+5. Deja espacios entre líneas para que sea fácil de leer.`;
+
+    // 4. Petición a la API usando el modelo oficial gemini-3.6-flash
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents: mensaje,
-      config: {
-        systemInstruction: `Eres Deseret, la abeja asistente de OrganizaSion.
-Contexto activo: ${contextoDinamico}
-Reglas: Usa listas, viñetas y formato en **negrita**. Emojis amigables (🐝, 📅, 📍).`
-      }
+      config: { systemInstruction }
     });
 
-    return response.text || "🐝 No pude procesar tu consulta.";
+    if (response && response.text) {
+      return response.text;
+    }
+
+    return "🐝 No pude procesar una respuesta en este momento. Intenta de nuevo.";
 
   } catch (error) {
-    console.error("Error en chat.js:", error);
-    return "🐝 Ocurrió un contratiempo temporal al procesar la solicitud. Por favor, reintenta en unos momentos.";
+    console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
+
+    const errStr = JSON.stringify(error || {});
+
+    // Manejo de cuota agotada (Error 429)
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED")) {
+      return "🐝 Alcanzamos el límite temporal de consultas gratuitas a Google. Por favor, espera un minuto y vuelve a intentar.";
+    }
+
+    // Manejo de servidores ocupados (Error 503)
+    if (errStr.includes("503") || errStr.includes("UNAVAILABLE")) {
+      return "🐝 Los servidores de Google AI están experimentando alta demanda. Por favor, reintenta tu pregunta en unos momentos.";
+    }
+
+    return "🐝 Ocurrió un problema temporal al consultar la información. Intenta de nuevo en unos momentos.";
   }
-}
-
-// Función auxiliar para registrar el evento final en la base de datos JSON
-function guardarEventoFinal(db, userId, borrador, lugarFinal, usuario) {
-  const nuevoEvento = {
-    id: Date.now(),
-    title: borrador.title,
-    date: borrador.date,
-    time: borrador.time,
-    location: lugarFinal,
-    description: `Agendado por Deseret IA a petición de ${usuario?.name || 'Líder'}`,
-    organizationId: usuario?.organizationId || 1,
-    createdBy: usuario?.name || 'Deseret IA',
-    createdAt: new Date().toISOString()
-  };
-
-  db.events = db.events || [];
-  db.events.push(nuevoEvento);
-  save(db);
-
-  delete borradoresPendientes[userId];
-
-  return `✅ **¡Evento agendado exitosamente en el Calendario!**\n\n` +
-         `📅 **Actividad:** ${nuevoEvento.title}\n` +
-         `📆 **Fecha:** ${nuevoEvento.date}\n` +
-         `⏰ **Hora:** ${nuevoEvento.time}\n` +
-         `📍 **Lugar exacto:** ${nuevoEvento.location}\n` +
-         `👤 **Registrado por:** ${nuevoEvento.createdBy}\n\n` +
-         `*El evento ya está visible para todos en el calendario del barrio.*`;
 }
