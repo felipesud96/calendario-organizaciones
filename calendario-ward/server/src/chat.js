@@ -6,7 +6,7 @@ export async function procesarPreguntaChat(mensaje) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY no configurada.");
 
-    // 1. Consultamos la base de datos real
+    // 1. Consultamos la base de datos de actividades del barrio
     const db = await getDb();
     const actividades = await db.all(`
       SELECT a.id, a.titulo, a.fecha, a.hora_inicio, a.lugar, o.nombre AS organizacion
@@ -19,9 +19,9 @@ export async function procesarPreguntaChat(mensaje) {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // 2. Usamos el modelo activo gemini-3.6-flash
+    // 2. Usamos el alias de modelo recomendado 'gemini-flash-latest'
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-flash-latest',
       contents: mensaje,
       config: {
         systemInstruction: `Eres Deseret, la abeja asistente amigable de la aplicación OrganizaSion del barrio.
