@@ -6,7 +6,7 @@ export async function procesarPreguntaChat(mensaje) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY no configurada.");
 
-    // 1. Cargamos la base de datos JSON de tu aplicación usando tu propia función
+    // 1. Cargamos la base de datos JSON de tu aplicación
     const db = load();
     
     // 2. Extraemos y combinamos manualmente las actividades (events) y las organizaciones
@@ -23,11 +23,11 @@ export async function procesarPreguntaChat(mensaje) {
 
     const contextoActividades = JSON.stringify(actividadesFormateadas);
 
-    // 3. Inicializamos Gemini con el modelo oficial
     const ai = new GoogleGenAI({ apiKey });
 
+    // 3. ¡AQUÍ ESTÁ LA SOLUCIÓN FINAL! El modelo que la API nos pidió:
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3.6-flash',
       contents: mensaje,
       config: {
         systemInstruction: `Eres Deseret, la abeja asistente amigable de la aplicación OrganizaSion del barrio.
