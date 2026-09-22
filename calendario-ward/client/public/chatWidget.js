@@ -1,5 +1,53 @@
 export function initChatWidget() {
   if (!document.getElementById('organiza-chat-widget')) {
+
+    // 1. Detectar rol del usuario desde localStorage o JWT
+    const obtenerRolUsuario = () => {
+      try {
+        const userJson = localStorage.getItem('user');
+        if (userJson) {
+          const user = JSON.parse(userJson);
+          return (user.role || user.cargo || '').toLowerCase();
+        }
+        // Si el rol viene codificado dentro del token JWT
+        const token = localStorage.getItem('token');
+        if (token) {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          return (payload.role || payload.cargo || '').toLowerCase();
+        }
+      } catch (e) {
+        console.warn('No se pudo leer el rol del usuario:', e);
+      }
+      return '';
+    };
+
+    const rol = obtenerRolUsuario();
+
+    // Verificamos si el rol incluye permisos para ver recomendaciones
+    const esAutorizadoRecomendaciones = 
+      rol.includes('obispo') || 
+      rol.includes('obispado') || 
+      rol.includes('presidente_cuorum') || 
+      rol.includes('presidente cuorum') || 
+      rol.includes('quorum') || 
+      rol.includes('presidenta_soc_soc') || 
+      rol.includes('sociedad de socorro') ||
+      rol.includes('soc_soc') ||
+      rol.includes('admin');
+
+    // 2. Construir la lista de sugerencias dinámicamente
+    let chipsHTML = `
+      <button class="chat-chip-btn" data-query="¿Qué actividades hay esta semana?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">📅 ¿Qué actividades hay esta semana?</button>
+      <button class="chat-chip-btn" data-query="¿A quién le toca el turno de aseo de la capilla?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🧹 ¿A quién le toca el turno de aseo?</button>
+    `;
+
+    // SOLO agregamos la sugerencia de recomendaciones si el usuario tiene el rol permitido
+    if (esAutorizadoRecomendaciones) {
+      chipsHTML += `
+        <button class="chat-chip-btn" data-query="¿Quiénes tienen recomendación del templo vigente?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🏛️ ¿Quiénes tienen recomendación vigente?</button>
+      `;
+    }
+
     const chatHTML = `
       <div id="organiza-chat-widget">
         <div id="chat-window" style="display: none;">
@@ -10,11 +58,9 @@ export function initChatWidget() {
           <div id="chat-messages">
             <div class="msg bot">¡Hola! Soy Deseret, la abeja asistente de OrganizaSion. ¿En qué te puedo ayudar hoy?</div>
             
-            <!-- Sugerencias integradas dentro del cuerpo del chat como listado -->
+            <!-- Listado dinámico de sugerencias -->
             <div id="chat-suggestions-list" style="display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding-left: 4px;">
-              <button class="chat-chip-btn" data-query="¿Qué actividades hay esta semana?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">📅 ¿Qué actividades hay esta semana?</button>
-              <button class="chat-chip-btn" data-query="¿A quién le toca el turno de aseo de la capilla?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🧹 ¿A quién le toca el turno de aseo?</button>
-              <button class="chat-chip-btn" data-query="¿Quiénes tienen recomendación del templo vigente?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🏛️ ¿Quiénes tienen recomendación vigente?</button>
+              ${chipsHTML}
             </div>
           </div>
 
@@ -45,7 +91,6 @@ export function initChatWidget() {
       messagesDiv.innerHTML += `<div class="msg user">${text}</div>`;
       if (!textoPersonalizado) input.value = '';
 
-      // Ocultamos el listado inicial de sugerencias
       const suggestionsList = document.getElementById('chat-suggestions-list');
       if (suggestionsList) suggestionsList.style.display = 'none';
 
@@ -53,7 +98,7 @@ export function initChatWidget() {
       messagesDiv.innerHTML += `<div id="${loadingId}" class="msg bot">Pensando... 🐝</div>`;
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-    try {
+      try {
         const token = localStorage.getItem('token') || '';
         const response = await fetch('/api/chat', { 
           method: 'POST',
@@ -84,7 +129,6 @@ export function initChatWidget() {
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     };
 
-    // Evento para los botones de sugerencia del listado
     document.addEventListener('click', (e) => {
       if (e.target && e.target.classList.contains('chat-chip-btn')) {
         const query = e.target.getAttribute('data-query');
