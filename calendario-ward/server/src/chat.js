@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { load, save } from './db.js';
 
-// Memoria temporal para rastrear el progreso de agendamiento
+// Memoria temporal en servidor para rastrear la fase del agendamiento por usuario
 const borradoresPendientes = {};
 
 export async function procesarPreguntaChat(mensaje, usuario) {
@@ -15,12 +15,12 @@ export async function procesarPreguntaChat(mensaje, usuario) {
     const normalizar = (str) => str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : "";
     const mensajeNorm = normalizar(mensaje);
 
-    // --- FASE 2: SI YA HABÍAMOS PREGUNTADO POR EL LUGAR Y AHORA ELIGE/ESCRIBE EL LUGAR ---
+    // --- FASE 2: EL USUARIO SELECCIONÓ O ESCRIBIÓ EL LUGAR ---
     if (borradoresPendientes[userId] && borradoresPendientes[userId].paso === 'PREGUNTAR_LUGAR') {
       const borrador = borradoresPendientes[userId];
       borrador.location = mensaje.replace(/^(en\s+|el\s+|la\s+)/i, '').trim();
 
-      // Si seleccionó "Capilla", le preguntamos la sala específica mediante botones
+      // Si seleccionó la Capilla, mostramos el segundo nivel de botones (Salas)
       if (normalizar(borrador.location).includes('capilla')) {
         borrador.paso = 'PREGUNTAR_SALA';
         
@@ -36,11 +36,11 @@ export async function procesarPreguntaChat(mensaje, usuario) {
         };
       }
 
-      // Si fue otro lugar (ej: Casa, Zoom), completamos el registro directamente
+      // Si fue otro lugar (Casa, Zoom, etc.), guardamos el evento inmediatamente
       return guardarEventoFinal(db, userId, borrador, borrador.location, usuario);
     }
 
-    // --- FASE 3: SI HABÍAMOS PREGUNTADO LA SALA DE LA CAPILLA ---
+    // --- FASE 3: EL USUARIO SELECCIONÓ LA SALA DE LA CAPILLA ---
     if (borradoresPendientes[userId] && borradoresPendientes[userId].paso === 'PREGUNTAR_SALA') {
       const borrador = borradoresPendientes[userId];
       const salaElegida = mensaje.trim();
@@ -49,14 +49,14 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       return guardarEventoFinal(db, userId, borrador, lugarCompleto, usuario);
     }
 
-    // --- FASE 1: INICIO DE LA SOLICITUD DE AGENDAMIENTO ---
+    // --- FASE 1: INICIO DE SOLICITUD DE AGENDAMIENTO ---
     if (mensajeNorm.match(/(agendar|crear|programar|anotar|registrar|actividad|reunion|evento)/) && mensajeNorm.match(/(el|la|fecha|mañana|hoy|\d{1,2})/)) {
       
       const rol = normalizar(usuario?.role || usuario?.cargo || '');
       const esLider = /(obispo|cuorum|sociedad|admin|presidente|secretario)/.test(rol);
 
       if (!esLider) {
-        return "🔒 Lo siento, solo los miembros del Obispado, Presidencias y Secretarios tienen permisos para agendar actividades.";
+        return "🔒 Lo siento, solo los miembros del Obispado, Presidencias y Secretarios tienen permisos para agendar actividades en el calendario.";
       }
 
       const buscaHora = mensaje.match(/(\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm|hrs|horas))/i);
@@ -70,7 +70,7 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       const hora = buscaHora ? buscaHora[1].trim() : "19:00";
       const fecha = buscaFecha ? buscaFecha[1] : hoy;
 
-      // Guardamos borrador en paso de PREGUNTAR_LUGAR
+      // Creamos el borrador e iniciamos la pregunta con botones de opciones
       borradoresPendientes[userId] = {
         title: tituloLimpio || 'Actividad de Organización',
         date: fecha,
@@ -78,7 +78,6 @@ export async function procesarPreguntaChat(mensaje, usuario) {
         paso: 'PREGUNTAR_LUGAR'
       };
 
-      // Retornamos la pregunta junto con las OPCIONES EN BOTONES
       return {
         texto: `🐝 ¡Excelente! Voy a agendar **"${tituloLimpio}"** para la fecha **${fecha}** a las **${hora}**.\n\n📍 **¿Dónde se llevará a cabo?**`,
         opciones: [
@@ -90,32 +89,59 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       };
     }
 
-    // --- CONSULTAS CONVENCIONALES ---
+    // --- CONSULTAS REGULARES (Búsquedas en Base de Datos) ---
     let contextoDinamico = "";
+
     if (mensajeNorm.match(/(actividad|calendario|cuorum|sociedad|primaria|jovenes|hoy|manana|semana|mes)/)) {
-      contextoDinamico += "\n--- ACTIVIDADES EN CALENDARIO ---\n" + JSON.stringify(db.events.filter(e => e.date >= hoy));
+      const actividades = db.events.filter(e => e.date >= hoy);
+      contextoDinamico += "\n--- ACTIVIDADES EN CALENDARIO ---\n" + JSON.stringify(actividades);
+    }
+
+    if (mensajeNorm.match(/(aseo|limpieza|capilla|turno)/)) {
+      const turnos = db.cleaningShifts.filter(t => t.date >= hoy);
+      contextoDinamico += "\n--- TURNOS DE ASEO ---\n" + JSON.stringify(turnos);
+    }
+
+    if (mensajeNorm.match(/(recomendacion|templo|hombres|adultos|hermano|miembro)/)) {
+      const rolUsuario = normalizar(usuario?.role || usuario?.cargo || '');
+      const esAutorizado = /(obispo|cuorum|sociedad|admin|presidente)/.test(rolUsuario);
+
+      if (esAutorizado) {
+        const directorio = db.directoryMembers.map(m => ({
+            nombre: m.fullName || m.name,
+            recomendacion: m.templeRecommend ? 'Vigente' : 'No vigente'
+        }));
+        contextoDinamico += "\n--- DIRECTORIO DE MIEMBROS ---\n" + JSON.stringify(directorio);
+      } else {
+        return "🔒 Esta información está reservada exclusivamente para los miembros del Obispado y Presidencias.";
+      }
+    }
+
+    if (contextoDinamico === "") {
+      contextoDinamico = "Responde amablemente. Si el usuario quiere agendar un evento, recuérdale incluir Título, Fecha y Hora.";
     }
 
     const ai = new GoogleGenAI({ apiKey });
+
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents: mensaje,
       config: {
         systemInstruction: `Eres Deseret, la abeja asistente de OrganizaSion.
-Contexto: ${contextoDinamico}
-Sé concisa, usa listas y formato **negrita** con emojis.`
+Contexto activo: ${contextoDinamico}
+Reglas: Usa listas, viñetas y formato en **negrita**. Emojis amigables (🐝, 📅, 📍).`
       }
     });
 
     return response.text || "🐝 No pude procesar tu consulta.";
 
   } catch (error) {
-    console.error("Error en procesarPreguntaChat:", error);
-    return "🐝 Ocurrió un contratiempo al procesar la solicitud. Intenta de nuevo.";
+    console.error("Error en chat.js:", error);
+    return "🐝 Ocurrió un contratiempo temporal al procesar la solicitud. Por favor, reintenta en unos momentos.";
   }
 }
 
-// Función auxiliar para registrar el evento final en JSON
+// Función auxiliar que guarda el evento en la base de datos JSON
 function guardarEventoFinal(db, userId, borrador, lugarFinal, usuario) {
   const nuevoEvento = {
     id: Date.now(),
@@ -141,5 +167,5 @@ function guardarEventoFinal(db, userId, borrador, lugarFinal, usuario) {
          `⏰ **Hora:** ${nuevoEvento.time}\n` +
          `📍 **Lugar exacto:** ${nuevoEvento.location}\n` +
          `👤 **Registrado por:** ${nuevoEvento.createdBy}\n\n` +
-         `*El evento ya está visible en el calendario del barrio.*`;
+         `*El evento ya está visible para todos en el calendario del barrio.*`;
 }
