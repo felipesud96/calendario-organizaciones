@@ -1,17 +1,21 @@
 export function initChatWidget() {
   const chatHTML = `
     <div id="organiza-chat-widget">
-      <button id="chat-toggle-btn">💬 Asistente IA</button>
+      <!-- Botón circular con la abeja -->
+      <button id="chat-toggle-btn">
+        <img src="./logo-bee.png" alt="Deseret IA" />
+      </button>
+      
       <div id="chat-window" style="display: none;">
         <div id="chat-header">
-          <span>IA OrganizaSion</span>
+          <span>🐝 Deseret (IA)</span>
           <button id="chat-close-btn">✕</button>
         </div>
         <div id="chat-messages">
-          <div class="msg bot">¡Hola! Soy el asistente de OrganizaSion. ¿Qué deseas saber sobre el calendario?</div>
+          <div class="msg bot">¡Hola! Soy Deseret, la abeja asistente de OrganizaSion. ¿En qué te puedo ayudar hoy?</div>
         </div>
         <div id="chat-input-area">
-          <input type="text" id="chat-input" placeholder="Escribe tu pregunta..." />
+          <input type="text" id="chat-input" placeholder="Pregunta algo..." />
           <button id="chat-send-btn">Enviar</button>
         </div>
       </div>
@@ -24,7 +28,7 @@ export function initChatWidget() {
   
   const toggleChat = () => {
     chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
-    toggleBtn.style.display = chatWindow.style.display === 'none' ? 'block' : 'none';
+    toggleBtn.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
   };
 
   toggleBtn.addEventListener('click', toggleChat);
@@ -44,7 +48,6 @@ export function initChatWidget() {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
     try {
-      // Llamamos a tu servidor que acabas de desplegar
       const response = await fetch('/api/chat', { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
