@@ -49,12 +49,7 @@ export async function procesarPreguntaChat(mensaje) {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // 2. Modelo soportado único
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
-      contents: mensaje,
-      config: {
-        systemInstruction: `Eres Deseret, la abeja asistente de la app OrganizaSion.
+    const systemInstruction = `Eres Deseret, la abeja asistente de la app OrganizaSion.
 Aquí tienes la información extraída de la base de datos:
 ${contextoDinamico}
 
@@ -65,14 +60,39 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
 4. Usa emojis amigables (ej: 📅, 🧹, 🏛️, 🐝).
 5. Deja un espacio en blanco antes y después de tu lista.
 6. Para "hombres adultos con recomendación", filtra género 'M', mayores de 18 años y recomendación 'Vigente'.
-7. Sé clara, directa y estructurada visualmente.`
-      }
-    });
+7. Sé clara, directa y estructurada visualmente.`;
 
-    return response.text;
+    // 2. Ejecución con reintentos para mitigar el error 503 por saturación temporal
+    let intentos = 0;
+    const maxIntentos = 3;
+
+    while (intentos < maxIntentos) {
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.6-flash',
+          contents: mensaje,
+          config: { systemInstruction }
+        });
+
+        if (response && response.text) {
+          return response.text;
+        }
+      } catch (err) {
+        intentos++;
+        console.warn(`Intento ${intentos} falló con error: ${err.message}`);
+        
+        // Si no es el último intento, esperar 1.5 segundos antes de reintentar
+        if (intentos < maxIntentos) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        } else {
+          throw err;
+        }
+      }
+    }
 
   } catch (error) {
     console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
-    return "🐝 Lo siento, el servicio de IA de Google experimentó una interrupción temporal (Error 503). Por favor, intenta tu consulta de nuevo en unos segundos.";
+    // Retornamos un mensaje de contingencia en lugar de lanzar la excepción al servidor
+    return "🐝 Los servidores de Google Gemini están experimentando alta demanda en este momento. Por favor, intenta enviar tu pregunta nuevamente en unos segundos.";
   }
 }
