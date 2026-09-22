@@ -1,5 +1,4 @@
 export function initChatWidget() {
-  // 1. Inyectamos el widget si no existe en el DOM
   if (!document.getElementById('organiza-chat-widget')) {
     const chatHTML = `
       <div id="organiza-chat-widget">
@@ -10,13 +9,13 @@ export function initChatWidget() {
           </div>
           <div id="chat-messages">
             <div class="msg bot">¡Hola! Soy Deseret, la abeja asistente de OrganizaSion. ¿En qué te puedo ayudar hoy?</div>
-          </div>
-          
-          <!-- Chips de sugerencias rápidas -->
-          <div id="chat-suggestions" style="padding: 6px 10px; display: flex; gap: 6px; overflow-x: auto; background: #f0f2f5; border-top: 1px solid #e4e6eb;">
-            <button class="chat-chip" data-query="¿Qué actividades hay esta semana?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">📅 Actividades esta semana</button>
-            <button class="chat-chip" data-query="¿A quién le toca el turno de aseo de la capilla?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">🧹 Turnos de aseo</button>
-            <button class="chat-chip" data-query="¿Quiénes tienen recomendación del templo vigente?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">🏛️ Recomendaciones templo</button>
+            
+            <!-- Sugerencias integradas dentro del cuerpo del chat como listado -->
+            <div id="chat-suggestions-list" style="display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding-left: 4px;">
+              <button class="chat-chip-btn" data-query="¿Qué actividades hay esta semana?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">📅 ¿Qué actividades hay esta semana?</button>
+              <button class="chat-chip-btn" data-query="¿A quién le toca el turno de aseo de la capilla?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🧹 ¿A quién le toca el turno de aseo?</button>
+              <button class="chat-chip-btn" data-query="¿Quiénes tienen recomendación del templo vigente?" style="text-align: left; background: #f0f7ff; border: 1px solid #0056b3; color: #0056b3; border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background 0.2s;">🏛️ ¿Quiénes tienen recomendación vigente?</button>
+            </div>
           </div>
 
           <div id="chat-input-area">
@@ -37,7 +36,6 @@ export function initChatWidget() {
 
     closeBtn.addEventListener('click', toggleChat);
 
-    // Lógica para enviar mensajes
     const sendMessage = async (textoPersonalizado = null) => {
       const input = document.getElementById('chat-input');
       const text = textoPersonalizado || input.value.trim();
@@ -47,9 +45,9 @@ export function initChatWidget() {
       messagesDiv.innerHTML += `<div class="msg user">${text}</div>`;
       if (!textoPersonalizado) input.value = '';
 
-      // Ocultar sugerencias rápidas tras la primera pregunta para ahorrar espacio
-      const suggestionsDiv = document.getElementById('chat-suggestions');
-      if (suggestionsDiv) suggestionsDiv.style.display = 'none';
+      // Ocultamos el listado inicial de sugerencias
+      const suggestionsList = document.getElementById('chat-suggestions-list');
+      if (suggestionsList) suggestionsList.style.display = 'none';
 
       const loadingId = 'loading-' + Date.now();
       messagesDiv.innerHTML += `<div id="${loadingId}" class="msg bot">Pensando... 🐝</div>`;
@@ -68,7 +66,6 @@ export function initChatWidget() {
 
         const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
 
-        // Parser con soporte de negritas, saltos de línea y viñetas
         const respuestaFormatted = respuestaTexto
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
           .replace(/^\*\s(.*)/gm, '• $1')
@@ -83,12 +80,12 @@ export function initChatWidget() {
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     };
 
-    // Evento para los botones de sugerencias rápidas (Chips)
-    document.querySelectorAll('.chat-chip').forEach(button => {
-      button.addEventListener('click', (e) => {
+    // Evento para los botones de sugerencia del listado
+    document.addEventListener('click', (e) => {
+      if (e.target && e.target.classList.contains('chat-chip-btn')) {
         const query = e.target.getAttribute('data-query');
         sendMessage(query);
-      });
+      }
     });
 
     document.getElementById('chat-send-btn').addEventListener('click', () => sendMessage());
@@ -97,7 +94,6 @@ export function initChatWidget() {
     });
   }
 
-  // 2. Observer para mantener la abeja del header conectada
   const asociarBotonHeader = () => {
     const toggleChat = () => {
       const windowEl = document.getElementById('chat-window');
