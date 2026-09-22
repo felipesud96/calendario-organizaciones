@@ -1,18 +1,78 @@
 import { GoogleGenAI } from '@google/genai';
-import { load } from './db.js';
+import Groq from 'groq-sdk';
+import { load, save } from './db.js';
 
-// Cache local en memoria (Punto 15)
+// Cache local en memoria
 const cacheRespuestas = new Map();
 
 export async function procesarPreguntaChat(mensaje, historial = []) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
     const db = load();
     const hoyObj = new Date();
     const hoy = hoyObj.toISOString().split('T')[0];
     const mensajeMinusculas = mensaje.toLowerCase().trim();
 
-    // --- PUNTO 15: VERIFICAR CACHE LOCAL ---
+    // ------------------------------------------------------------------------
+    // MÓDULO DE AGENDAMIENTO AUTOMÁTICO (CREAR ACTIVIDADES / REUNIONES)
+    // ------------------------------------------------------------------------
+    if (mensajeMinusculas.match(/(agendar|crear|programar|añadir|agregar)\s+(actividad|reunión|reunion|evento)/)) {
+      
+      // 1. Extraer título limpiecito
+      let titulo = mensaje
+        .replace(/(agendar|crear|programar|añadir|agregar)\s+(una|un|la|el)?\s*(actividad|reunión|reunion|evento)?\s*(de|para)?/i, '')
+        .trim();
+      
+      if (!titulo) titulo = "Nueva Actividad / Reunión";
+
+      // 2. Extracción simple de fecha (busca formato AAAA-MM-DD o asume hoy/próximos días)
+      let fechaEvento = hoy;
+      const fechaMatch = mensaje.match(/\d{4}-\d{2}-\d{2}/);
+      
+      if (fechaMatch) {
+        fechaEvento = fechaMatch[0];
+      } else if (mensajeMinusculas.includes('mañana') || mensajeMinusculas.includes('manana')) {
+        const mananaObj = new Date(hoyObj);
+        mananaObj.setDate(hoyObj.getDate() + 1);
+        fechaEvento = mananaObj.toISOString().split('T')[0];
+      }
+
+      // 3. Identificar organización (si la menciona)
+      let orgId = 1; // General por defecto
+      if (mensajeMinusculas.includes('élderes') || mensajeMinusculas.includes('elderes') || mensajeMinusculas.includes('cuórum') || mensajeMinusculas.includes('cuorum')) {
+        const org = db.organizations.find(o => o.name.toLowerCase().includes('élderes') || o.name.toLowerCase().includes('elderes'));
+        if (org) orgId = org.id;
+      } else if (mensajeMinusculas.includes('sociedad') || mensajeMinusculas.includes('socorro')) {
+        const org = db.organizations.find(o => o.name.toLowerCase().includes('socorro'));
+        if (org) orgId = org.id;
+      } else if (mensajeMinusculas.includes('jóvenes') || mensajeMinusculas.includes('jovenes')) {
+        const org = db.organizations.find(o => o.name.toLowerCase().includes('jóvenes') || o.name.toLowerCase().includes('jovenes'));
+        if (org) orgId = org.id;
+      }
+
+      // 4. Crear el objeto e insertarlo en db.json
+      const nuevoEvento = {
+        id: Date.now(),
+        title: titulo.charAt(0).toUpperCase() + titulo.slice(1),
+        date: fechaEvento,
+        organizationId: Number(orgId)
+      };
+
+      if (!db.events) db.events = [];
+      db.events.push(nuevoEvento);
+      save(db); // Guardar cambios persistentes en la base de datos
+
+      // Invalidar caché previo para que la nueva actividad aparezca de inmediato en consultas
+      cacheRespuestas.clear();
+
+      return `✅ **¡Actividad agendada con éxito en la base de datos!**\n\n` +
+             `• **Título:** ${nuevoEvento.title}\n` +
+             `• **Fecha:** ${nuevoEvento.date}\n` +
+             `• **Estado:** Guardada en el calendario de OrganizaSion 🐝`;
+    }
+
+    // ------------------------------------------------------------------------
+    // MÓDULO DE LECTURA: CACHÉ LOCAL (<10 ms)
+    // ------------------------------------------------------------------------
     if (cacheRespuestas.has(mensajeMinusculas)) {
       console.log('⚡ Respuesta entregada desde caché local');
       return cacheRespuestas.get(mensajeMinusculas);
@@ -21,11 +81,10 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
     let contextoDinamico = "";
     let respuestaLocalFallback = "";
 
-    // --- PUNTO 6 y 7: CALENDARIO Y RANGOS TEMPORALES / ORGANIZACIONES COMBINADAS ---
+    // Módulo Actividades / Calendario
     if (mensajeMinusculas.match(/(actividad|actividades|calendario|cuórum|cuorum|élderes|elderes|sociedad|primaria|jóvenes|jovenes|fin de semana|mes|próximo|proximo)/)) {
-      let filtroEventos = db.events.filter(e => e.date >= hoy);
+      let filtroEventos = (db.events || []).filter(e => e.date >= hoy);
 
-      // Rango relativo: Fin de semana
       if (mensajeMinusculas.includes('fin de semana')) {
         const sabado = new Date(hoyObj);
         sabado.setDate(hoyObj.getDate() + ((6 - hoyObj.getDay() + 7) % 7));
@@ -38,13 +97,12 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
       }
 
       const actividades = filtroEventos.map(e => {
-        const org = db.organizations.find(o => Number(o.id) === Number(e.organizationId));
+        const org = (db.organizations || []).find(o => Number(o.id) === Number(e.organizationId));
         return { titulo: e.title, fecha: e.date, organizacion: org ? org.name : 'General' };
       });
 
-      contextoDinamico += "\n--- ACTIVIDADES ENCONTRADAS ---\n" + JSON.stringify(actividades);
+      contextoDinamico += "\n--- ACTIVIDADES ENCONTRADAS EN EL CALENDARIO ---\n" + JSON.stringify(actividades);
 
-      // Construir respuesta para Fallback Offline (Punto 16)
       if (actividades.length > 0) {
         respuestaLocalFallback = "📅 **Actividades encontradas en el calendario:**\n\n" + 
           actividades.map(a => `• **${a.titulo}** (${a.organizacion}) - Fecha: **${a.fecha}**`).join("\n");
@@ -53,12 +111,12 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
       }
     }
 
-    // --- PUNTO 9: BÚSQUEDA DE ASEO POR FAMILIA O TURNO ---
+    // Módulo Aseo
     if (mensajeMinusculas.match(/(aseo|limpieza|limpiar|edificio|capilla|turno|familia)/)) {
-      const turnosAseo = db.cleaningShifts
+      const turnosAseo = (db.cleaningShifts || [])
         .filter(t => t.date >= hoy)
         .map(t => {
-           const fam = db.families.find(f => Number(f.id) === Number(t.familyId));
+           const fam = (db.families || []).find(f => Number(f.id) === Number(t.familyId));
            return { fecha: t.date, familia: fam ? fam.name : 'Sin asignar' };
         });
 
@@ -70,16 +128,17 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
       }
     }
 
-    // --- PUNTO 12 y 13: MÉTRICAS DE RECOMENDACIÓN Y GRUPOS DE EDAD / DIRECTORIO ---
+    // Módulo Directorio y Templo
     if (mensajeMinusculas.match(/(recomendación|recomendacion|templo|porcentaje|cuántos|cuantos|jóvenes|jovenes|adultos|cumpleaños|miembros)/)) {
-      const totalMiembros = db.directoryMembers.length;
-      const conRecomendacion = db.directoryMembers.filter(m => m.templeRecommend).length;
+      const miembros = db.directoryMembers || [];
+      const totalMiembros = miembros.length;
+      const conRecomendacion = miembros.filter(m => m.templeRecommend).length;
       const porcentajeVigente = totalMiembros > 0 ? Math.round((conRecomendacion / totalMiembros) * 100) : 0;
 
       const metricas = {
         totalMiembros,
         porcentajeConRecomendacionVigente: `${porcentajeVigente}%`,
-        miembrosDetalle: db.directoryMembers.map(m => ({
+        miembrosDetalle: miembros.map(m => ({
           nombre: m.fullName || m.name,
           genero: m.sex,
           fechaNacimiento: m.birthDate,
@@ -96,16 +155,11 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
     }
 
     if (contextoDinamico === "") {
-      contextoDinamico = "El usuario está saludando o haciendo una consulta general. Invítalo a consultar sobre actividades, aseo o información del barrio.";
-      respuestaLocalFallback = "🐝 ¡Hola! Puedo ayudarte a consultar las actividades del calendario, los turnos de aseo del edificio o las recomendaciones del templo. ¿Qué te gustaría saber?";
+      contextoDinamico = "El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades, aseo o información del barrio.";
+      respuestaLocalFallback = "🐝 ¡Hola! Puedo ayudarte a consultar o **agendar** actividades en el calendario, revisar los turnos de aseo o verificar recomendaciones del templo. ¿Qué te gustaría hacer?";
     }
 
-    // --- INTENTO CON LA API DE GOOGLE GEMINI ---
-    if (apiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-
-        const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion.
+    const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion.
 Aquí tienes la información extraída de la base de datos:
 ${contextoDinamico}
 
@@ -115,6 +169,13 @@ REGLAS DE COMPORTAMIENTO:
 3. Pon en **negrita** los títulos de actividades, nombres de familias y fechas.
 4. Usa emojis amigables (🐝, 📅, 🧹, 🏛️).`;
 
+    // ------------------------------------------------------------------------
+    // CAPA 1: GEMINI 3.6 FLASH
+    // ------------------------------------------------------------------------
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (geminiKey) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
         const response = await ai.models.generateContent({
           model: 'gemini-3.6-flash',
           contents: mensaje,
@@ -122,25 +183,55 @@ REGLAS DE COMPORTAMIENTO:
         });
 
         if (response && response.text) {
-          const resultadoIA = response.text;
-          // Guardar en caché para futuras consultas idénticas (Punto 15)
-          cacheRespuestas.set(mensajeMinusculas, resultadoIA);
-          return resultadoIA;
+          console.log('🤖 Respuesta generada exitosamente con Gemini 3.6 Flash');
+          cacheRespuestas.set(mensajeMinusculas, response.text);
+          return response.text;
         }
-      } catch (errGoogle) {
-        console.warn("⚠️ API de Google no disponible o saturada. Usando Fallback Offline (Punto 16)...");
+      } catch (errGemini) {
+        console.warn('⚠️ Gemini falló. Pasando a Groq...');
       }
     }
 
-    // --- PUNTO 16: FALLBACK OFFLINE / RESPUESTA DESDE DB.JSON EN CASO DE ERROR ---
+    // ------------------------------------------------------------------------
+    // CAPA 2: RESPALDO CON GROQ (LLaMA 3.3 70B)
+    // ------------------------------------------------------------------------
+    const groqKey = process.env.GROQ_API_KEY;
+    if (groqKey) {
+      try {
+        const groq = new Groq({ apiKey: groqKey });
+        const completion = await groq.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: mensaje }
+          ],
+          temperature: 0.5,
+          max_tokens: 1024
+        });
+
+        const respuestaGroq = completion.choices[0]?.message?.content;
+        if (respuestaGroq) {
+          console.log('🚀 Respuesta generada exitosamente con Groq');
+          cacheRespuestas.set(mensajeMinusculas, respuestaGroq);
+          return respuestaGroq;
+        }
+      } catch (errGroq) {
+        console.warn('⚠️ Groq falló. Usando Fallback Local...');
+      }
+    }
+
+    // ------------------------------------------------------------------------
+    // CAPA 3: FALLBACK OFFLINE LOCAL
+    // ------------------------------------------------------------------------
     if (respuestaLocalFallback) {
+      console.log('🛡️ Respuesta entregada por Fallback Local');
       return respuestaLocalFallback;
     }
 
     return "🐝 No pude procesar tu solicitud en este momento. Por favor intenta de nuevo.";
 
   } catch (error) {
-    console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
-    return "🐝 Ocurrió un inconveniente al consultar la información. Por favor reintenta en unos instantes.";
+    console.error("DETALLE DEL ERROR GENERAL:", error);
+    return "🐝 Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.";
   }
 }
