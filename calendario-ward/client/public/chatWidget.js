@@ -1,5 +1,5 @@
 export function initChatWidget() {
-  // 1. Inyectamos la ventana desplegable del chat si no existe
+  // 1. Inyectamos el widget si no existe en el DOM
   if (!document.getElementById('organiza-chat-widget')) {
     const chatHTML = `
       <div id="organiza-chat-widget">
@@ -11,6 +11,14 @@ export function initChatWidget() {
           <div id="chat-messages">
             <div class="msg bot">¡Hola! Soy Deseret, la abeja asistente de OrganizaSion. ¿En qué te puedo ayudar hoy?</div>
           </div>
+          
+          <!-- Chips de sugerencias rápidas -->
+          <div id="chat-suggestions" style="padding: 6px 10px; display: flex; gap: 6px; overflow-x: auto; background: #f0f2f5; border-top: 1px solid #e4e6eb;">
+            <button class="chat-chip" data-query="¿Qué actividades hay esta semana?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">📅 Actividades esta semana</button>
+            <button class="chat-chip" data-query="¿A quién le toca el turno de aseo de la capilla?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">🧹 Turnos de aseo</button>
+            <button class="chat-chip" data-query="¿Quiénes tienen recomendación del templo vigente?" style="white-space: nowrap; background: #ffffff; border: 1px solid #0056b3; color: #0056b3; border-radius: 16px; padding: 4px 10px; font-size: 11.5px; cursor: pointer; font-weight: 500;">🏛️ Recomendaciones templo</button>
+          </div>
+
           <div id="chat-input-area">
             <input type="text" id="chat-input" placeholder="Pregunta algo..." />
             <button id="chat-send-btn">Enviar</button>
@@ -30,15 +38,19 @@ export function initChatWidget() {
     closeBtn.addEventListener('click', toggleChat);
 
     // Lógica para enviar mensajes
-    const sendMessage = async () => {
+    const sendMessage = async (textoPersonalizado = null) => {
       const input = document.getElementById('chat-input');
-      const text = input.value.trim();
+      const text = textoPersonalizado || input.value.trim();
       if (!text) return;
 
       const messagesDiv = document.getElementById('chat-messages');
       messagesDiv.innerHTML += `<div class="msg user">${text}</div>`;
-      input.value = '';
-      
+      if (!textoPersonalizado) input.value = '';
+
+      // Ocultar sugerencias rápidas tras la primera pregunta para ahorrar espacio
+      const suggestionsDiv = document.getElementById('chat-suggestions');
+      if (suggestionsDiv) suggestionsDiv.style.display = 'none';
+
       const loadingId = 'loading-' + Date.now();
       messagesDiv.innerHTML += `<div id="${loadingId}" class="msg bot">Pensando... 🐝</div>`;
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -56,9 +68,10 @@ export function initChatWidget() {
 
         const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
 
-        // Formato visual: negritas y saltos de línea
+        // Parser con soporte de negritas, saltos de línea y viñetas
         const respuestaFormatted = respuestaTexto
           .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/^\*\s(.*)/gm, '• $1')
           .replace(/\n/g, '<br>');
 
         messagesDiv.innerHTML += `<div class="msg bot">${respuestaFormatted}</div>`;
@@ -70,13 +83,21 @@ export function initChatWidget() {
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
     };
 
-    document.getElementById('chat-send-btn').addEventListener('click', sendMessage);
+    // Evento para los botones de sugerencias rápidas (Chips)
+    document.querySelectorAll('.chat-chip').forEach(button => {
+      button.addEventListener('click', (e) => {
+        const query = e.target.getAttribute('data-query');
+        sendMessage(query);
+      });
+    });
+
+    document.getElementById('chat-send-btn').addEventListener('click', () => sendMessage());
     document.getElementById('chat-input').addEventListener('keypress', (e) => { 
       if (e.key === 'Enter') sendMessage(); 
     });
   }
 
-  // 2. Vinculación robusta mediante MutationObserver
+  // 2. Observer para mantener la abeja del header conectada
   const asociarBotonHeader = () => {
     const toggleChat = () => {
       const windowEl = document.getElementById('chat-window');
@@ -99,19 +120,12 @@ export function initChatWidget() {
       logoOriginal.parentNode.replaceChild(btnDeseret, logoOriginal);
     }
   };
-// En chatWidget.js: enviar array 'historial'
-const payload = { mensaje: text, historial: mensajesAnteriores };
-  // Ejecución inmediata
+
   asociarBotonHeader();
 
-  // Escuchar cambios en el DOM para cuando la vista cambie dinámicamente
   const observer = new MutationObserver(() => {
     asociarBotonHeader();
   });
-  const respuestaFormatted = respuestaTexto
-  .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-  .replace(/^\*\s(.*)/gm, '• $1') // Convierte asteriscos iniciales en viñetas ordenadas
-  .replace(/\n/g, '<br>');
 
   observer.observe(document.body, { childList: true, subtree: true });
 }
