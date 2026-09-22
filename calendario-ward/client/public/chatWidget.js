@@ -74,8 +74,27 @@ export function initChatWidget() {
       const data = await response.json();
       
       document.getElementById(loadingId).remove();
+      try {
+      const response = await fetch('/api/chat', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mensaje: text })
+      });
+      const data = await response.json();
+      
+      document.getElementById(loadingId).remove();
       const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
-      messagesDiv.innerHTML += `<div class="msg bot">${respuestaTexto}</div>`;
+
+      // --- TRANSFORMACIÓN VISUAL (Convierte Markdown a HTML) ---
+      const respuestaFormatted = respuestaTexto
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Transforma **texto** a negrita
+        .replace(/\n/g, '<br>');                         // Respetar saltos de línea
+
+      messagesDiv.innerHTML += `<div class="msg bot">${respuestaFormatted}</div>`;
+    } catch (error) {
+      document.getElementById(loadingId).remove();
+      messagesDiv.innerHTML += `<div class="msg bot error">Error de conexión.</div>`;
+    }
     } catch (error) {
       document.getElementById(loadingId).remove();
       messagesDiv.innerHTML += `<div class="msg bot error">Error de conexión.</div>`;
