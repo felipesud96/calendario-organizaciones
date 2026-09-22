@@ -1,59 +1,22 @@
 import { GoogleGenAI } from '@google/genai';
 
-// Inicializa Gemini. Render tomará automáticamente GEMINI_API_KEY del entorno.
-const ai = new GoogleGenAI({});
-
-// Declaración de la herramienta (Function Calling)
-const declaracionHerramientas = [{
-  functionDeclarations: [
-    {
-      name: 'obtenerActividades',
-      description: 'Busca en la base de datos las actividades de una organización.',
-      parameters: {
-        type: 'OBJECT',
-        properties: {
-          organizacion: {
-            type: 'STRING',
-            description: 'Nombre de la organización (ej: JAS, Obispado, Primaria, Sociedad de Socorro)'
-          }
-        },
-        required: ['organizacion']
-      }
-    }
-  ]
-}];
-
 export async function procesarPreguntaChat(mensaje) {
-  const chat = ai.chats.create({
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("La variable GEMINI_API_KEY no está disponible en el entorno.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  // Petición directa al modelo gemini-2.5-flash
+  const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
+    contents: mensaje,
     config: {
-      systemInstruction: "Eres el asistente de OrganizaSion. Responde dudas sobre el calendario de forma breve, clara y amable para miembros de la iglesia.",
-      tools: declaracionHerramientas
+      systemInstruction: "Eres Deseret, la abeja asistente de OrganizaSion. Responde de forma amable, clara y breve a los miembros de la iglesia."
     }
   });
 
-  let respuesta = await chat.sendMessage(mensaje);
-
-  // Si Gemini decide consultar la base de datos
-  if (respuesta.functionCalls && respuesta.functionCalls.length > 0) {
-    const llamada = respuesta.functionCalls[0];
-    
-    if (llamada.name === 'obtenerActividades') {
-      const { organizacion } = llamada.args;
-      
-      // Muestra/ejemplo de prueba (aquí conectarás la lectura de tus datos reales)
-      const actividadesPrueba = [
-        { titulo: "Noche de Hogar", fecha: "2026-10-15", organizacion: organizacion }
-      ]; 
-
-      respuesta = await chat.sendMessage([{
-        functionResponse: {
-          name: llamada.name,
-          response: { resultado: actividadesPrueba }
-        }
-      }]);
-    }
-  }
-
-  return respuesta.text;
+  return response.text;
 }
