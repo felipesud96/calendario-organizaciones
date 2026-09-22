@@ -218,6 +218,7 @@ function withMeetingInfo(m, data, viewer) {
   return {
     ...m,
     organizationName: org?.name || (m.organizationId ? '' : 'Administración'),
+    organizationColor: org?.color || null,
     createdByName: userName(data, m.createdBy),
     // Punto 8: "editado por X el [fecha]" — null hasta la primera edición
     // (ver touchMeetingEdit); nunca se marca por el solo hecho de crearla.

@@ -6596,7 +6596,7 @@ function meetingCardHtml(m) {
     <div class="list-card meeting-card" data-id="${m.id}" style="cursor:pointer;">
       <div class="lc-main">
         <div class="lc-title">${m.confidential ? icon('lock') + ' ' : ''}${esc(m.title)}${typeLabel ? ` <span class="status-pill status-gray">${typeLabel}</span>` : ''}${m.status === 'archived' ? ' <span style="font-weight:400; font-size:12px; color:var(--ink-soft);">(archivada)</span>' : ''}</div>
-        <div class="lc-sub">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
+        <div class="lc-sub">${m.organizationColor ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(m.organizationColor)};margin-right:4px;"></span>` : ''}${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · ${m.contentRedacted ? 'contenido confidencial' : `${done}/${total} compromiso${total === 1 ? '' : 's'} completado${total === 1 ? '' : 's'}`}</div>
       </div>
     </div>`;
 }
@@ -7916,7 +7916,7 @@ async function openMeetingDetailModal(m) {
       <div class="modal" style="max-width:560px;">
         <div class="modal-header"><h3>${esc(m.title)}</h3><button class="modal-close" id="md-modal-close">×</button></div>
         <div class="modal-body">
-          <div class="hint-box" style="margin-top:0;">${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}${m.lastEditedByName ? `<br><span style="font-size:11.5px; opacity:0.8;">✏️ Editado por ${esc(m.lastEditedByName)} el ${esc(fmtDateHuman((m.lastEditedAt || '').slice(0, 10)))}</span>` : ''}</div>
+          <div class="hint-box" style="margin-top:0;">${m.organizationColor ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${esc(m.organizationColor)};margin-right:4px;"></span>` : ''}${esc(m.organizationName)} · ${esc(fmtMeetingWhen(m))} · Creada por ${esc(m.createdByName)}${m.status === 'archived' ? ' · 📁 Archivada' : ''}${typeLabel ? ` · ${typeLabel}` : ''}${m.confidential ? ' · 🔒 Confidencial' : ''}${m.lastEditedByName ? `<br><span style="font-size:11.5px; opacity:0.8;">✏️ Editado por ${esc(m.lastEditedByName)} el ${esc(fmtDateHuman((m.lastEditedAt || '').slice(0, 10)))}</span>` : ''}</div>
           ${m.contentRedacted ? `<div class="empty-state">🔒 Esta acta es confidencial — solo el Obispado, el Administrador o quien la creó pueden ver su contenido.</div>` : `
           <div id="md-agenda">
             ${m.agendaItems && m.agendaItems.length ? `
@@ -9761,18 +9761,13 @@ async function renderDirectoryMembersView() {
   let members;
   try { members = await api('/directory/members'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
-  const filter = state.directoryCategoryFilter || 'Todos';
-  const search = (state.directorySearch || '').trim().toLowerCase();
-  let items = members;
-  if (filter !== 'Todos') items = items.filter((m) => m.category === filter);
-  if (search) items = items.filter((m) => m.name.toLowerCase().includes(search));
   content.innerHTML = `
     <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">👥 Lista de miembros del barrio — solo Obispado/Administrador; los nombres son editables acá mismo por si algo se cargó mal (por ejemplo, sin apellido).</p>
     <div class="section-header" style="margin-top:0; flex-wrap:wrap; gap:10px;">
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
         <input type="text" id="dir-search" placeholder="Buscar por nombre…" value="${esc(state.directorySearch || '')}" style="max-width:220px;" />
         <select id="dir-category-filter" style="max-width:200px;">
-          ${DIRECTORY_CATEGORY_FILTERS.map((c) => `<option value="${esc(c)}" ${filter === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+          ${DIRECTORY_CATEGORY_FILTERS.map((c) => `<option value="${esc(c)}" ${(state.directoryCategoryFilter || 'Todos') === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
         </select>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -9780,23 +9775,38 @@ async function renderDirectoryMembersView() {
         <button class="btn btn-primary" id="dir-new">+ Agregar persona</button>
       </div>
     </div>
-    <p style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;">${items.length} de ${members.length} personas</p>
-    <div class="card-list">
-      ${items.length ? items.map(directoryMemberCardHtml).join('') : emptyStateHtml('Sin resultados para este filtro', null, '🔍', true)}
-    </div>
+    <p id="dir-count" style="font-size:12.5px; color:var(--ink-soft); margin:-4px 0 12px;"></p>
+    <div class="card-list" id="dir-list"></div>
   `;
+  const listEl = document.getElementById('dir-list');
+  const countEl = document.getElementById('dir-count');
+  // Igual que el buscador de Usuarios y el de Bienestar: se filtra en
+  // memoria (members ya está cargado completo) y solo se redibujan la
+  // lista y el contador en cada tecla — nunca se vuelve a pedir al
+  // servidor ni se toca el <input>, para no perder el foco mientras se
+  // escribe.
+  const renderRows = () => {
+    const filter = state.directoryCategoryFilter || 'Todos';
+    const search = (state.directorySearch || '').trim().toLowerCase();
+    let items = members;
+    if (filter !== 'Todos') items = items.filter((m) => m.category === filter);
+    if (search) items = items.filter((m) => m.name.toLowerCase().includes(search));
+    listEl.innerHTML = items.length ? items.map(directoryMemberCardHtml).join('') : emptyStateHtml('Sin resultados para este filtro', null, '🔍', true);
+    countEl.textContent = `${items.length} de ${members.length} personas`;
+    listEl.querySelectorAll('.directory-member-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        const m = members.find((x) => x.id === Number(card.dataset.id));
+        if (m) openDirectoryMemberModal(m);
+      });
+    });
+  };
+  renderRows();
   const dirNewBtn = document.getElementById('dir-new');
   if (dirNewBtn) dirNewBtn.addEventListener('click', () => openDirectoryMemberModal());
   const dirImportBtn = document.getElementById('dir-import');
   if (dirImportBtn) dirImportBtn.addEventListener('click', () => openDirectoryImportModal());
-  document.getElementById('dir-search').addEventListener('input', (e) => { state.directorySearch = e.target.value; renderDirectoryMembersView(); });
-  document.getElementById('dir-category-filter').addEventListener('change', (e) => { state.directoryCategoryFilter = e.target.value; renderDirectoryMembersView(); });
-  content.querySelectorAll('.directory-member-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const m = members.find((x) => x.id === Number(card.dataset.id));
-      if (m) openDirectoryMemberModal(m);
-    });
-  });
+  document.getElementById('dir-search').addEventListener('input', (e) => { state.directorySearch = e.target.value; renderRows(); });
+  document.getElementById('dir-category-filter').addEventListener('change', (e) => { state.directoryCategoryFilter = e.target.value; renderRows(); });
 }
 
 function directoryMemberCardHtml(m) {
