@@ -1,12 +1,12 @@
 import { GoogleGenAI } from '@google/genai';
-import { getDb } from './db.js'; // Importamos tu conexión a la base de datos de OrganizaSion
+import { getDb } from './db.js';
 
 export async function procesarPreguntaChat(mensaje) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY no configurada.");
 
-    // 1. Consultamos la base de datos real para obtener todas las actividades actuales
+    // 1. Consultamos la base de datos real
     const db = await getDb();
     const actividades = await db.all(`
       SELECT a.id, a.titulo, a.fecha, a.hora_inicio, a.lugar, o.nombre AS organizacion
@@ -15,14 +15,13 @@ export async function procesarPreguntaChat(mensaje) {
       ORDER BY a.fecha ASC
     `);
 
-    // 2. Le pasamos las actividades reales como contexto en las instrucciones a Deseret
     const contextoActividades = JSON.stringify(actividades);
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // 3. Consultamos a Gemini con el contexto de tu barrio
+    // 2. Usamos el modelo activo gemini-3.6-flash
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents: mensaje,
       config: {
         systemInstruction: `Eres Deseret, la abeja asistente amigable de la aplicación OrganizaSion del barrio.
