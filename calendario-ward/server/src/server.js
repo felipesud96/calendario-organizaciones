@@ -140,28 +140,29 @@ if (pathname === '/api/chat' && req.method === 'POST') {
       });
       return;
     }
-      const authHeader = req.headers.authorization || '';
-      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-      req.token = token;
-      req.user = token ? await getUserFromToken(token) : null;
-      req.query = Object.fromEntries(url.searchParams.entries());
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    req.token = token;
+    req.user = token ? await getUserFromToken(token) : null;
+    req.query = Object.fromEntries(url.searchParams.entries());
 
-      let body = {};
-      if (['POST', 'PUT'].includes(req.method)) {
-        const contentType = req.headers['content-type'] || '';
-        if (contentType.startsWith('multipart/form-data')) {
-          // Subida de archivos (ej. el PDF del informe trimestral para
-          // "Crecimiento del Barrio"): 20MB de margen, de sobra para un PDF
-          // de un par de páginas de reporte.
-          const raw = await readRawBody(req, 20 * 1024 * 1024);
-          body = parseMultipart(raw, contentType);
-        } else {
-          body = await readJsonBody(req);
-        }
+    let body = {};
+    if (['POST', 'PUT'].includes(req.method)) {
+      const contentType = req.headers['content-type'] || '';
+      if (contentType.startsWith('multipart/form-data')) {
+        const raw = await readRawBody(req, 20 * 1024 * 1024);
+        body = parseMultipart(raw, contentType);
+      } else {
+        body = await readJsonBody(req);
       }
+    }
+
+    try {
       await match.handler(req, res, match.params, body);
     } catch (err) {
       console.error('Error en request:', err);
+      return sendJson(res, 500, { error: 'Error interno del servidor' });
+    }
       if (!res.headersSent) {
         sendJson(res, 500, { error: 'Error interno del servidor' });
       }
