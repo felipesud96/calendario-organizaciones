@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "web-push": "^3.6.7",
-    "@google/genai": "^0.1.2"
+    "@google/genai": "latest"
   },
   "engines": {
     "node": ">=18"
