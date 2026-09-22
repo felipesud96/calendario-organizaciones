@@ -99,7 +99,8 @@ export function initChatWidget() {
       logoOriginal.parentNode.replaceChild(btnDeseret, logoOriginal);
     }
   };
-
+// En chatWidget.js: enviar array 'historial'
+const payload = { mensaje: text, historial: mensajesAnteriores };
   // Ejecución inmediata
   asociarBotonHeader();
 
