@@ -125,24 +125,21 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
 if (pathname === '/api/chat' && req.method === 'POST') {
-  let body = '';
-  req.on('data', chunk => { body += chunk.toString(); });
-  req.on('end', async () => {
-    try {
-      const { mensaje } = JSON.parse(body);
-      const respuestaIA = await procesarPreguntaChat(mensaje);
-      
-      return sendJson(res, 200, { respuesta: respuestaIA });
-    } catch (error) {
-      console.error('Error en chat IA:', error);
-      
-      const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
-      
-      return sendJson(res, 200, { respuesta: mensajeError });
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const { mensaje } = JSON.parse(body || '{}');
+          const respuestaIA = await procesarPreguntaChat(mensaje);
+          return sendJson(res, 200, { respuesta: respuestaIA });
+        } catch (error) {
+          console.error('Error en chat IA:', error);
+          const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
+          return sendJson(res, 200, { respuesta: mensajeError });
+        }
+      });
+      return;
     }
-  });
-  return;
-}
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
       req.token = token;
