@@ -1,5 +1,5 @@
 export function initChatWidget() {
-  // 1. Estilos CSS para animación del micrófono y eliminar recuadros celestes (focus outline)
+  // 1. Estilos CSS (Eliminación de contorno azul, pulso de micrófono y tarjetas)
   const style = document.createElement('style');
   style.innerHTML = `
     #organiza-chat-widget button, #deseret-header-btn, .chat-btn, #chat-reset-btn, #chat-mic-btn {
@@ -7,25 +7,38 @@ export function initChatWidget() {
       -webkit-tap-highlight-color: transparent !important;
       box-shadow: none !important;
     }
-    #organiza-chat-widget button:focus, #deseret-header-btn:focus, #chat-reset-btn:focus, #chat-mic-btn:focus {
-      outline: none !important;
-      box-shadow: none !important;
-    }
-    @keyframes pulse-red {
+    @keyframes pulse-wave {
       0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
-      70% { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
+      50% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
       100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
     }
     .mic-listening {
       background-color: #dc3545 !important;
       color: white !important;
       border-color: #dc3545 !important;
-      animation: pulse-red 1.2s infinite;
+      animation: pulse-wave 1s infinite ease-in-out;
+    }
+    .msg-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+      font-size: 11px;
+    }
+    .btn-action {
+      background: #eef2f5;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      padding: 3px 8px;
+      cursor: pointer;
+      color: #334155;
+    }
+    .btn-action:hover {
+      background: #e2e8f0;
     }
   `;
   document.head.appendChild(style);
 
-  // 2. Inyectamos la ventana desplegable del chat
+  // 2. Inyección del Widget en la página
   if (!document.getElementById('organiza-chat-widget')) {
     const chatHTML = `
       <div id="organiza-chat-widget">
@@ -58,6 +71,8 @@ export function initChatWidget() {
   const chatInput = document.getElementById('chat-input');
   const messagesDiv = document.getElementById('chat-messages');
 
+  let historialSesion = []; // Memoria de contexto corto (Punto 17)
+
   const toggleChat = () => {
     chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
     if (chatWindow.style.display === 'flex') chatInput.focus();
@@ -67,12 +82,13 @@ export function initChatWidget() {
 
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
+      historialSesion = [];
       messagesDiv.innerHTML = `<div class="msg bot">¡Hola! Conversación reiniciada. ¿Qué necesitas saber?</div>`;
       chatInput.value = '';
     });
   }
 
-  // 3. Reemplazar logo del header
+  // Reemplazar logo del Header
   const reemplazarLogoPorBoton = () => {
     const logoOriginal = document.querySelector('header img') || 
                          document.querySelector('.logo img') || 
@@ -92,7 +108,8 @@ export function initChatWidget() {
   reemplazarLogoPorBoton();
   setTimeout(reemplazarLogoPorBoton, 600);
 
-  // 4. Reconocimiento de Voz
+  // 3. Reconocimiento de Voz con Auto-Envío e Indicador Visual (Puntos 1 y 4)
+  let autoSendTimer = null;
   let stopListeningState = () => {};
 
   if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -132,7 +149,7 @@ export function initChatWidget() {
       isListening = true;
       if (micBtn) {
         micBtn.classList.add('mic-listening');
-        micBtn.title = 'Escuchando... Haz clic para detener';
+        micBtn.title = 'Escuchando tu voz...';
       }
       chatInput.placeholder = 'Escuchando tu voz... 🎙️';
     };
@@ -140,6 +157,12 @@ export function initChatWidget() {
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       chatInput.value = transcript;
+
+      // PUNTO 1: Auto-envío automático tras 1.5 segundos de silencio
+      clearTimeout(autoSendTimer);
+      autoSendTimer = setTimeout(() => {
+        sendMessage();
+      }, 1500);
     };
 
     recognition.onerror = () => stopListeningState();
@@ -148,18 +171,15 @@ export function initChatWidget() {
     micBtn.style.display = 'none';
   }
 
-  // 5. Lógica para enviar mensajes y limpiar la caja
+  // 4. Lógica para enviar mensaje con historial integrado (Punto 17)
   const sendMessage = async () => {
-    // Apagamos la escucha si estaba activa
+    clearTimeout(autoSendTimer);
     stopListeningState();
 
     const text = chatInput.value.trim();
     if (!text) return;
 
-    // Pintar mensaje
     messagesDiv.innerHTML += `<div class="msg user">${text}</div>`;
-    
-    // LIMPIEZA INMEDIATA: Vaciar la casilla para que no quede el texto dictado
     chatInput.value = '';
 
     const loadingId = 'loading-' + Date.now();
@@ -170,7 +190,10 @@ export function initChatWidget() {
       const response = await fetch('/api/chat', { 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mensaje: text })
+        body: JSON.stringify({ 
+          mensaje: text,
+          historial: historialSesion 
+        })
       });
       const data = await response.json();
       
@@ -179,17 +202,40 @@ export function initChatWidget() {
 
       const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
 
+      // Guardar en historial de contexto corto (Punto 17)
+      historialSesion.push({ user: text, bot: respuestaTexto });
+      if (historialSesion.length > 3) historialSesion.shift(); // Conservar últimas 3 interacciones
+
       const respuestaFormatted = respuestaTexto
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\n/g, '<br>');
 
-      messagesDiv.innerHTML += `<div class="msg bot">${respuestaFormatted}</div>`;
+      const msgId = 'bot-msg-' + Date.now();
+
+      messagesDiv.innerHTML += `
+        <div class="msg bot" id="${msgId}">
+          <div>${respuestaFormatted}</div>
+          <div class="msg-actions">
+            <button class="btn-action" onclick="window.deseretCopy('${msgId}')">📋 Copiar respuesta</button>
+          </div>
+        </div>
+      `;
+
     } catch (error) {
       const loadingEl = document.getElementById(loadingId);
       if (loadingEl) loadingEl.remove();
       messagesDiv.innerHTML += `<div class="msg bot error">Error de conexión.</div>`;
     }
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  };
+
+  window.deseretCopy = (msgId) => {
+    const el = document.getElementById(msgId);
+    if (!el) return;
+    const textToCopy = el.querySelector('div').innerText;
+    navigator.clipboard.writeText(textToCopy).then(() => {
+      alert('¡Respuesta copiada al portapapeles!');
+    });
   };
 
   const sendBtn = document.getElementById('chat-send-btn');
