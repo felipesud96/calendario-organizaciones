@@ -124,24 +124,23 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/health') {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
-if (req.url === '/api/chat' && req.method === 'POST') {
-     let body = '';
-     req.on('data', chunk => { body += chunk.toString(); });
-     req.on('end', async () => {
-       try {
-         const { mensaje } = JSON.parse(body);
-         const respuestaIA = await procesarPreguntaChat(mensaje);
-         
-         res.writeHead(200, { 'Content-Type': 'application/json' });
-         res.end(JSON.stringify({ respuesta: respuestaIA }));
-       } catch (error) {
-         console.error('Error en chat IA:', error);
-         res.writeHead(500, { 'Content-Type': 'application/json' });
-         res.end(JSON.stringify({ error: 'Error procesando la solicitud del chat' }));
-       }
-     });
-     return;
-   }
+if (pathname === '/api/chat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const { mensaje } = JSON.parse(body);
+        const respuestaIA = await procesarPreguntaChat(mensaje);
+        // Usamos tu función sendJson correctamente
+        return sendJson(res, 200, { respuesta: respuestaIA });
+      } catch (error) {
+        console.error('Error en chat IA:', error);
+        // Usamos tu función sendJson para el error
+        return sendJson(res, 500, { error: 'Error procesando la solicitud del chat' });
+      }
+    });
+    return;
+  }
   if (pathname.startsWith('/api/')) {
     try {
       const match = router.match(req.method, pathname);
