@@ -1,22 +1,29 @@
 import { GoogleGenAI } from '@google/genai';
 
 export async function procesarPreguntaChat(mensaje) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
 
-  if (!apiKey) {
-    throw new Error("La variable GEMINI_API_KEY no está disponible en el entorno.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-
-  // Petición directa al modelo gemini-2.5-flash
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: mensaje,
-    config: {
-      systemInstruction: "Eres Deseret, la abeja asistente de OrganizaSion. Responde de forma amable, clara y breve a los miembros de la iglesia."
+    if (!apiKey) {
+      console.error("ERROR: GEMINI_API_KEY no está configurada en Render.");
+      throw new Error("Clave API no configurada");
     }
-  });
 
-  return response.text;
+    // Inicializamos el cliente oficial de Google Gen AI
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Consulta directa al modelo
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: mensaje,
+      config: {
+        systemInstruction: "Eres Deseret, la abeja asistente amigable de OrganizaSion. Responde de forma breve y amable a los miembros de la iglesia."
+      }
+    });
+
+    return response.text;
+  } catch (error) {
+    console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
+    throw error;
+  }
 }
