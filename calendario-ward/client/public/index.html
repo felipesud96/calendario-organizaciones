@@ -60,5 +60,10 @@
        cae de vuelta a compartir como texto plano (ver shareMinutaAsImage). -->
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="/app.js"></script>
+  <!-- Script del Chat IA -->
+  <script type="module">
+    import { initChatWidget } from './chatWidget.js'; 
+    document.addEventListener('DOMContentLoaded', initChatWidget);
+  </script>
 </body>
 </html>
