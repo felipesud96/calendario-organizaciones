@@ -53,10 +53,14 @@ export function initChatWidget() {
       messagesDiv.innerHTML += `<div id="${loadingId}" class="msg bot">Pensando... 🐝</div>`;
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-      try {
+    try {
+        const token = localStorage.getItem('token') || '';
         const response = await fetch('/api/chat', { 
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
           body: JSON.stringify({ mensaje: text })
         });
         const data = await response.json();
