@@ -44,7 +44,7 @@ export async function procesarPreguntaChat(mensaje) {
     }
 
     if (contextoDinamico === "") {
-      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
+      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo amablemente a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -62,7 +62,6 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
 6. Para "hombres adultos con recomendación", filtra género 'M', mayores de 18 años y recomendación 'Vigente'.
 7. Sé clara, directa y estructurada visualmente.`;
 
-    // 2. Consulta directa sin demoras ni bucles infinitos
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
       contents: mensaje,
@@ -73,12 +72,23 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
       return response.text;
     }
 
-    return "🐝 No pude generar una respuesta en este momento. Intenta nuevamente.";
+    return "🐝 No pude obtener una respuesta en este momento. Intenta de nuevo.";
 
   } catch (error) {
     console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
+
+    const errStr = JSON.stringify(error || {});
     
-    // Captura inmediata del error 503 para devolver respuesta garantizada en el chat
-    return "🐝 En este momento los servidores de IA de Google están experimentando alta demanda (Error 503). Por favor, reintenta tu pregunta en unos segundos.";
+    // Si agotamos la cuota de peticiones por minuto/día (Error 429)
+    if (errStr.includes("429") || errStr.includes("RESOURCE_EXHAUSTED")) {
+      return "🐝 He recibido muchas consultas seguidas y alcancé el límite de uso temporal de la API de Google. Por favor, espera un par de minutos y vuelve a intentarlo.";
+    }
+
+    // Si Google está sobrecargado (Error 503)
+    if (errStr.includes("503") || errStr.includes("UNAVAILABLE")) {
+      return "🐝 Los servidores de Google AI están experimentando alta demanda. Por favor, reintenta tu pregunta en unos momentos.";
+    }
+
+    return "🐝 Ocurrió un problema temporal al consultar a la IA. Intenta de nuevo en unos momentos.";
   }
 }
