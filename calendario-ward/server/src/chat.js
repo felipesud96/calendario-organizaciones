@@ -12,6 +12,8 @@ export async function procesarPreguntaChat(mensaje, usuario) {
     const db = load();
     const hoy = new Date().toISOString().split('T')[0];
     const userId = usuario?.id || usuario?.email || 'anonimo';
+    
+    // Normalización para ignorar tildes y mayúsculas
     const normalizar = (str) => str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() : "";
     const mensajeNorm = normalizar(mensaje);
 
@@ -20,7 +22,7 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       const borrador = borradoresPendientes[userId];
       borrador.location = mensaje.replace(/^(en\s+|el\s+|la\s+)/i, '').trim();
 
-      // Si seleccionó la Capilla, mostramos el segundo nivel de botones (Salas)
+      // Si seleccionó Capilla, mostramos el segundo nivel de opciones (Salas)
       if (normalizar(borrador.location).includes('capilla')) {
         borrador.paso = 'PREGUNTAR_SALA';
         
@@ -52,8 +54,9 @@ export async function procesarPreguntaChat(mensaje, usuario) {
     // --- FASE 1: INICIO DE SOLICITUD DE AGENDAMIENTO ---
     if (mensajeNorm.match(/(agendar|crear|programar|anotar|registrar|actividad|reunion|evento)/) && mensajeNorm.match(/(el|la|fecha|mañana|hoy|\d{1,2})/)) {
       
-      const rol = normalizar(usuario?.role || usuario?.cargo || '');
-      const esLider = /(obispo|cuorum|sociedad|admin|presidente|secretario)/.test(rol);
+      // Permisos ultra flexibles (reconoce Presidencia de Quórum, Obispado, SocSoc, etc.)
+      const rolLimpio = normalizar(usuario?.role || usuario?.cargo || '');
+      const esLider = /(obispo|cuorum|quorum|sociedad|soc_soc|admin|presidente|consejero|secretario|elderes)/.test(rolLimpio);
 
       if (!esLider) {
         return "🔒 Lo siento, solo los miembros del Obispado, Presidencias y Secretarios tienen permisos para agendar actividades en el calendario.";
@@ -70,7 +73,7 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       const hora = buscaHora ? buscaHora[1].trim() : "19:00";
       const fecha = buscaFecha ? buscaFecha[1] : hoy;
 
-      // Creamos el borrador e iniciamos la pregunta con botones de opciones
+      // Se guarda el borrador temporal
       borradoresPendientes[userId] = {
         title: tituloLimpio || 'Actividad de Organización',
         date: fecha,
@@ -89,7 +92,7 @@ export async function procesarPreguntaChat(mensaje, usuario) {
       };
     }
 
-    // --- CONSULTAS REGULARES (Búsquedas en Base de Datos) ---
+    // --- BÚSQUEDAS REGULARES Y CONSULTAS EN BASE DE DATOS ---
     let contextoDinamico = "";
 
     if (mensajeNorm.match(/(actividad|calendario|cuorum|sociedad|primaria|jovenes|hoy|manana|semana|mes)/)) {
@@ -104,7 +107,7 @@ export async function procesarPreguntaChat(mensaje, usuario) {
 
     if (mensajeNorm.match(/(recomendacion|templo|hombres|adultos|hermano|miembro)/)) {
       const rolUsuario = normalizar(usuario?.role || usuario?.cargo || '');
-      const esAutorizado = /(obispo|cuorum|sociedad|admin|presidente)/.test(rolUsuario);
+      const esAutorizado = /(obispo|cuorum|quorum|sociedad|soc_soc|admin|presidente|consejero|secretario|elderes)/.test(rolUsuario);
 
       if (esAutorizado) {
         const directorio = db.directoryMembers.map(m => ({
@@ -141,7 +144,7 @@ Reglas: Usa listas, viñetas y formato en **negrita**. Emojis amigables (🐝, �
   }
 }
 
-// Función auxiliar que guarda el evento en la base de datos JSON
+// Función auxiliar para registrar el evento final en la base de datos JSON
 function guardarEventoFinal(db, userId, borrador, lugarFinal, usuario) {
   const nuevoEvento = {
     id: Date.now(),
