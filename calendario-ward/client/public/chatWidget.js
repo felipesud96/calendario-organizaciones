@@ -52,7 +52,7 @@ export function initChatWidget() {
   setTimeout(reemplazarLogoPorBoton, 600);
 
   // 3. Lógica para responder mensajes
-  const sendMessage = async () => {
+const sendMessage = async () => {
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
     if (!text) return;
@@ -75,16 +75,17 @@ export function initChatWidget() {
       
       document.getElementById(loadingId).remove();
       const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
-      messagesDiv.innerHTML += `<div class="msg bot">${respuestaTexto}</div>`;
+
+      // --- NUEVO: Magia de diseño ---
+      // Convertimos los asteriscos a negritas reales y los saltos de línea a <br>
+      const textoHermoso = respuestaTexto
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Convierte **texto** en negrita
+        .replace(/\n/g, '<br>'); // Convierte los saltos de línea en espacios reales
+
+      messagesDiv.innerHTML += `<div class="msg bot">${textoHermoso}</div>`;
     } catch (error) {
       document.getElementById(loadingId).remove();
       messagesDiv.innerHTML += `<div class="msg bot error">Error de conexión.</div>`;
     }
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   };
-
-  document.getElementById('chat-send-btn').addEventListener('click', sendMessage);
-  document.getElementById('chat-input').addEventListener('keypress', (e) => { 
-    if (e.key === 'Enter') sendMessage(); 
-  });
-}
