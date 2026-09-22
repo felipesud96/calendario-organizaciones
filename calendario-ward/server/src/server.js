@@ -125,28 +125,27 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
 if (pathname === '/api/chat' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', async () => {
-      try {
-        const { mensaje } = JSON.parse(body);
-        const respuestaIA = await procesarPreguntaChat(mensaje);
-        // Usamos tu función sendJson correctamente
-        return sendJson(res, 200, { respuesta: respuestaIA });
-      } catch (error) {
-        console.error('Error en chat IA:', error);
-        // Usamos tu función sendJson para el error
-        return sendJson(res, 500, { error: 'Error procesando la solicitud del chat' });
-      }
-    });
-    return;
-  }
-  if (pathname.startsWith('/api/')) {
+  let body = '';
+  req.on('data', chunk => { body += chunk.toString(); });
+  req.on('end', async () => {
     try {
-      const match = router.match(req.method, pathname);
-      if (!match) {
-        return sendJson(res, 404, { error: 'Ruta no encontrada' });
-      }
+      const { mensaje } = JSON.parse(body);
+      const respuestaIA = await procesarPreguntaChat(mensaje);
+      
+      // Siempre respondemos 200 con la propiedad 'respuesta'
+      return sendJson(res, 200, { respuesta: respuestaIA });
+    } catch (error) {
+      console.error('Error en chat IA:', error);
+      
+      // Si la API falla (por cuota 429 o saturación 503), respondemos 200 
+      // pero le entregamos el mensaje amigable a la abeja Deseret
+      const mensajeError = "🐝 He recibido varias consultas seguidas y alcancé el límite de uso temporal de Google. Por favor, espera unos segundos e intenta de nuevo.";
+      
+      return sendJson(res, 200, { respuesta: mensajeError });
+    }
+  });
+  return;
+}
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
       req.token = token;
