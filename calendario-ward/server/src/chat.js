@@ -9,12 +9,11 @@ export async function procesarPreguntaChat(mensaje) {
       throw new Error("Clave API no configurada");
     }
 
-    // Inicializamos el cliente oficial de Google Gen AI
     const ai = new GoogleGenAI({ apiKey });
 
-    // Consulta directa al modelo
+    // Actualizamos al modelo gemini-3.6-flash
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents: mensaje,
       config: {
         systemInstruction: "Eres Deseret, la abeja asistente amigable de OrganizaSion. Responde de forma breve y amable a los miembros de la iglesia."
