@@ -1,11 +1,7 @@
 export function initChatWidget() {
+  // 1. Inyectamos únicamente la ventana flotante del chat (sin el botón flotante)
   const chatHTML = `
     <div id="organiza-chat-widget">
-      <!-- Botón circular con la abeja -->
-      <button id="chat-toggle-btn">
-        <img src="./logo-bee.png" alt="Deseret IA" />
-      </button>
-      
       <div id="chat-window" style="display: none;">
         <div id="chat-header">
           <span>🐝 Deseret (IA)</span>
@@ -23,17 +19,29 @@ export function initChatWidget() {
   `;
   document.body.insertAdjacentHTML('beforeend', chatHTML);
 
-  const toggleBtn = document.getElementById('chat-toggle-btn');
   const chatWindow = document.getElementById('chat-window');
-  
+  const closeBtn = document.getElementById('chat-close-btn');
+
+  // Función para abrir/cerrar la ventana del chat
   const toggleChat = () => {
     chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
-    toggleBtn.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
   };
 
-  toggleBtn.addEventListener('click', toggleChat);
-  document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
+  closeBtn.addEventListener('click', toggleChat);
 
+  // 2. Buscamos el logo de la abeja en el header y le asignamos el evento Click
+  // Intenta encontrar el logo en el DOM
+  const headerLogo = document.querySelector('header img') || 
+                     document.querySelector('.logo') || 
+                     document.querySelector('img[src*="logo-bee"]');
+
+  if (headerLogo) {
+    headerLogo.style.cursor = 'pointer';
+    headerLogo.title = 'Hablar con Deseret (IA)';
+    headerLogo.addEventListener('click', toggleChat);
+  }
+
+  // 3. Lógica para enviar mensajes y corregir el error 'undefined'
   const sendMessage = async () => {
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
@@ -56,7 +64,10 @@ export function initChatWidget() {
       const data = await response.json();
       
       document.getElementById(loadingId).remove();
-      messagesDiv.innerHTML += `<div class="msg bot">${data.respuesta}</div>`;
+      
+      // Muestra la respuesta o el error de forma segura
+      const respuestaTexto = data.respuesta || data.error || 'No pude procesar la respuesta.';
+      messagesDiv.innerHTML += `<div class="msg bot">${respuestaTexto}</div>`;
     } catch (error) {
       document.getElementById(loadingId).remove();
       messagesDiv.innerHTML += `<div class="msg bot error">Error de conexión.</div>`;
