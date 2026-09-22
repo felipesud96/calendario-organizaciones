@@ -12,7 +12,7 @@ export async function procesarPreguntaChat(mensaje) {
 
     let contextoDinamico = "";
 
-    // 1. Enrutamiento de contexto por módulo
+    // 1. Contexto Dinámico por Módulo
     if (mensajeMinusculas.match(/(actividad|calendario|cuórum|sociedad|primaria|jóvenes|hoy|mañana|semana|mes)/)) {
       const actividades = db.events
         .filter(e => e.date >= hoy)
@@ -44,7 +44,7 @@ export async function procesarPreguntaChat(mensaje) {
     }
 
     if (contextoDinamico === "") {
-      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo amablemente a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
+      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -62,37 +62,23 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
 6. Para "hombres adultos con recomendación", filtra género 'M', mayores de 18 años y recomendación 'Vigente'.
 7. Sé clara, directa y estructurada visualmente.`;
 
-    // 2. Ejecución con reintentos para mitigar el error 503 por saturación temporal
-    let intentos = 0;
-    const maxIntentos = 3;
+    // 2. Consulta directa sin demoras ni bucles infinitos
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: mensaje,
+      config: { systemInstruction }
+    });
 
-    while (intentos < maxIntentos) {
-      try {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
-          contents: mensaje,
-          config: { systemInstruction }
-        });
-
-        if (response && response.text) {
-          return response.text;
-        }
-      } catch (err) {
-        intentos++;
-        console.warn(`Intento ${intentos} falló con error: ${err.message}`);
-        
-        // Si no es el último intento, esperar 1.5 segundos antes de reintentar
-        if (intentos < maxIntentos) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        } else {
-          throw err;
-        }
-      }
+    if (response && response.text) {
+      return response.text;
     }
+
+    return "🐝 No pude generar una respuesta en este momento. Intenta nuevamente.";
 
   } catch (error) {
     console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
-    // Retornamos un mensaje de contingencia en lugar de lanzar la excepción al servidor
-    return "🐝 Los servidores de Google Gemini están experimentando alta demanda en este momento. Por favor, intenta enviar tu pregunta nuevamente en unos segundos.";
+    
+    // Captura inmediata del error 503 para devolver respuesta garantizada en el chat
+    return "🐝 En este momento los servidores de IA de Google están experimentando alta demanda (Error 503). Por favor, reintenta tu pregunta en unos segundos.";
   }
 }
