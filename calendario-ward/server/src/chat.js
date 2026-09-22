@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import Groq from 'groq-sdk';
 import { load, save } from './db.js';
 
-// Cache local en memoria
+// Cache local en memoria para respuestas ultrarrápidas (<10 ms)
 const cacheRespuestas = new Map();
 
 export async function procesarPreguntaChat(mensaje, historial = []) {
@@ -13,18 +13,18 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
     const mensajeMinusculas = mensaje.toLowerCase().trim();
 
     // ------------------------------------------------------------------------
-    // MÓDULO DE AGENDAMIENTO AUTOMÁTICO (CREAR ACTIVIDADES / REUNIONES)
+    // MÓDULO 1: AGENDAMIENTO Y CREACIÓN DE ACTIVIDADES / REUNIONES EN DB.JSON
     // ------------------------------------------------------------------------
     if (mensajeMinusculas.match(/(agendar|crear|programar|añadir|agregar)\s+(actividad|reunión|reunion|evento)/)) {
       
-      // 1. Extraer título limpiecito
+      // 1. Extraer título limpio
       let titulo = mensaje
         .replace(/(agendar|crear|programar|añadir|agregar)\s+(una|un|la|el)?\s*(actividad|reunión|reunion|evento)?\s*(de|para)?/i, '')
         .trim();
       
       if (!titulo) titulo = "Nueva Actividad / Reunión";
 
-      // 2. Extracción simple de fecha (busca formato AAAA-MM-DD o asume hoy/próximos días)
+      // 2. Extraer fecha (formato AAAA-MM-DD o 'mañana')
       let fechaEvento = hoy;
       const fechaMatch = mensaje.match(/\d{4}-\d{2}-\d{2}/);
       
@@ -36,20 +36,22 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
         fechaEvento = mananaObj.toISOString().split('T')[0];
       }
 
-      // 3. Identificar organización (si la menciona)
+      // 3. Mapear organización
       let orgId = 1; // General por defecto
+      const orgs = db.organizations || [];
+
       if (mensajeMinusculas.includes('élderes') || mensajeMinusculas.includes('elderes') || mensajeMinusculas.includes('cuórum') || mensajeMinusculas.includes('cuorum')) {
-        const org = db.organizations.find(o => o.name.toLowerCase().includes('élderes') || o.name.toLowerCase().includes('elderes'));
+        const org = orgs.find(o => o.name.toLowerCase().includes('élderes') || o.name.toLowerCase().includes('elderes'));
         if (org) orgId = org.id;
       } else if (mensajeMinusculas.includes('sociedad') || mensajeMinusculas.includes('socorro')) {
-        const org = db.organizations.find(o => o.name.toLowerCase().includes('socorro'));
+        const org = orgs.find(o => o.name.toLowerCase().includes('socorro'));
         if (org) orgId = org.id;
       } else if (mensajeMinusculas.includes('jóvenes') || mensajeMinusculas.includes('jovenes')) {
-        const org = db.organizations.find(o => o.name.toLowerCase().includes('jóvenes') || o.name.toLowerCase().includes('jovenes'));
+        const org = orgs.find(o => o.name.toLowerCase().includes('jóvenes') || o.name.toLowerCase().includes('jovenes'));
         if (org) orgId = org.id;
       }
 
-      // 4. Crear el objeto e insertarlo en db.json
+      // 4. Crear registro y guardar en db.json usando save() de db.js
       const nuevoEvento = {
         id: Date.now(),
         title: titulo.charAt(0).toUpperCase() + titulo.slice(1),
@@ -59,9 +61,11 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
 
       if (!db.events) db.events = [];
       db.events.push(nuevoEvento);
-      save(db); // Guardar cambios persistentes en la base de datos
+      
+      // Escritura persistente
+      save(db);
 
-      // Invalidar caché previo para que la nueva actividad aparezca de inmediato en consultas
+      // Limpiar caché previa para reflejar el evento de inmediato
       cacheRespuestas.clear();
 
       return `✅ **¡Actividad agendada con éxito en la base de datos!**\n\n` +
@@ -71,7 +75,7 @@ export async function procesarPreguntaChat(mensaje, historial = []) {
     }
 
     // ------------------------------------------------------------------------
-    // MÓDULO DE LECTURA: CACHÉ LOCAL (<10 ms)
+    // MÓDULO 2: VERIFICAR CACHÉ DE LECTURA (<10 ms)
     // ------------------------------------------------------------------------
     if (cacheRespuestas.has(mensajeMinusculas)) {
       console.log('⚡ Respuesta entregada desde caché local');
@@ -170,7 +174,7 @@ REGLAS DE COMPORTAMIENTO:
 4. Usa emojis amigables (🐝, 📅, 🧹, 🏛️).`;
 
     // ------------------------------------------------------------------------
-    // CAPA 1: GEMINI 3.6 FLASH
+    // CAPA 1: MODELO PRINCIPAL (GEMINI 3.6 FLASH)
     // ------------------------------------------------------------------------
     const geminiKey = process.env.GEMINI_API_KEY;
     if (geminiKey) {
@@ -188,12 +192,12 @@ REGLAS DE COMPORTAMIENTO:
           return response.text;
         }
       } catch (errGemini) {
-        console.warn('⚠️ Gemini falló. Pasando a Groq...');
+        console.warn('⚠️ Gemini falló (saturación/cuota). Pasando a Groq...');
       }
     }
 
     // ------------------------------------------------------------------------
-    // CAPA 2: RESPALDO CON GROQ (LLaMA 3.3 70B)
+    // CAPA 2: RESPALDO DE EMERGENCIA (GROQ LLaMA 3.3 70B)
     // ------------------------------------------------------------------------
     const groqKey = process.env.GROQ_API_KEY;
     if (groqKey) {
@@ -221,7 +225,7 @@ REGLAS DE COMPORTAMIENTO:
     }
 
     // ------------------------------------------------------------------------
-    // CAPA 3: FALLBACK OFFLINE LOCAL
+    // CAPA 3: FALLBACK LOCAL OFFLINE (Cero consumo de API)
     // ------------------------------------------------------------------------
     if (respuestaLocalFallback) {
       console.log('🛡️ Respuesta entregada por Fallback Local');
