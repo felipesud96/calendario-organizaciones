@@ -108,6 +108,10 @@ const payload = { mensaje: text, historial: mensajesAnteriores };
   const observer = new MutationObserver(() => {
     asociarBotonHeader();
   });
+  const respuestaFormatted = respuestaTexto
+  .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+  .replace(/^\*\s(.*)/gm, '• $1') // Convierte asteriscos iniciales en viñetas ordenadas
+  .replace(/\n/g, '<br>');
 
   observer.observe(document.body, { childList: true, subtree: true });
 }
