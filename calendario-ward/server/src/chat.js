@@ -12,7 +12,7 @@ export async function procesarPreguntaChat(mensaje) {
 
     let contextoDinamico = "";
 
-    // 1. Contexto Dinámico por Módulo
+    // 1. Enrutamiento de contexto por módulo
     if (mensajeMinusculas.match(/(actividad|calendario|cuórum|sociedad|primaria|jóvenes|hoy|mañana|semana|mes)/)) {
       const actividades = db.events
         .filter(e => e.date >= hoy)
@@ -44,12 +44,17 @@ export async function procesarPreguntaChat(mensaje) {
     }
 
     if (contextoDinamico === "") {
-      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
+      contextoDinamico = "El usuario está saludando o haciendo una pregunta general. Invítalo amablemente a preguntarte sobre el calendario, turnos de aseo o recomendaciones del templo.";
     }
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const systemInstruction = `Eres Deseret, la abeja asistente de la app OrganizaSion.
+    // 2. Modelo soportado único
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.6-flash',
+      contents: mensaje,
+      config: {
+        systemInstruction: `Eres Deseret, la abeja asistente de la app OrganizaSion.
 Aquí tienes la información extraída de la base de datos:
 ${contextoDinamico}
 
@@ -60,32 +65,14 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
 4. Usa emojis amigables (ej: 📅, 🧹, 🏛️, 🐝).
 5. Deja un espacio en blanco antes y después de tu lista.
 6. Para "hombres adultos con recomendación", filtra género 'M', mayores de 18 años y recomendación 'Vigente'.
-7. Sé clara, directa y estructurada visualmente.`;
-
-    // 2. Lista de modelos a intentar (Fallback si el principal está saturado/503)
-    const modelos = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
-    let ultimoError = null;
-
-    for (const modelName of modelos) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: mensaje,
-          config: { systemInstruction }
-        });
-        if (response && response.text) {
-          return response.text;
-        }
-      } catch (err) {
-        console.warn(`Error probando modelo ${modelName}:`, err.message);
-        ultimoError = err;
+7. Sé clara, directa y estructurada visualmente.`
       }
-    }
+    });
 
-    throw ultimoError || new Error("No se pudo obtener respuesta de ningún modelo.");
+    return response.text;
 
   } catch (error) {
     console.error("DETALLE DEL ERROR EN GEMINI CHAT:", error);
-    return "🐝 Lo siento, en este momento el servicio de IA de Google está experimentando alta demanda (Error 503). Por favor, intenta de nuevo en unos momentos.";
+    return "🐝 Lo siento, el servicio de IA de Google experimentó una interrupción temporal (Error 503). Por favor, intenta tu consulta de nuevo en unos segundos.";
   }
 }
