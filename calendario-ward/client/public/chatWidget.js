@@ -4,7 +4,7 @@ export function initChatWidget() {
   const obtenerRolUsuario = () => {
     try {
       const userJson = localStorage.getItem('user');
-      if (userJson) return (JSON.parse(userJson).role || '').toLowerCase();
+      if (userJson) return (JSON.parse(userJson).role || JSON.parse(userJson).cargo || '').toLowerCase();
       const token = localStorage.getItem('token');
       if (token) return (JSON.parse(atob(token.split('.')[1])).role || '').toLowerCase();
     } catch (e) {}
@@ -12,7 +12,7 @@ export function initChatWidget() {
   };
 
   const rol = obtenerRolUsuario();
-  const esAutorizado = /(obispo|cuorum|sociedad|admin)/.test(rol);
+  const esAutorizado = /(obispo|cuorum|sociedad|admin|presidente)/.test(rol);
 
   let chipsHTML = `
     <button class="chat-chip-btn" data-query="¿Qué actividades hay esta semana?">📅 ¿Qué actividades hay esta semana?</button>
@@ -30,13 +30,13 @@ export function initChatWidget() {
           <button id="chat-close-btn">✕</button>
         </div>
         <div id="chat-messages">
-          <div class="msg bot">¡Hola! Soy Deseret. Puedes hablarme por micrófono o escribir tu consulta. ¿En qué te ayudo?</div>
+          <div class="msg bot">¡Hola! Soy Deseret. ¿En qué te puedo ayudar hoy?</div>
           <div id="chat-suggestions-list">${chipsHTML}</div>
         </div>
 
         <div id="chat-input-area" style="display: flex; gap: 6px; padding: 8px; background: #fff;">
-          <button id="chat-mic-btn" title="Hablar con Deseret" style="background: #f0f2f5; border: 1px solid #ccc; border-radius: 50%; width: 36px; height: 36px; cursor: pointer;">🎤</button>
-          <input type="text" id="chat-input" placeholder="Escribe o agenda una reunión..." style="flex: 1; padding: 8px; border-radius: 20px; border: 1px solid #ccc;" />
+          <button id="chat-mic-btn" title="Dictar por micrófono" style="background: #f0f2f5; border: 1px solid #ccc; border-radius: 50%; width: 36px; height: 36px; cursor: pointer;">🎤</button>
+          <input type="text" id="chat-input" placeholder="Pregunta algo o agenda una actividad..." style="flex: 1; padding: 8px; border-radius: 20px; border: 1px solid #ccc;" />
           <button id="chat-send-btn" style="background: #0056b3; color: white; border: none; border-radius: 18px; padding: 0 14px; cursor: pointer;">Enviar</button>
         </div>
       </div>
@@ -51,7 +51,7 @@ export function initChatWidget() {
 
   closeBtn.addEventListener('click', () => chatWindow.style.display = 'none');
 
-  // --- RECONOCIMIENTO DE VOZ (STT) ---
+  // RECONOCIMIENTO DE VOZ (Entrada por micrófono opcional)
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SpeechRecognition) {
     const recognition = new SpeechRecognition();
@@ -79,7 +79,7 @@ export function initChatWidget() {
     micBtn.style.display = 'none';
   }
 
-  // --- ENVÍO DE MENSAJES Y ACCIONES ---
+  // ENVÍO DE MENSAJES
   const sendMessage = async (textoPersonalizado = null) => {
     const text = textoPersonalizado || inputEl.value.trim();
     if (!text) return;
@@ -97,50 +97,73 @@ export function initChatWidget() {
 
     try {
       const token = localStorage.getItem('token') || '';
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/chat', { 
         method: 'POST',
-        headers: {
+        headers: { 
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : ''
         },
         body: JSON.stringify({ mensaje: text })
       });
       const data = await response.json();
+      
+      const loadingEl = document.getElementById(loadingId);
+      if (loadingEl) loadingEl.remove();
 
-      document.getElementById(loadingId)?.remove();
+      // Extracción de datos
+      const respuestaRaw = data.respuesta;
+      let respuestaTexto = typeof respuestaRaw === 'object' ? respuestaRaw.texto : respuestaRaw;
+      let opciones = typeof respuestaRaw === 'object' ? respuestaRaw.opciones : null;
 
-      const respuestaTexto = data.respuesta || 'Sin respuesta.';
-      const msgId = 'msg-' + Date.now();
-
+      // Formato HTML
       const respuestaFormatted = respuestaTexto
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/^\*\s(.*)/gm, '• $1')
         .replace(/\n/g, '<br>');
 
-      // Incluye Botón de Copiar (Punto UX 2)
+      // Opciones/Botones dinámicos
+      let opcionesHTML = '';
+      if (opciones && Array.isArray(opciones)) {
+        opcionesHTML = `<div class="options-container" style="display:flex; flex-direction:column; gap:5px; margin-top:8px;">`;
+        opciones.forEach(op => {
+          opcionesHTML += `<button class="option-btn" data-val="${op}" style="text-align:left; background:#ffffff; border:1px solid #0056b3; color:#0056b3; padding:6px 10px; border-radius:6px; font-size:12px; cursor:pointer; font-weight:500;">🔹 ${op}</button>`;
+        });
+        opcionesHTML += `</div>`;
+      }
+
+      const msgId = 'msg-' + Date.now();
       messagesDiv.innerHTML += `
         <div class="msg bot" id="${msgId}">
-          ${respuestaFormatted}
+          ${respuestaFormatted}${opcionesHTML}
           <button onclick="navigator.clipboard.writeText(\`${respuestaTexto.replace(/`/g, '')}\`)" style="display:block; margin-top:5px; background:none; border:none; color:#0056b3; cursor:pointer; font-size:11px;">📋 Copiar respuesta</button>
         </div>
       `;
+
     } catch (error) {
-      document.getElementById(loadingId)?.remove();
+      const loadingEl = document.getElementById(loadingId);
+      if (loadingEl) loadingEl.remove();
       messagesDiv.innerHTML += `<div class="msg bot error">⚠️ Error de conexión. <button onclick="location.reload()">Reintentar 🔄</button></div>`;
     }
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   };
 
+  // Eventos para botones de opciones dinámicas y chips iniciales
   document.addEventListener('click', (e) => {
-    if (e.target?.classList.contains('chat-chip-btn')) {
+    if (e.target && e.target.classList.contains('chat-chip-btn')) {
       sendMessage(e.target.getAttribute('data-query'));
+    }
+
+    if (e.target && e.target.classList.contains('option-btn')) {
+      const valorSeleccionado = e.target.getAttribute('data-val');
+      const parentContainer = e.target.closest('.options-container');
+      if (parentContainer) parentContainer.style.display = 'none';
+      sendMessage(valorSeleccionado);
     }
   });
 
   document.getElementById('chat-send-btn').addEventListener('click', () => sendMessage());
   inputEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
-  // Vínculo con el Header
+  // Vínculo persistente con el Header
   const asociarBotonHeader = () => {
     const logoOriginal = document.querySelector('header img') || document.querySelector('.logo img') || document.querySelector('img[src*="logo"]');
     if (logoOriginal && !document.getElementById('deseret-header-btn')) {
