@@ -92,3 +92,4 @@ REGLAS DE DISEÑO ESTRICTAS PARA TUS RESPUESTAS:
     return "🐝 Ocurrió un problema temporal al consultar a la IA. Intenta de nuevo en unos momentos.";
   }
 }
+const normalizar = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
