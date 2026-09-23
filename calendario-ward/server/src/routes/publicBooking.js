@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { sendJson } from '../router.js';
 import { load, withDb, nextId, timesOverlap, callingLabel } from '../db.js';
 import { requireRole } from '../guard.js';
+import { tiposQuePuedeHacer, validarTipoEntrevista, tipoPorKey } from '../tiposEntrevista.js';
 
 // ----------------------------------------------------------------------
 // ENLACE PÚBLICO PARA PEDIR ENTREVISTA (link / QR)
@@ -144,7 +145,10 @@ export function registerPublicBookingRoutes(router) {
     const data = load();
     const l = liderPorToken(data, params.token);
     if (!l) return sendJson(res, 404, { error: 'Este enlace no es válido o ya no está activo. Pide uno nuevo a tu líder.' });
-    sendJson(res, 200, { lider: publicoLider(l.u, l.org), dias: bloquesLibres(data, l.u, l.org), minutosBloque: MINUTOS_BLOQUE });
+    // Solo los motivos que ESTE líder puede atender según el Manual General
+    // (ej. el enlace de un consejero no ofrece "recomendación por primera vez").
+    const tipos = tiposQuePuedeHacer(data, l.u).map((t) => ({ key: t.key, label: t.label, nota: t.nota || null }));
+    sendJson(res, 200, { lider: publicoLider(l.u, l.org), dias: bloquesLibres(data, l.u, l.org), minutosBloque: MINUTOS_BLOQUE, tipos });
   });
 
   router.post('/api/public/agendar/:token', async (req, res, params, body) => {
@@ -167,6 +171,9 @@ export function registerPublicBookingRoutes(router) {
     const pendientes = (data0.interviewRequests || []).filter((r) => r.status === 'pending' && r.memberPhone && r.memberPhone.replace(/\D/g, '').slice(-8) === telNorm);
     if (pendientes.length >= MAX_PENDIENTES_POR_TELEFONO) return sendJson(res, 400, { error: 'Ya tienes solicitudes pendientes. Espera a que te respondan antes de pedir otra.' });
 
+    const interviewType = tipoPorKey(body?.tipo) ? body.tipo : 'general';
+    const tipoCheck = validarTipoEntrevista(data0, { tipoKey: interviewType, organizationId: l.org.id, entrevistador: l.u });
+    if (!tipoCheck.ok) return sendJson(res, 400, { error: `${l.u.name.split(' ')[0]} no atiende ese tipo de entrevista. ${tipoCheck.error}` });
     const estado = token(16);
     const now = new Date().toISOString();
     const r = await withDb((d) => {
@@ -186,6 +193,7 @@ export function registerPublicBookingRoutes(router) {
         endTime: aHora(aMin(hora) + MINUTOS_BLOQUE),
         note: nota,
         status: 'pending',
+        interviewType,
         source: 'enlace',
         publicStatusToken: estado,
         createdAt: now,

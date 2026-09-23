@@ -15,6 +15,7 @@ import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from
 import { bloquesLibres } from './routes/publicBooking.js';
 import { resumenSemana, fraseResumen } from './semana.js';
 import { puedeVerFichas, buscarPersonas, fichaPersona, fichaComoTexto } from './persona.js';
+import { TIPOS_ENTREVISTA, QUIEN_LABEL, inferirTipoEntrevista, obispoDelBarrio } from './tiposEntrevista.js';
 import {
   resp, fechaLegible, normalizeSearchText, redactarConIA, filtrarAlucinacion,
   contextoCrecimiento, contextoMinistracion, toISO, sumarDias,
@@ -25,10 +26,12 @@ const RE_FICHA = /\b(cuentame|hablame|dime|ficha|informacion|info|historial|que 
 const RE_HORARIOS = /\b(cuando puedo|que horarios?|horarios? (libres?|disponibles?)|mis horarios|tengo (hora|espacio|tiempo)|huecos?|espacios? libres?|disponibilidad para)\b/;
 const RE_PREPARAR = /\b(prepar\w*|arm\w*|sugi\w*|propon\w*|temas? para|agenda para)\b.*\b(consejo|reunion|coordinacion|presidencia|comite|junta)\b/;
 const RE_SEMANA = /\b(mi semana|que tengo|tengo algo|que me toca|mis pendientes|resumen de (la|mi) semana|como viene la semana|agenda de (hoy|manana|la semana))\b/;
+const RE_TIPOS = /\b(quien puede (hacer|entrevistar|dar|tomar)|quien (hace|da|toma) (la|las|el)|solo (lo|la) (hace|puede hacer) el obispo|solo el obispo|que entrevistas (puede|pueden|hace|hacen)|puede (un|el) consejero|pueden los consejeros|consejeros? (puede|pueden)|le corresponde al obispo)\b/;
 const RE_FEEDBACK = /\b(no supiste|sin respuesta|no respondidas|valoraciones de deseret|feedback de deseret|como le va a deseret)\b/;
 
 export function detectarConsultaExtra(norm) {
   if (RE_FEEDBACK.test(norm)) return 'feedback';
+  if (RE_TIPOS.test(norm)) return 'tipos';
   if (RE_PREPARAR.test(norm)) return 'preparar';
   if (RE_HORARIOS.test(norm)) return 'horarios';
   if (RE_FICHA.test(norm)) return 'ficha';
@@ -45,6 +48,7 @@ export async function manejarConsultaExtra(tipo, { mensaje, norm, usuario, hoyOb
     case 'preparar': return consultaPreparar(mensaje, norm, usuario, data, hoyObj, historial);
     case 'semana': return consultaSemana(norm, usuario, data, hoyObj);
     case 'feedback': return consultaFeedback(usuario, data);
+    case 'tipos': return consultaTipos(norm, data);
     default: return null;
   }
 }
@@ -223,4 +227,21 @@ export async function registrarFeedback({ mensaje, respuesta, valor }) {
       mensaje: String(mensaje || '').slice(0, 200), respuesta: String(respuesta || '').slice(0, 400), valor: v, fecha: new Date().toISOString(),
     }].slice(-500);
   });
+}
+
+
+// ---------------- Quién puede hacer cada entrevista (Manual General 31.2.2) ----------------
+function consultaTipos(norm, data) {
+  const ob = obispoDelBarrio(data);
+  const k = inferirTipoEntrevista(norm);
+  const t = k ? TIPOS_ENTREVISTA.find((x) => x.key === k) : null;
+  if (t && !/\b(que entrevistas|cuales)\b/.test(norm)) {
+    return resp(`📖 **${t.label}**: ${QUIEN_LABEL[t.quien].toLowerCase()}${t.quien === 'obispo' && ob ? ` (${ob.name})` : ''}${t.ref ? ` — Manual General ${t.ref}` : ''}.${t.nota ? `\n\nℹ️ ${t.nota}` : ''}`);
+  }
+  const grupo = (q) => TIPOS_ENTREVISTA.filter((x) => x.quien === q).map((x) => `• ${x.label}${x.ref ? ` _(${x.ref})_` : ''}`).join('\n');
+  return resp(`📖 **Quién hace cada entrevista** (Manual General, tabla 31.2.2):\n\n`
+    + `**Solo el obispo${ob ? ` (${ob.name})` : ''}:**\n${grupo('obispo')}\n\n`
+    + `**El obispo o un consejero asignado:**\n${grupo('obispado')}\n\n`
+    + `**Presidencias de Cuórum de Élderes / Sociedad de Socorro:**\n${grupo('presidencia')}\n\n`
+    + '_Cuando agendas uno de estos tipos, la app revisa que el entrevistador corresponda._');
 }

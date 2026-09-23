@@ -8,6 +8,7 @@ import { INDICATOR_DEFS, sortedQuarters, pctForIndicator } from './wardGrowth.js
 import { computeCuadrante, isAdultMale, isAdultFemale, CUADRANTES } from './pastoralFocus.js';
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
 import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES } from './deseretAcciones.js';
+import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
 import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
 
 // Cache local en memoria para respuestas ultrarrápidas (<10 ms) — solo para
@@ -535,6 +536,16 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
     }
   }
 
+  // Respuesta a "esta entrevista la hace solo el obispo, ¿la agendo con él?".
+  if (falta === 'entrevistador') {
+    if (ES_AFIRMATIVO.test(mensajeMin) || /\bobispo\b/.test(normalizeSearchText(mensajeMin))) {
+      d.entrevistadorId = d.sugeridoId;
+    } else {
+      borrarBorrador(usuario);
+      return resp('👌 No la agendé.');
+    }
+  }
+
   // Respuestas a "¿cuál de estas personas?" y "¿lo agendo igual?".
   if (falta === 'elegirMiembro' && Array.isArray(d.opciones)) {
     const num = mensajeMin.match(/^\s*(?:el|la|opci[oó]n|n[uú]mero)?\s*(\d{1,2})\b/);
@@ -603,6 +614,24 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
   if (!orgAllowsInterviews(data, d.orgId)) { borrarBorrador(usuario); return resp('🚫 Esa organización no agenda entrevistas en la app. No la guardé.'); }
   if (!canScheduleOrg(usuario, d.orgId)) { borrarBorrador(usuario); return resp('🚫 No tienes permiso para agendar entrevistas de esa organización. No la guardé.'); }
 
+  // Tipo de entrevista y quién puede hacerla (Manual General 31.2.2): si
+  // es algo que hace solo el obispo y quien agenda no es el obispo, se
+  // ofrece agendarla con él.
+  if (d.tipo === undefined) d.tipo = inferirTipoEntrevista(normalizeSearchText(mensaje)) || 'general';
+  const entrevistador = (data.users || []).find((u) => u.id === Number(d.entrevistadorId || usuario.id)) || usuario;
+  const chk = validarTipoEntrevista(data, { tipoKey: d.tipo, organizationId: d.orgId, entrevistador });
+  if (!chk.ok) {
+    if (chk.sugerido && canScheduleOrg(usuario, d.orgId)) {
+      d.sugeridoId = chk.sugerido.id;
+      return preguntar('entrevistador', `📖 ${chk.error} ¿La agendo con el obispo?`, {
+        opciones: [{ label: `Sí, con ${chk.sugerido.name}`, value: 'sí, con el obispo' }, { label: 'Cancelar', value: 'cancelar' }],
+      });
+    }
+    borrarBorrador(usuario);
+    return resp(`📖 ${chk.error} No la agendé.`);
+  }
+  d.nota = chk.nota || null;
+
   // Misma validación del Manual General que el formulario (solo se puede
   // revisar si la persona tiene cuenta registrada con su perfil completo).
   const orgEntrevista = orgPorId(data, d.orgId);
@@ -630,6 +659,9 @@ function tarjetaEntrevista(d, data) {
       ['📅', fechaLegible(d.fecha)],
       ['🕐', d.hora],
       ['🏷️', org?.name || ''],
+      ...(d.tipo && d.tipo !== 'general' ? [['📋', tipoPorKey(d.tipo)?.label || d.tipo]] : []),
+      ...(d.entrevistadorId ? [['🧑‍💼', `Con ${(data.users || []).find((u) => u.id === Number(d.entrevistadorId))?.name || ''}`]] : []),
+      ...(d.nota ? [['ℹ️', d.nota]] : []),
     ],
   };
 }
@@ -649,8 +681,11 @@ async function guardarEntrevista(d, usuario, data) {
       description: '',
       location: '',
       sala: '',
-      interviewerName: usuario.name || '',
-      interviewerUserId: usuario.id,
+      ...(() => {
+        const e = d.entrevistadorId ? db.users.find((u) => u.id === Number(d.entrevistadorId)) : null;
+        return e ? { interviewerName: e.name, interviewerUserId: e.id } : { interviewerName: usuario.name || '', interviewerUserId: usuario.id };
+      })(),
+      interviewType: d.tipo || 'general',
       ...(d.memberDirectoryId ? { memberDirectoryId: d.memberDirectoryId } : {}),
       interviewerEmail: '',
       interviewerPhone: '',
@@ -747,6 +782,7 @@ const HERRAMIENTAS_AGENDAR = [
           fecha: { type: 'string', description: 'Fecha en formato AAAA-MM-DD, solo si la dijo.' },
           hora: { type: 'string', description: 'Hora en formato HH:MM de 24 horas, solo si la dijo.' },
           organizacion: { type: 'string', description: 'Organización, solo si la dijo.' },
+          tipo: { type: 'string', enum: TIPOS_ENTREVISTA.map((t) => t.key), description: 'Tipo de entrevista si se deduce (ej. renovación de recomendación del templo, jóvenes, ministración); si no, omitir.' },
         },
       },
     },
@@ -844,7 +880,7 @@ function borradorDesdeIA(intencion, data, hoyObj) {
   const orgId = a.organizacion ? inferOrganizationId(String(a.organizacion).toLowerCase(), data.organizations) : null;
   if (intencion.tipo === 'entrevista') {
     const nombre = a.nombre ? nombreDesdeRespuesta(a.nombre) : null;
-    return { memberName: nombre, fecha: fechaOk, hora: horaOk, orgId };
+    return { memberName: nombre, fecha: fechaOk, hora: horaOk, orgId, ...(tipoPorKey(a.tipo) ? { tipo: a.tipo } : {}) };
   }
   const titulo = typeof a.titulo === 'string' && a.titulo.trim() ? a.titulo.trim().slice(0, 80) : null;
   return {

@@ -3,6 +3,7 @@ import { load, withDb, nextId, interviewEligibility, interviewAvailabilityMatche
 import { requireAuth, requireRole } from '../guard.js';
 import { sendInterviewScheduledWhatsApp } from '../notifications.js';
 import { buscarMiembros } from '../chat.js';
+import { validarTipoEntrevista, resolverEntrevistador, tipoPorKey } from '../tiposEntrevista.js';
 
 // Solicitudes que llegan por el enlace público (sin cuenta): el nombre viene
 // escrito a mano. Para que el líder las enlace con la persona real, se le
@@ -202,10 +203,14 @@ export function registerInterviewRequestRoutes(router) {
         return sendJson(res, 400, { error: `${targetLeader.name} ya tiene una entrevista agendada ese horario — elige otro` });
       }
     }
+    const interviewType = tipoPorKey(body?.interviewType) ? body.interviewType : 'general';
+    const tipoCheck = validarTipoEntrevista(data0, { tipoKey: interviewType, organizationId, entrevistador: targetLeader });
+    if (!tipoCheck.ok) return sendJson(res, 400, { error: tipoCheck.error });
     const now = new Date().toISOString();
     const reqItem = await withDb((d) => {
       const r = {
         id: nextId(d, 'interviewRequests'),
+        interviewType,
         memberUserId: req.user.id,
         memberName: req.user.name,
         organizationId: Number(organizationId),
@@ -271,6 +276,13 @@ export function registerInterviewRequestRoutes(router) {
     const endTime = body?.endTime !== undefined ? (body.endTime || null) : reqItem.endTime;
     const location = body?.location || '';
     const sala = ['Casa Capilla', 'Capilla'].includes(location) ? (body?.sala || '') : '';
+    // Quién puede hacer este tipo de entrevista (Manual General 31.2.2).
+    const interviewType = body?.interviewType !== undefined ? (tipoPorKey(body.interviewType) ? body.interviewType : 'general') : (reqItem.interviewType || 'general');
+    const entrevistador = resolverEntrevistador(data0, body?.interviewerName
+      ? { interviewerName: body.interviewerName }
+      : { interviewerUserId: reqItem.targetLeaderUserId, interviewerName: reqItem.targetLeaderName || req.user.name });
+    const tipoCheck = validarTipoEntrevista(data0, { tipoKey: interviewType, organizationId: reqItem.organizationId, entrevistador });
+    if (!tipoCheck.ok) return sendJson(res, 400, { error: tipoCheck.error });
     const now = new Date().toISOString();
     // Corrección (revisión de código): el chequeo `status !== 'pending'` de
     // arriba corre sobre `data0`, tomada antes de entrar a withDb — dos
@@ -298,6 +310,7 @@ export function registerInterviewRequestRoutes(router) {
         memberPhone: r.memberPhone || '',
         memberEmail: '',
         description: r.note || '',
+        interviewType,
         location,
         sala,
         interviewerName: body?.interviewerName || r.targetLeaderName || '',

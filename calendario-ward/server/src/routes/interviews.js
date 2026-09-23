@@ -1,6 +1,7 @@
 import { sendJson } from '../router.js';
 import { load, withDb, nextId, interviewEligibility } from '../db.js';
 import { requireAuth } from '../guard.js';
+import { TIPOS_ENTREVISTA, QUIEN_LABEL, validarTipoEntrevista, resolverEntrevistador, tipoPorKey } from '../tiposEntrevista.js';
 import { sendCancellationEmail, sendRescheduleEmail, sendInterviewScheduledWhatsApp, sendInterviewCancelledWhatsApp, sendInterviewRescheduledWhatsApp } from '../notifications.js';
 
 // Busca la cuenta registrada vinculada al miembro de una entrevista (si la
@@ -170,6 +171,7 @@ function groupInterviews(rows, orgs, data) {
       location: first.location,
       sala: first.sala,
       interviewerName: first.interviewerName,
+      interviewType: first.interviewType || 'general',
       interviewerEmail: first.interviewerEmail,
       interviewerPhone: first.interviewerPhone,
       date: first.date,
@@ -232,6 +234,12 @@ function normalizeMembersInput(body, users) {
 }
 
 export function registerInterviewRoutes(router) {
+  // Catálogo de tipos de entrevista y quién puede hacer cada uno (Manual
+  // General 31.2.2) — ver tiposEntrevista.js.
+  router.get('/api/interview-types', requireAuth(async (req, res) => {
+    sendJson(res, 200, { tipos: TIPOS_ENTREVISTA, quien: QUIEN_LABEL });
+  }));
+
   // Cualquier usuario autenticado puede VER las entrevistas agendadas
   router.get('/api/interviews', requireAuth(async (req, res) => {
     const data = load();
@@ -341,6 +349,12 @@ export function registerInterviewRoutes(router) {
     }
     const eligibilityError = checkGroupEligibility(data, organizationId, members);
     if (eligibilityError) return sendJson(res, 400, { error: eligibilityError });
+    // Quién puede hacer cada tipo de entrevista (Manual General 31.2.2).
+    const interviewType = tipoPorKey(body?.interviewType) ? body.interviewType : 'general';
+    const tipoCheck = validarTipoEntrevista(data, {
+      tipoKey: interviewType, organizationId, entrevistador: resolverEntrevistador(data, { interviewerName }),
+    });
+    if (!tipoCheck.ok) return sendJson(res, 400, { error: tipoCheck.error });
     const now = new Date().toISOString();
     const createdRows = await withDb((d) => {
       const finalLocation = location || '';
@@ -366,6 +380,7 @@ export function registerInterviewRoutes(router) {
           interviewerName: interviewerName || '',
           interviewerEmail: interviewerEmail || '',
           interviewerPhone: interviewerPhone || '',
+          interviewType,
           date,
           startTime,
           endTime: endTime || null,
@@ -439,6 +454,13 @@ export function registerInterviewRoutes(router) {
     if (!members.length) return sendJson(res, 400, { error: 'La entrevista necesita al menos una persona' });
     const eligibilityError = checkGroupEligibility(data, nextOrganizationId, members);
     if (eligibilityError) return sendJson(res, 400, { error: eligibilityError });
+    const nextType = body.interviewType !== undefined ? (tipoPorKey(body.interviewType) ? body.interviewType : 'general') : (first.interviewType || 'general');
+    const nextInterviewer = body.interviewerName !== undefined ? (body.interviewerName || '') : (first.interviewerName || '');
+    const tipoCheck = validarTipoEntrevista(data, {
+      tipoKey: nextType, organizationId: nextOrganizationId,
+      entrevistador: resolverEntrevistador(data, { interviewerName: nextInterviewer }),
+    });
+    if (!tipoCheck.ok) return sendJson(res, 400, { error: tipoCheck.error });
 
     // se guarda la fecha/hora previas para poder avisar "antes → ahora" si
     // cambian, antes de que withDb las sobrescriba.
@@ -460,6 +482,7 @@ export function registerInterviewRoutes(router) {
         startTime: body.startTime !== undefined ? body.startTime : rows[0].startTime,
         endTime: body.endTime !== undefined ? (body.endTime || null) : rows[0].endTime,
         organizationId: nextOrganizationId,
+        interviewType: nextType,
       };
       const dateOrTimeChanged = sharedPatch.date !== rows[0].date || sharedPatch.startTime !== rows[0].startTime;
       const interviewerContactChanged = sharedPatch.interviewerEmail !== (rows[0].interviewerEmail || '');

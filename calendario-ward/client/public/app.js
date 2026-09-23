@@ -4479,7 +4479,7 @@ function interviewPendingCardHtml(iv) {
       <span class="org-dot" style="background:${esc(iv.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(iv.memberNames || iv.memberName)}${(iv.members || []).some((m) => m.memberUserId) ? ' <span title="Vinculada a un usuario registrado — le aparece en su Mis Actividades" style="font-weight:400; font-size:12px; color:var(--celeste-dark);">🔗 registrado</span>' : ''}</div>
-        <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + phoneWithWhatsAppHtml(iv.memberPhone, esc(iv.memberPhone)) : ''}</div>
+        <div class="lc-sub">${esc(iv.organizationName)}${iv.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(iv))}</span>` : ''}${iv.interviewerName ? ` · 🧑‍💼 ${esc(iv.interviewerName)}` : ''}${tipoEntrevistaLabel(iv.interviewType) ? ` · 📋 ${esc(tipoEntrevistaLabel(iv.interviewType))}` : ''}${iv.description ? ' · ' + esc(iv.description) : ''}${(iv.members || []).length === 1 && iv.memberPhone ? ' · ' + phoneWithWhatsAppHtml(iv.memberPhone, esc(iv.memberPhone)) : ''}</div>
         <div class="lc-sub" style="margin-top:2px;">${interviewStatsLine(iv)}</div>
       </div>
       <div class="lc-when">${esc(fmtTime(iv.startTime))}${iv.endTime ? ' - ' + esc(fmtTime(iv.endTime)) : ''}</div>
@@ -4505,6 +4505,7 @@ function interviewPendingDateGroupsHtml(items) {
 }
 async function renderInterviewsView() {
   const container = document.getElementById('view-root');
+  await cargarTiposEntrevista();
   const seesAll = canViewAllInterviews();
   const interviewOrgs = state.organizations.filter((o) => o.allowsInterviews && (seesAll || o.id === state.user.organizationId));
   const canManage = canManageAnyInterviews();
@@ -4695,7 +4696,7 @@ function interviewRequestRowHtml(r) {
           ${r.sugerencias.map((sg) => `<button type="button" class="btn btn-secondary btn-sm ivreq-link-btn" data-id="${r.id}" data-name="${esc(sg.name)}" data-user="${sg.userId || ''}" title="Enlazar esta solicitud con esta persona">${esc(sg.name)}${sg.userId ? ' 🔗' : ''}${sg.porTelefono ? ' · 📞 mismo teléfono' : ''}</button>`).join('')}
         </div>` : ''}
         ${r.memberPhone ? `<div class="lc-sub">📞 <a href="https://wa.me/${esc(String(r.memberPhone).replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(r.memberPhone)}</a></div>` : ''}
-        <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
+        <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${tipoEntrevistaLabel(r.interviewType) ? ' · 📋 ' + esc(tipoEntrevistaLabel(r.interviewType)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
         ${r.status === 'rejected' && r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
         ${r.status !== 'pending' && r.decidedByName ? `<div class="lc-sub" style="margin-top:2px;">Decidida por ${esc(r.decidedByName)}</div>` : ''}
       </div>
@@ -5120,10 +5121,56 @@ if (speechRecognitionSupported()) {
   scheduleDictationScan();
 }
 
+// ---------------- Tipos de entrevista (Manual General 31.2.2) ----------------
+// Catálogo servido por GET /api/interview-types (server/src/tiposEntrevista.js):
+// qué entrevistas hace solo el obispo, cuáles el obispo o un consejero, y
+// cuáles las presidencias de Cuórum de Élderes / Sociedad de Socorro. El
+// servidor valida al guardar; acá solo se muestra y se orienta.
+let tiposEntrevistaCache = null;
+async function cargarTiposEntrevista() {
+  if (tiposEntrevistaCache) return tiposEntrevistaCache;
+  try { tiposEntrevistaCache = await api('/interview-types'); } catch (e) { tiposEntrevistaCache = { tipos: [], quien: {} }; }
+  return tiposEntrevistaCache;
+}
+function tipoEntrevistaLabel(key) {
+  if (!key || key === 'general' || !tiposEntrevistaCache) return '';
+  return tiposEntrevistaCache.tipos.find((t) => t.key === key)?.label || '';
+}
+function tipoEntrevistaFieldHtml(prefix, selected) {
+  const c = tiposEntrevistaCache || { tipos: [], quien: {} };
+  const grupos = ['cualquiera', 'obispo', 'obispado', 'presidencia'];
+  return `
+    <div class="field">
+      <label>Tipo de entrevista</label>
+      <select name="interviewType" id="${prefix}-tipo">
+        ${grupos.map((q) => {
+          const ts = c.tipos.filter((t) => t.quien === q);
+          if (!ts.length) return '';
+          return `<optgroup label="${esc(c.quien[q] || q)}">${ts.map((t) => `<option value="${t.key}" ${t.key === (selected || 'general') ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</optgroup>`;
+        }).join('')}
+      </select>
+      <div id="${prefix}-tipo-hint" class="hint-box" style="margin-top:6px; display:none;"></div>
+    </div>`;
+}
+function wireTipoEntrevista(prefix) {
+  const sel = document.getElementById(`${prefix}-tipo`);
+  const hint = document.getElementById(`${prefix}-tipo-hint`);
+  if (!sel || !hint) return;
+  const pintar = () => {
+    const t = (tiposEntrevistaCache?.tipos || []).find((x) => x.key === sel.value);
+    if (!t || t.quien === 'cualquiera') { hint.style.display = 'none'; return; }
+    hint.style.display = '';
+    hint.innerHTML = `📖 <b>${esc(tiposEntrevistaCache.quien[t.quien] || '')}</b>${t.ref ? ` · Manual General ${esc(t.ref)}` : ''}${t.nota ? `<br>ℹ️ ${esc(t.nota)}` : ''}`;
+  };
+  sel.addEventListener('change', pintar);
+  pintar();
+}
+
 async function openInterviewModal(existing = null) {
   const options = editableOrgOptions('interview');
   if (!existing && options.length === 0) { toast('No tienes permiso para agendar entrevistas', 'error'); return; }
   const isEdit = !!existing;
+  await cargarTiposEntrevista();
   let directory = [];
   let allInterviews = [];
   try { directory = await api('/users/directory'); } catch (e) { directory = []; }
@@ -5156,6 +5203,7 @@ async function openInterviewModal(existing = null) {
               <div id="iv-member-rows"></div>
               <button type="button" class="btn btn-secondary btn-sm" id="iv-add-row">+ Agregar otra persona (matrimonio, compañerismo de ministración...)</button>
             </div>
+            ${tipoEntrevistaFieldHtml('iv', existing?.interviewType)}
             <div class="field">
               <label>Descripción / motivo</label>
               <textarea name="description" placeholder="Ej: Entrevista de recomendación para el templo">${esc(existing?.description || '')}</textarea>
@@ -5209,6 +5257,7 @@ async function openInterviewModal(existing = null) {
   document.getElementById('iv-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'iv-modal-backdrop') ivGuardedClose(); });
   getNameSuggestions();
   wireNameAutocomplete(document.querySelector('#iv-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
+  wireTipoEntrevista('iv');
   // Esto borra la entrevista sin dejar registro histórico — pensado para
   // corregir un error al agendar (ej. quedó duplicada). Si la entrevista se
   // agendó bien pero no se pudo hacer (o ya se hizo), conviene cerrar este
@@ -5361,7 +5410,8 @@ async function refreshAfterInterviewChange() {
 // organización correspondiente, o cualquier líder de Obispado) puede
 // mantener la fecha/hora que propuso quien la pidió, o ajustarla — más el
 // lugar y quién la va a realizar. Al guardar se crea la entrevista real.
-function openConfirmRequestModal(r) {
+async function openConfirmRequestModal(r) {
+  await cargarTiposEntrevista();
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" id="ivc-modal-backdrop">
@@ -5386,6 +5436,7 @@ function openConfirmRequestModal(r) {
               <input type="time" name="endTime" value="${esc(r.endTime || '')}" />
             </div>
             ${locationFieldHtml('ivc')}
+            ${tipoEntrevistaFieldHtml('ivc', r.interviewType)}
             <div class="field">
               <label>Líder que realizará la entrevista</label>
               <input type="text" name="interviewerName" required placeholder="Nombre del líder" value="${esc(r.targetLeaderName || state.user.name)}" />
@@ -5418,6 +5469,7 @@ function openConfirmRequestModal(r) {
   document.getElementById('ivc-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivc-modal-backdrop') ivcGuardedClose(); });
   getNameSuggestions();
   wireNameAutocomplete(document.querySelector('#ivc-form [name="interviewerName"]'), () => nameSuggestionsCache?.interviewers);
+  wireTipoEntrevista('ivc');
   document.getElementById('ivc-save').addEventListener('click', async () => {
     const form = document.getElementById('ivc-form');
     if (!form.reportValidity()) return;
@@ -5437,6 +5489,7 @@ function openConfirmRequestModal(r) {
       interviewerName: fd.get('interviewerName'),
       interviewerEmail: fd.get('interviewerEmail') || '',
       interviewerPhone: fd.get('interviewerPhone') || '',
+      interviewType: fd.get('interviewType') || 'general',
     };
     try {
       await api(`/interview-requests/${r.id}/confirm`, { method: 'PUT', body });

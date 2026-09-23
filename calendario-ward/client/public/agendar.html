@@ -148,6 +148,13 @@
           <input id="nombre" name="nombre" autocomplete="name" required maxlength="80" />
           <label for="telefono">Teléfono (WhatsApp)</label>
           <input id="telefono" name="telefono" type="tel" autocomplete="tel" inputmode="tel" placeholder="+56 9 1234 5678" required maxlength="16" />
+          ${(info.tipos || []).length > 1 ? `
+          <label for="tipo">Tipo de entrevista</label>
+          <select id="tipo" name="tipo" style="width:100%; padding:11px 12px; font:inherit; font-size:16px; color:var(--ink); background:var(--card); border:1px solid var(--border); border-radius:10px;">
+            ${info.tipos.map((t) => `<option value="${esc(t.key)}">${esc(t.key === 'general' ? 'General / conversar con mi líder' : t.label)}</option>`).join('')}
+          </select>
+          <div id="tipo-nota" class="muted" style="margin-top:6px;"></div>
+          <p class="muted" style="margin:6px 0 0;">Solo aparecen los tipos que ${esc(l.nombre.split(' ')[0])} puede atender según el Manual General.</p>` : ''}
           <label for="nota">Motivo (opcional)</label>
           <textarea id="nota" name="nota" maxlength="300" placeholder="Ej. renovar recomendación del templo"></textarea>
           <div class="trampa" aria-hidden="true"><label>No llenar<input name="website" tabindex="-1" autocomplete="off" /></label></div>
@@ -158,6 +165,11 @@
         </form>`;
 
       const diasEl = document.getElementById('dias'); const horasEl = document.getElementById('horas');
+      const tipoSel = document.getElementById('tipo');
+      if (tipoSel) {
+        const pintarNota = () => { const t = info.tipos.find((x) => x.key === tipoSel.value); document.getElementById('tipo-nota').textContent = t && t.nota ? 'ℹ️ ' + t.nota : ''; };
+        tipoSel.addEventListener('change', pintarNota); pintarNota();
+      }
       const resumen = document.getElementById('resumen');
       function pintar() {
         diasEl.innerHTML = info.dias.map((d) => { const f = aFecha(d.fecha); return `<button type="button" class="dia" data-f="${d.fecha}" aria-pressed="${d.fecha === dia}"><small>${DIAS_C[f.getDay()]}</small><b>${f.getDate()}</b><small>${MESES[f.getMonth()].slice(0, 3)}</small></button>`; }).join('');
@@ -180,7 +192,7 @@
         try {
           const r = await pedir(`/api/public/agendar/${encodeURIComponent(token)}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nombre: f.nombre.value, telefono: f.telefono.value, nota: f.nota.value, website: f.website.value, fecha: dia, hora }),
+            body: JSON.stringify({ nombre: f.nombre.value, telefono: f.telefono.value, nota: f.nota.value, website: f.website.value, fecha: dia, hora, tipo: f.tipo ? f.tipo.value : 'general' }),
           });
           if (r.estado) { guardar(`solicitud:${token}`, r.estado); location.href = `/agendar/estado/${r.estado}?nueva=1`; }
         } catch (ex) {
