@@ -1,5 +1,4 @@
 import { GoogleGenAI } from '@google/genai';
-import Groq from 'groq-sdk';
 import { load, withDb, nextId, interviewEligibility } from './db.js';
 import { canEditOrg, PURPOSE_OPTIONS, orgRequiresSupervisingAdults } from './routes/events.js';
 import { canScheduleOrg, orgAllowsInterviews, orgSeesAllInterviews } from './routes/interviews.js';
@@ -288,6 +287,9 @@ function nombreDesdeRespuesta(texto) {
     .replace(/[.,;!?]+\s*$/, '')
     .trim();
   if (!limpio || limpio.length > 60 || /\d/.test(limpio)) return null;
+  // Palabras de control del chat que nunca son un nombre.
+  if (/^(s[ií]|no|ok|okay|dale|confirmar|confirmo|cancelar|cancela|listo|ninguno|ninguna|gracias)$/i.test(limpio)) return null;
+  if (PARECE_AGENDAR.test(normalizeSearchText(limpio))) return null;
   return limpio;
 }
 
@@ -341,16 +343,93 @@ function purposeDesdeRespuesta(mensajeMin) {
 }
 
 // ----------------------------------------------------------------------
+// RESPUESTAS ESTRUCTURADAS
+// ----------------------------------------------------------------------
+// Cada respuesta es { texto, opciones?, tarjeta?, items? }:
+//   - opciones: botones de respuesta rápida [{ label, value }] — al tocar
+//     uno, el widget manda `value` como si la persona lo hubiera escrito.
+//   - tarjeta: resumen para confirmar antes de guardar.
+//   - items: lista de actividades/entrevistas/turnos para mostrar como
+//     tarjetas con el color de cada organización.
+function resp(texto, extra = {}) {
+  return { texto, ...extra };
+}
+
+const DIAS_NOMBRE = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const MESES_NOMBRE = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+function fechaDesdeISO(iso) {
+  const [y, m, d] = String(iso).split('-').map(Number);
+  return new Date(y, m - 1, d, 12);
+}
+function fechaLegible(iso) {
+  const d = fechaDesdeISO(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${DIAS_NOMBRE[d.getDay()]} ${d.getDate()} de ${MESES_NOMBRE[d.getMonth()]}`;
+}
+function sumarDias(d, n) {
+  const x = new Date(d); x.setDate(x.getDate() + n); return x;
+}
+
+function opcionesFecha(hoyObj) {
+  const sab = sumarDias(hoyObj, (6 - hoyObj.getDay() + 7) % 7 || 7);
+  const dom = sumarDias(hoyObj, (7 - hoyObj.getDay()) % 7 || 7);
+  return [
+    { label: 'Hoy', value: 'hoy' },
+    { label: 'Mañana', value: 'mañana' },
+    { label: `Sábado ${sab.getDate()}`, value: toISO(sab) },
+    { label: `Domingo ${dom.getDate()}`, value: toISO(dom) },
+  ];
+}
+const OPCIONES_HORA = ['10:00', '19:00', '19:30', '20:00'].map((h) => ({ label: h, value: `a las ${h}` }));
+const OPCIONES_CONFIRMAR = [
+  { label: '✅ Confirmar', value: 'confirmar' },
+  { label: '❌ Cancelar', value: 'cancelar' },
+];
+
+function orgPorId(data, id) {
+  return (data.organizations || []).find((o) => Number(o.id) === Number(id)) || null;
+}
+
+const ES_AFIRMATIVO = /^\s*(s[ií]|dale|ok|okay|confirm\w*|agend[aá]\w*|guard[aá]\w*|as[ií] est[aá] bien|correcto|perfecto|listo)(?=[\s,.!]|$)/i;
+
+// ----------------------------------------------------------------------
 // AGENDAMIENTO REAL — usa las MISMAS reglas de permisos y los MISMOS
 // campos obligatorios que exige POST /api/events y POST /api/interviews
 // (ver events.js / interviews.js), y escribe con nextId()+withDb() como
-// el resto de la app.
+// el resto de la app. Antes de guardar SIEMPRE muestra un resumen y pide
+// confirmación (nada se guarda por un malentendido de fecha u hora).
 // ----------------------------------------------------------------------
 
-async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, data, previo = null) {
-  if (!usuario) return '🔒 Para agendar actividades necesitas haber iniciado sesión.';
+// Cuando ya se está en el paso de confirmar, un mensaje que no es "sí" ni
+// "cancelar" se toma como corrección ("mejor a las 21:00", "el sábado").
+function aplicarCorrecciones(d, mensajeMin, hoyObj, data) {
+  let cambio = false;
+  const f = parseFecha(mensajeMin, hoyObj); if (f) { d.fecha = f; cambio = true; }
+  const h = parseHora(mensajeMin); if (h) { d.hora = h; cambio = true; }
+  const o = inferOrganizationId(mensajeMin, data.organizations); if (o) { d.orgId = o; cambio = true; }
+  if (d.purpose !== undefined) {
+    const p = purposeDesdeRespuesta(mensajeMin); if (p) { d.purpose = p; cambio = true; }
+  }
+  return cambio;
+}
+
+async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, data, previo = null, falta = null) {
+  if (!usuario) return resp('🔒 Para agendar actividades necesitas haber iniciado sesión.');
 
   const d = { ...(previo || {}) };
+  const preguntar = (f, texto, extra = {}) => { guardarBorrador(usuario, 'actividad', d, f); return resp(texto, extra); };
+
+  if (falta === 'confirmar') {
+    if (ES_AFIRMATIVO.test(mensajeMin)) {
+      borrarBorrador(usuario);
+      return guardarActividad(d, usuario, data);
+    }
+    if (!aplicarCorrecciones(d, mensajeMin, hoyObj, data)) {
+      return preguntar('confirmar', '✏️ No entendí el cambio. Dime, por ejemplo, "a las 20:00", "el sábado" o "para la Primaria" — o toca Confirmar / Cancelar.', { tarjeta: tarjetaActividad(d, data), opciones: OPCIONES_CONFIRMAR });
+    }
+  }
+
   if (!d.titulo) {
     let titulo = mensaje
       .replace(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento)?\s*(de|para|del)?/i, '')
@@ -362,39 +441,62 @@ async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, da
   d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
   d.hora = d.hora || parseHora(mensajeMin);
   d.orgId = d.orgId || inferOrganizationId(mensajeMin, data.organizations);
+  // Un líder solo puede agendar actividades de su propia organización:
+  // si no dijo cuál, se asume la suya en vez de preguntar.
+  if (!d.orgId && usuario.role === 'leader' && usuario.organizationId) d.orgId = Number(usuario.organizationId);
   d.purpose = d.purpose || (previo ? purposeDesdeRespuesta(mensajeMin) : inferPurpose(mensajeMin));
 
   const titulo = d.titulo;
-  const preguntar = (falta, texto) => { guardarBorrador(usuario, 'actividad', d, falta); return texto; };
+  if (!d.fecha) return preguntar('fecha', `📅 ¿Qué día es "${titulo}"?`, { opciones: opcionesFecha(hoyObj) });
+  if (!d.hora) return preguntar('hora', `🕐 ¿A qué hora es "${titulo}" el ${fechaLegible(d.fecha)}?`, { opciones: OPCIONES_HORA });
+  if (!d.orgId) {
+    const editables = (data.organizations || []).filter((o) => canEditOrg(usuario, o.id));
+    return preguntar('organizacion', `🏷️ ¿Para qué organización es "${titulo}"?`, { opciones: editables.map((o) => ({ label: o.name, value: o.name })) });
+  }
 
-  if (!d.fecha) return preguntar('fecha', `📅 Me falta la **fecha** para agendar "${titulo}". ¿Para qué día? (puedes decir "mañana", "el sábado", "15 de octubre"…)`);
-  if (!d.hora) return preguntar('hora', `🕐 Me falta la **hora** para "${titulo}" el ${d.fecha}. ¿A qué hora es?`);
-  if (!d.orgId) return preguntar('organizacion', `🏷️ ¿Para qué organización es "${titulo}"? (Cuórum de Élderes, Sociedad de Socorro, Primaria, Hombres Jóvenes, Mujeres Jóvenes, Jóvenes Adultos Solteros, Obispado…)`);
+  if (!canEditOrg(usuario, d.orgId)) { borrarBorrador(usuario); return resp('🚫 No tienes permiso para agendar actividades de esa organización (solo su líder o un Administrador pueden).'); }
 
-  if (!canEditOrg(usuario, d.orgId)) { borrarBorrador(usuario); return `🚫 No tienes permiso para agendar actividades de esa organización (solo su líder o un Administrador pueden).`; }
-
-  if (!d.purpose) return preguntar('proposito', `🎯 ¿Cuál es el propósito de "${titulo}"? (${PURPOSE_OPTIONS.join(', ')})`);
-  if (!PURPOSE_OPTIONS.includes(d.purpose)) return preguntar('proposito', `🎯 No reconocí el propósito — debe ser uno de: ${PURPOSE_OPTIONS.join(', ')}.`);
-
-  // Desde acá cualquier salida termina el flujo (se guarda o se deriva al formulario).
-  borrarBorrador(usuario);
+  if (!d.purpose || !PURPOSE_OPTIONS.includes(d.purpose)) {
+    return preguntar('proposito', `🎯 ¿Cuál es el propósito de "${titulo}"?`, { opciones: PURPOSE_OPTIONS.map((p) => ({ label: p, value: p })) });
+  }
 
   if (orgRequiresSupervisingAdults(data.organizations, d.orgId)) {
-    return `👥 Esta organización requiere el nombre de al menos **dos adultos supervisores** presentes (Manual General 20.7.1). Agéndala desde el formulario de **Mis Actividades** para poder indicarlos — no la guardé todavía.`;
+    borrarBorrador(usuario);
+    return resp('👥 Esta organización requiere el nombre de al menos **dos adultos supervisores** presentes (Manual General 20.7.1). Agéndala desde el formulario de **Mis Actividades** para poder indicarlos — no la guardé todavía.');
   }
 
   const conflicts = findStakeConflicts(data, { date: d.fecha, startTime: d.hora, endTime: null });
   if (conflicts.length && !isObispadoLeader(usuario, data)) {
+    borrarBorrador(usuario);
     const lista = conflicts.map((c) => `"${c.title}"`).join(', ');
-    return `⚠️ Esa fecha/hora choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'} (${lista}), que tienen prioridad. Solo el líder de Obispado o un Administrador puede autorizarlo — agéndala desde el formulario normal para poder confirmarlo. No la guardé.`;
+    return resp(`⚠️ Esa fecha/hora choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'} (${lista}), que tienen prioridad. Solo el líder de Obispado o un Administrador puede autorizarlo — agéndala desde el formulario normal para poder confirmarlo. No la guardé.`);
   }
 
-  const org = data.organizations.find((o) => o.id === Number(d.orgId));
+  return preguntar('confirmar', '📝 ¿Lo agendo así? Si algo no calza, dime el cambio (ej. "a las 20:00").', { tarjeta: tarjetaActividad(d, data), opciones: OPCIONES_CONFIRMAR });
+}
+
+function tarjetaActividad(d, data) {
+  const org = orgPorId(data, d.orgId);
+  return {
+    tipo: 'actividad',
+    titulo: d.titulo,
+    color: org?.color || null,
+    filas: [
+      ['📅', fechaLegible(d.fecha)],
+      ['🕐', d.hora],
+      ['🏷️', org?.name || ''],
+      ['🎯', d.purpose || ''],
+    ],
+  };
+}
+
+async function guardarActividad(d, usuario, data) {
+  const org = orgPorId(data, d.orgId);
   const now = new Date().toISOString();
   const evento = await withDb((db) => {
     const e = {
       id: nextId(db, 'events'),
-      title: titulo,
+      title: d.titulo,
       date: d.fecha,
       startTime: d.hora,
       organizationId: Number(d.orgId),
@@ -407,19 +509,26 @@ async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, da
     return e;
   });
   vaciarCache();
-
-  return `✅ **¡Listo! Actividad agendada:**\n\n` +
-    `• **${evento.title}**\n` +
-    `• 📅 ${evento.date} a las ${evento.startTime}\n` +
-    `• 🏷️ ${org?.name || ''} · Propósito: ${d.purpose}\n\n` +
-    `_Ya aparece en el calendario. Si algo no calza, edítala desde el calendario._`;
+  return resp(`✅ **¡Listo! Actividad agendada:** **${evento.title}**, ${fechaLegible(evento.date)} a las ${evento.startTime} (${org?.name || ''}).\n\n_Ya aparece en el calendario._`, {
+    items: [{ tipo: 'actividad', titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null }],
+  });
 }
 
 async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, data, previo = null, falta = null) {
-  if (!usuario) return '🔒 Para agendar entrevistas necesitas haber iniciado sesión.';
+  if (!usuario) return resp('🔒 Para agendar entrevistas necesitas haber iniciado sesión.');
 
   const d = { ...(previo || {}) };
-  const preguntar = (f, texto) => { guardarBorrador(usuario, 'entrevista', d, f); return texto; };
+  const preguntar = (f, texto, extra = {}) => { guardarBorrador(usuario, 'entrevista', d, f); return resp(texto, extra); };
+
+  if (falta === 'confirmar') {
+    if (ES_AFIRMATIVO.test(mensajeMin)) {
+      borrarBorrador(usuario);
+      return guardarEntrevista(d, usuario, data);
+    }
+    if (!aplicarCorrecciones(d, mensajeMin, hoyObj, data)) {
+      return preguntar('confirmar', '✏️ No entendí el cambio. Dime, por ejemplo, "a las 20:00" o "el jueves" — o toca Confirmar / Cancelar.', { tarjeta: tarjetaEntrevista(d, data), opciones: OPCIONES_CONFIRMAR });
+    }
+  }
 
   // Respuestas a "¿cuál de estas personas?" y "¿lo agendo igual?".
   if (falta === 'elegirMiembro' && Array.isArray(d.opciones)) {
@@ -430,12 +539,14 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
       d.memberName = elegido.name; d.memberUserId = elegido.userId; d.miembroResuelto = true;
     } else if (/^(ninguno|ninguna|ningun)$/.test(primeraPalabra)) {
       d.miembroResuelto = true; // se deja el nombre tal como lo escribió
-    } else {
+    } else if (nombreDesdeRespuesta(mensaje)) {
       d.memberName = nombreDesdeRespuesta(mensaje); d.miembroResuelto = false;
+    } else {
+      return preguntar('elegirMiembro', `🔎 Elige una de estas personas, o "ninguno" para dejarlo como lo escribiste:\n\n${listaOpciones(d.opciones)}`, { opciones: opcionesMiembros(d.opciones) });
     }
     delete d.opciones;
   } else if (falta === 'confirmarNombre') {
-    if (/^\s*(s[ií]|dale|ok|okay|confirmo|agend[aá]\w*|as[ií] est[aá] bien|correcto)(?=[\s,.!]|$)/i.test(mensajeMin)) {
+    if (ES_AFIRMATIVO.test(mensajeMin)) {
       d.miembroResuelto = true;
     } else if (/^\s*no\b/i.test(mensajeMin) && !nombreDesdeRespuesta(mensaje.replace(/^\s*no[\s,.]*/i, ''))) {
       d.memberName = null; d.miembroResuelto = false;
@@ -453,12 +564,15 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
   d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
   d.hora = d.hora || parseHora(mensajeMin);
   d.orgId = d.orgId || inferOrganizationId(mensajeMin, data.organizations);
-  if (!d.orgId && usuario.role === 'leader') d.orgId = Number(usuario.organizationId);
+  if (!d.orgId && ['leader', 'executive_secretary'].includes(usuario.role) && usuario.organizationId) d.orgId = Number(usuario.organizationId);
 
-  if (!d.memberName) return preguntar('nombre', `🙋 ¿A quién quieres entrevistar?${d.fecha ? ` (ya tengo el ${d.fecha}${d.hora ? ' a las ' + d.hora : ''})` : ''}`);
-  if (!d.fecha) return preguntar('fecha', `📅 Me falta la **fecha** para la entrevista con **${d.memberName}**. ¿Qué día?`);
-  if (!d.hora) return preguntar('hora', `🕐 Me falta la **hora** para la entrevista con **${d.memberName}** el ${d.fecha}. ¿A qué hora?`);
-  if (!d.orgId) return preguntar('organizacion', `🏷️ ¿De qué organización es esta entrevista?`);
+  if (!d.memberName) return preguntar('nombre', `🙋 ¿A quién quieres entrevistar?${d.fecha ? ` (ya tengo el ${fechaLegible(d.fecha)}${d.hora ? ' a las ' + d.hora : ''})` : ''}`);
+  if (!d.fecha) return preguntar('fecha', `📅 ¿Qué día es la entrevista con **${d.memberName}**?`, { opciones: opcionesFecha(hoyObj) });
+  if (!d.hora) return preguntar('hora', `🕐 ¿A qué hora es la entrevista con **${d.memberName}** el ${fechaLegible(d.fecha)}?`, { opciones: OPCIONES_HORA });
+  if (!d.orgId) {
+    const posibles = (data.organizations || []).filter((o) => o.allowsInterviews && canScheduleOrg(usuario, o.id));
+    return preguntar('organizacion', '🏷️ ¿De qué organización es esta entrevista?', { opciones: posibles.map((o) => ({ label: o.name, value: o.name })) });
+  }
 
   // Asociar el nombre con una persona real (usuario registrado o Directorio).
   if (!d.miembroResuelto) {
@@ -470,25 +584,52 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
     } else if (encontrados.length > 1) {
       d.opciones = encontrados.slice(0, 8).map(({ name, userId }) => ({ name, userId }));
       const extra = encontrados.length > 8 ? `\n_(y ${encontrados.length - 8} más — si no está, escribe el nombre más completo)_` : '';
-      return preguntar('elegirMiembro', `🔎 Encontré varias personas que coinciden con **${d.memberName}**:\n\n${listaOpciones(d.opciones)}${extra}\n\nResponde con el **número**, o "ninguno" para dejarlo como lo escribiste.`);
+      return preguntar('elegirMiembro', `🔎 Encontré varias personas que coinciden con **${d.memberName}**:\n\n${listaOpciones(d.opciones)}${extra}\n\nElige una, o "ninguno" para dejarlo como lo escribiste.`, {
+        opciones: opcionesMiembros(d.opciones),
+      });
     } else {
-      return preguntar('confirmarNombre', `🔎 No encontré a **${d.memberName}** en el Directorio ni entre los usuarios registrados. ¿La agendo igual con ese nombre? (responde **sí**, o escríbeme el nombre correcto)`);
+      return preguntar('confirmarNombre', `🔎 No encontré a **${d.memberName}** en el Directorio ni entre los usuarios registrados. ¿La agendo igual con ese nombre? (o escríbeme el nombre correcto)`, {
+        opciones: [{ label: 'Sí, con ese nombre', value: 'sí' }, { label: 'Cancelar', value: 'cancelar' }],
+      });
     }
   }
 
-  borrarBorrador(usuario);
-  if (!orgAllowsInterviews(data, d.orgId)) return `🚫 Esa organización no agenda entrevistas en la app. No la guardé.`;
-  if (!canScheduleOrg(usuario, d.orgId)) return `🚫 No tienes permiso para agendar entrevistas de esa organización. No la guardé.`;
+  if (!orgAllowsInterviews(data, d.orgId)) { borrarBorrador(usuario); return resp('🚫 Esa organización no agenda entrevistas en la app. No la guardé.'); }
+  if (!canScheduleOrg(usuario, d.orgId)) { borrarBorrador(usuario); return resp('🚫 No tienes permiso para agendar entrevistas de esa organización. No la guardé.'); }
 
   // Misma validación del Manual General que el formulario (solo se puede
   // revisar si la persona tiene cuenta registrada con su perfil completo).
-  const orgEntrevista = data.organizations.find((o) => o.id === Number(d.orgId));
+  const orgEntrevista = orgPorId(data, d.orgId);
   const cuenta = d.memberUserId ? (data.users || []).find((u) => u.id === Number(d.memberUserId)) : null;
   if (cuenta && orgEntrevista && interviewEligibility(orgEntrevista.name, cuenta) === false) {
-    return `🚫 Esta entrevista es de ${orgEntrevista.name} y **${cuenta.name}** no corresponde según su perfil (sexo/edad) — según el Manual General, agéndala con el Obispado. No la guardé.`;
+    borrarBorrador(usuario);
+    return resp(`🚫 Esta entrevista es de ${orgEntrevista.name} y **${cuenta.name}** no corresponde según su perfil (sexo/edad) — según el Manual General, agéndala con el Obispado. No la guardé.`);
   }
 
-  const org = data.organizations.find((o) => o.id === Number(d.orgId));
+  return preguntar('confirmar', '📝 ¿La agendo así? Si algo no calza, dime el cambio (ej. "a las 20:30").', { tarjeta: tarjetaEntrevista(d, data), opciones: OPCIONES_CONFIRMAR });
+}
+
+function opcionesMiembros(lista) {
+  return [...lista.map((o, i) => ({ label: `${i + 1}. ${o.name}`, value: String(i + 1) })), { label: 'Ninguno', value: 'ninguno' }];
+}
+
+function tarjetaEntrevista(d, data) {
+  const org = orgPorId(data, d.orgId);
+  return {
+    tipo: 'entrevista',
+    titulo: `Entrevista con ${d.memberName}`,
+    color: org?.color || null,
+    filas: [
+      ['🙋', `${d.memberName}${d.memberUserId ? ' 🔗' : ''}`],
+      ['📅', fechaLegible(d.fecha)],
+      ['🕐', d.hora],
+      ['🏷️', org?.name || ''],
+    ],
+  };
+}
+
+async function guardarEntrevista(d, usuario, data) {
+  const org = orgPorId(data, d.orgId);
   const now = new Date().toISOString();
   const interview = await withDb((db) => {
     const id = nextId(db, 'interviews');
@@ -523,12 +664,191 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
     return iv;
   });
   vaciarCache();
+  return resp(`✅ **¡Listo! Entrevista agendada** con **${interview.memberName}**${interview.memberUserId ? ' 🔗 (vinculada a su cuenta)' : ''}, ${fechaLegible(interview.date)} a las ${interview.startTime}.\n\n_Ya aparece en el módulo de Entrevistas._`, {
+    items: [{ tipo: 'entrevista', titulo: interview.memberName, fecha: interview.date, hora: interview.startTime, org: org?.name || '', color: org?.color || null }],
+  });
+}
 
-  return `✅ **¡Listo! Entrevista agendada:**\n\n` +
-    `• **${interview.memberName}**${interview.memberUserId ? ' 🔗 vinculado a su cuenta' : ''}\n` +
-    `• 📅 ${interview.date} a las ${interview.startTime}\n` +
-    `• 🏷️ ${org?.name || ''}\n\n` +
-    `_Ya aparece en el módulo de Entrevistas. Si algo no es correcto, edítala desde ahí._`;
+// ----------------------------------------------------------------------
+// MODELOS DE IA (gratuitos) — Groq primero, Cerebras de respaldo, Gemini
+// al final. Groq y Cerebras no usan lo que se les manda para entrenar sus
+// modelos; el plan gratis de Gemini sí (fuera de la UE), y acá viajan
+// nombres de miembros y entrevistas — por eso queda como último recurso.
+// Los dos primeros usan la API compatible con OpenAI, así que se llaman
+// con fetch directo (sin depender de la versión del SDK).
+// ----------------------------------------------------------------------
+function proveedoresIA() {
+  const lista = [];
+  if (process.env.GROQ_API_KEY) {
+    lista.push({
+      nombre: 'Groq',
+      url: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions',
+      key: process.env.GROQ_API_KEY,
+      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    });
+  }
+  if (process.env.CEREBRAS_API_KEY) {
+    lista.push({
+      nombre: 'Cerebras',
+      url: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1/chat/completions',
+      key: process.env.CEREBRAS_API_KEY,
+      model: process.env.CEREBRAS_MODEL || 'llama-3.3-70b',
+    });
+  }
+  return lista;
+}
+
+async function llamarOpenAICompatible(prov, body, timeoutMs = 12000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(prov.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${prov.key}` },
+      body: JSON.stringify({ model: prov.model, ...body }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`${prov.nombre} respondió ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// --- Punto 19: la IA entiende la frase libre y devuelve datos ordenados ---
+// La IA NO guarda nada: solo traduce "anótame con el hermano Cuenca el
+// viernes después de la sacramental a las 8" a { nombre, fecha, hora }.
+// Todo lo demás (permisos, Directorio, confirmación, guardado) lo sigue
+// haciendo el servidor con las mismas reglas de siempre.
+const HERRAMIENTAS_AGENDAR = [
+  {
+    type: 'function',
+    function: {
+      name: 'agendar_entrevista',
+      description: 'El usuario quiere agendar/anotar una entrevista o cita con una persona.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nombre: { type: 'string', description: 'Nombre de la persona a entrevistar, tal como lo dijo.' },
+          fecha: { type: 'string', description: 'Fecha en formato AAAA-MM-DD, solo si la dijo.' },
+          hora: { type: 'string', description: 'Hora en formato HH:MM de 24 horas, solo si la dijo.' },
+          organizacion: { type: 'string', description: 'Organización, solo si la dijo.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'agendar_actividad',
+      description: 'El usuario quiere agendar/crear una actividad, reunión o evento en el calendario.',
+      parameters: {
+        type: 'object',
+        properties: {
+          titulo: { type: 'string', description: 'Nombre corto de la actividad (ej. "Noche de hogar", "Asado de JAS").' },
+          fecha: { type: 'string', description: 'Fecha en formato AAAA-MM-DD, solo si la dijo.' },
+          hora: { type: 'string', description: 'Hora en formato HH:MM de 24 horas, solo si la dijo.' },
+          organizacion: { type: 'string', description: 'Organización, solo si la dijo.' },
+          proposito: { type: 'string', enum: PURPOSE_OPTIONS, description: 'Propósito, solo si se deduce claramente.' },
+        },
+      },
+    },
+  },
+];
+
+const PARECE_AGENDAR = /\b(agend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\w*|crea\w*|agreg\w*|a[nñ]ad\w*|ponme|pon|coordin\w*|organiz\w*|calendariz\w*)\b/;
+
+async function extraerIntencionConIA(mensaje, hoyObj, data) {
+  const provs = proveedoresIA();
+  if (!provs.length) return null;
+  const sistema = `Extraes datos para agendar en la app de un barrio de La Iglesia (Chile).
+Hoy es ${DIAS_NOMBRE[hoyObj.getDay()]} ${toISO(hoyObj)}. "El viernes" = el próximo viernes a partir de hoy (o hoy si hoy es viernes).
+"8 de la noche" = 20:00; "después de la sacramental" no es una hora exacta: omite la hora.
+Organizaciones: ${(data.organizations || []).map((o) => o.name).join(', ')}.
+Si el usuario quiere AGENDAR algo, llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
+Si solo pregunta o conversa, no llames ninguna función.`;
+  for (const prov of provs) {
+    try {
+      const r = await llamarOpenAICompatible(prov, {
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: mensaje }],
+        tools: HERRAMIENTAS_AGENDAR,
+        tool_choice: 'auto',
+        temperature: 0,
+        max_tokens: 300,
+      });
+      const call = r?.choices?.[0]?.message?.tool_calls?.[0];
+      if (!call) return { tipo: null };
+      let args = {};
+      try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
+      return { tipo: call.function.name === 'agendar_entrevista' ? 'entrevista' : 'actividad', args };
+    } catch (err) {
+      console.warn(`⚠️ ${prov.nombre} no pudo interpretar el pedido:`, err.message);
+    }
+  }
+  return null;
+}
+
+// Valida lo que devolvió la IA antes de usarlo (fechas y horas bien
+// formadas, organización que exista, propósito permitido).
+function borradorDesdeIA(intencion, data, hoyObj) {
+  const a = intencion.args || {};
+  const fechaOk = typeof a.fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a.fecha) && a.fecha >= toISO(hoyObj) ? a.fecha : null;
+  const horaOk = typeof a.hora === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.hora) ? a.hora : null;
+  const orgId = a.organizacion ? inferOrganizationId(String(a.organizacion).toLowerCase(), data.organizations) : null;
+  if (intencion.tipo === 'entrevista') {
+    const nombre = a.nombre ? nombreDesdeRespuesta(a.nombre) : null;
+    return { memberName: nombre, fecha: fechaOk, hora: horaOk, orgId };
+  }
+  const titulo = typeof a.titulo === 'string' && a.titulo.trim() ? a.titulo.trim().slice(0, 80) : null;
+  return {
+    titulo: titulo ? titulo.charAt(0).toUpperCase() + titulo.slice(1) : null,
+    fecha: fechaOk,
+    hora: horaOk,
+    orgId,
+    purpose: PURPOSE_OPTIONS.includes(a.proposito) ? a.proposito : undefined,
+  };
+}
+
+async function redactarConIA(systemInstruction, historial, mensaje) {
+  for (const prov of proveedoresIA()) {
+    try {
+      const r = await llamarOpenAICompatible(prov, {
+        messages: [
+          { role: 'system', content: systemInstruction },
+          ...(historial || []).flatMap((h) => ([
+            { role: 'user', content: h.user || '' },
+            { role: 'assistant', content: h.bot || '' },
+          ])),
+          { role: 'user', content: mensaje },
+        ],
+        temperature: 0.4,
+        max_tokens: 700,
+      });
+      const texto = r?.choices?.[0]?.message?.content;
+      if (texto) return texto;
+    } catch (err) {
+      console.warn(`⚠️ ${prov.nombre} falló redactando la respuesta:`, err.message);
+    }
+  }
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const historyTurns = (historial || []).flatMap((h) => ([
+        { role: 'user', parts: [{ text: h.user || '' }] },
+        { role: 'model', parts: [{ text: h.bot || '' }] },
+      ]));
+      const response = await ai.models.generateContent({
+        model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
+        contents: [...historyTurns, { role: 'user', parts: [{ text: mensaje }] }],
+        config: { systemInstruction },
+      });
+      if (response && response.text) return response.text;
+    } catch (errGemini) {
+      console.warn('⚠️ Gemini falló (saturación/cuota).', errGemini.message);
+    }
+  }
+  return null;
 }
 
 // Frases con las que la IA "afirma" haber creado algo. En el módulo de
@@ -543,142 +863,195 @@ function filtrarAlucinacion(texto) {
     '"agenda una actividad de noche de hogar el sábado a las 19:00 para el Cuórum de Élderes".';
 }
 
+// ----------------------------------------------------------------------
+// Punto 17: rango de fechas de la consulta — en vez de mandarle a la IA
+// TODAS las actividades futuras, solo las del período que se preguntó
+// (por defecto, los próximos 30 días) y como máximo MAX_ITEMS.
+// ----------------------------------------------------------------------
+const MAX_ITEMS = 15;
+
+function rangoConsulta(norm, mensajeMin, hoyObj) {
+  const hoy = toISO(hoyObj);
+  if (/\bfin de semana\b/.test(norm)) {
+    const sab = sumarDias(hoyObj, hoyObj.getDay() === 0 ? -1 : (6 - hoyObj.getDay() + 7) % 7);
+    return { desde: toISO(sab) < hoy ? hoy : toISO(sab), hasta: toISO(sumarDias(sab, 1)), etiqueta: 'este fin de semana' };
+  }
+  if (/\b(proxima|siguiente) semana\b/.test(norm)) {
+    const lunes = sumarDias(hoyObj, ((8 - hoyObj.getDay()) % 7) || 7);
+    return { desde: toISO(lunes), hasta: toISO(sumarDias(lunes, 6)), etiqueta: 'la próxima semana' };
+  }
+  if (/\besta semana\b/.test(norm)) {
+    return { desde: hoy, hasta: toISO(sumarDias(hoyObj, (7 - hoyObj.getDay()) % 7)), etiqueta: 'esta semana' };
+  }
+  if (/\b(proximo|siguiente) mes\b/.test(norm)) {
+    const ini = new Date(hoyObj.getFullYear(), hoyObj.getMonth() + 1, 1, 12);
+    const fin = new Date(hoyObj.getFullYear(), hoyObj.getMonth() + 2, 0, 12);
+    return { desde: toISO(ini), hasta: toISO(fin), etiqueta: `en ${MESES_NOMBRE[ini.getMonth()]}` };
+  }
+  if (/\b(este mes|del mes|el mes)\b/.test(norm)) {
+    const fin = new Date(hoyObj.getFullYear(), hoyObj.getMonth() + 1, 0, 12);
+    return { desde: hoy, hasta: toISO(fin), etiqueta: 'lo que queda del mes' };
+  }
+  const dia = parseFecha(mensajeMin, hoyObj);
+  if (dia) return { desde: dia, hasta: dia, etiqueta: fechaLegible(dia) };
+  return { desde: hoy, hasta: toISO(sumarDias(hoyObj, 30)), etiqueta: 'los próximos 30 días' };
+}
+
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null) {
   try {
     const db = load();
     const hoyObj = hoyEnChile();
-    const hoy = toISO(hoyObj);
     const mensajeMinusculas = mensaje.toLowerCase().trim();
+    const norm = normalizeSearchText(mensaje);
 
     // ------------------------------------------------------------------------
     // MÓDULO 1: AGENDAMIENTO REAL DE ACTIVIDADES/REUNIONES Y ENTREVISTAS
     // ------------------------------------------------------------------------
-    const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
-    if (matchAgendar) {
-      borrarBorrador(usuario); // un pedido nuevo reemplaza cualquier borrador anterior
-      if (matchAgendar[2] === 'entrevista') {
-        return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db);
-      }
-      return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db);
-    }
 
-    // Continuación de un agendamiento a medias (respuesta a "¿a qué hora?",
-    // "¿a quién?", etc.).
+    // 1a. Continuación de un agendamiento a medias (respuesta a "¿a qué
+    // hora?", "¿a quién?", "¿lo agendo así?", etc.).
     const borrador = leerBorrador(usuario);
-    if (borrador) {
+    const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
+    // Un pedido nuevo ("organiza un asado…") reemplaza al borrador en curso.
+    const pedidoNuevo = /^(?:(?:quiero|necesito|puedes|podrias|me|por favor)\s+)*(agend|anot|organiz|program|crea|reserv|agreg|anad)\w*/.test(norm);
+    if (borrador && !matchAgendar && !pedidoNuevo) {
       if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
         borrarBorrador(usuario);
-        return '👌 Listo, cancelé ese agendamiento. No se guardó nada.';
+        return resp('👌 Listo, cancelé ese agendamiento. No se guardó nada.');
       }
       const esPreguntaNueva = /^\s*(¿|qu[ée]\s|cu[aá]l|cu[aá]nt|cu[aá]ndo|d[oó]nde|qui[ée]n(es)?\s+(tiene|hay|son)|mu[ée]strame|hay\s)/i.test(mensajeMinusculas);
       if (!esPreguntaNueva) {
         if (borrador.tipo === 'entrevista') {
           return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
         }
-        return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos);
+        return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
       }
       borrarBorrador(usuario);
     }
 
+    // 1b. Pedido nuevo: primero la IA (entiende frases libres), y si no hay
+    // IA configurada o no respondió, las reglas de siempre.
+    if (usuario && (matchAgendar || PARECE_AGENDAR.test(norm))) {
+      const intencion = await extraerIntencionConIA(mensaje, hoyObj, db);
+      if (intencion && intencion.tipo) {
+        borrarBorrador(usuario);
+        const previo = borradorDesdeIA(intencion, db, hoyObj);
+        if (intencion.tipo === 'entrevista') {
+          return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db, previo);
+        }
+        if (!previo.titulo) delete previo.titulo;
+        return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, previo);
+      }
+    }
+    if (matchAgendar) {
+      borrarBorrador(usuario);
+      if (matchAgendar[2] === 'entrevista') {
+        return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db);
+      }
+      return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db);
+    }
+
     // ------------------------------------------------------------------------
-    // MÓDULO 2: VERIFICAR CACHÉ DE LECTURA (<10 ms) — solo consultas, nunca
-    // acciones (el bloque de arriba ya retornó si era agendamiento).
+    // MÓDULO 2: VERIFICAR CACHÉ DE LECTURA (<10 ms) — solo consultas.
     // ------------------------------------------------------------------------
     const clave = claveCache(usuario, mensajeMinusculas);
     const cacheada = leerCache(clave);
     if (cacheada) return cacheada;
 
+    // ------------------------------------------------------------------------
+    // MÓDULO 3: CONSULTAS. Punto 18: la detección de tema se hace sobre el
+    // texto sin tildes y con palabras completas ("mes" ya no coincide con
+    // "mesa", "jóvenes" ya no dispara las estadísticas del templo).
+    // ------------------------------------------------------------------------
+    const orgMencionada = inferOrganizationId(mensajeMinusculas, db.organizations);
+    const temaEntrevistas = /\bentrevistas?\b/.test(norm);
+    const temaAseo = /\b(aseo|limpieza|limpiar)\b/.test(norm);
+    const temaTemplo = /\b(recomendacion(es)?|templo|porcentaje|estadisticas?|cumpleanos|miembros)\b/.test(norm);
+    const pideActividades = /\b(actividad(es)?|calendario|eventos?|reunion(es)?)\b/.test(norm);
+    const temaActividades = pideActividades || (!temaEntrevistas && !temaAseo && !temaTemplo
+      && (!!orgMencionada || /\b(fin de semana|semana|mes|proxim[oa]s?|hoy|manana|que hay|agenda)\b/.test(norm)));
+    const rango = rangoConsulta(norm, mensajeMinusculas, hoyObj);
+
     let contextoDinamico = '';
     let respuestaLocalFallback = '';
+    const items = [];
 
-    if (mensajeMinusculas.match(/(actividad|actividades|calendario|cuórum|cuorum|élderes|elderes|sociedad|primaria|jóvenes|jovenes|fin de semana|mes|próximo|proximo)/)) {
-      let filtroEventos = (db.events || []).filter((e) => e.date >= hoy);
-      if (mensajeMinusculas.includes('fin de semana')) {
-        const sabado = new Date(hoyObj);
-        // Un domingo, "este fin de semana" es ayer (sábado) + hoy.
-        sabado.setDate(hoyObj.getDate() + (hoyObj.getDay() === 0 ? -1 : (6 - hoyObj.getDay() + 7) % 7));
-        const domingo = new Date(sabado);
-        domingo.setDate(sabado.getDate() + 1);
-        const fSab = toISO(sabado);
-        const fDom = toISO(domingo);
-        filtroEventos = filtroEventos.filter((e) => e.date === fSab || e.date === fDom);
-      }
-      const actividades = filtroEventos.map((e) => {
-        const org = (db.organizations || []).find((o) => Number(o.id) === Number(e.organizationId));
-        return { titulo: e.title, fecha: e.date, hora: e.startTime || '', organizacion: org ? org.name : 'General' };
+    if (temaActividades) {
+      let eventos = (db.events || []).filter((e) => e.date >= rango.desde && e.date <= rango.hasta);
+      if (orgMencionada) eventos = eventos.filter((e) => Number(e.organizationId) === Number(orgMencionada));
+      eventos.sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
+      const total = eventos.length;
+      const lista = eventos.slice(0, MAX_ITEMS).map((e) => {
+        const org = orgPorId(db, e.organizationId);
+        return { tipo: 'actividad', titulo: e.title, fecha: e.date, hora: e.startTime || '', org: org ? org.name : 'General', color: org?.color || null };
       });
-      contextoDinamico += '\n--- ACTIVIDADES ENCONTRADAS EN EL CALENDARIO ---\n' + JSON.stringify(actividades);
-      respuestaLocalFallback = actividades.length
-        ? '📅 **Actividades encontradas en el calendario:**\n\n' + actividades.map((a) => `• **${a.titulo}** (${a.organizacion}) - ${a.fecha}${a.hora ? ' ' + a.hora : ''}`).join('\n')
-        : '📅 No encontré actividades agendadas para el periodo consultado.';
+      items.push(...lista);
+      contextoDinamico += `\n--- ACTIVIDADES (${rango.etiqueta}${orgMencionada ? ', ' + (orgPorId(db, orgMencionada)?.name || '') : ''}: ${total} en total${total > MAX_ITEMS ? `, se muestran las primeras ${MAX_ITEMS}` : ''}) ---\n`
+        + lista.map((a) => `${a.fecha} ${a.hora} · ${a.titulo} · ${a.org}`).join('\n');
+      respuestaLocalFallback = total
+        ? `📅 Encontré **${total}** actividad${total === 1 ? '' : 'es'} para ${rango.etiqueta}${total > MAX_ITEMS ? ` (te muestro las primeras ${MAX_ITEMS})` : ''}:`
+        : `📅 No hay actividades agendadas para ${rango.etiqueta}.`;
     }
 
-    if (mensajeMinusculas.match(/(entrevista|entrevistas)/)) {
+    if (temaEntrevistas) {
       // Mismo criterio de privacidad que GET /api/interviews (ver
-      // orgSeesAllInterviews en interviews.js): las entrevistas son
-      // información privada de los miembros. Antes este bloque traía TODAS
-      // las entrevistas de TODO el barrio sin importar quién preguntara —
-      // acá se acota exactamente igual que el endpoint REST equivalente.
-      let entrevistasVisibles = (db.interviews || [])
-        .filter((iv) => iv.date >= hoy && (iv.status || 'scheduled') === 'scheduled');
+      // orgSeesAllInterviews en interviews.js).
+      let visibles = (db.interviews || [])
+        .filter((iv) => iv.date >= rango.desde && iv.date <= rango.hasta && (iv.status || 'scheduled') === 'scheduled');
       if (!usuario) {
-        entrevistasVisibles = [];
+        visibles = [];
       } else if (['member', 'ward_clerk', 'financial_clerk'].includes(usuario.role)) {
-        entrevistasVisibles = entrevistasVisibles.filter((iv) => Number(iv.memberUserId) === Number(usuario.id));
+        visibles = visibles.filter((iv) => Number(iv.memberUserId) === Number(usuario.id));
       } else if (!orgSeesAllInterviews(usuario, db)) {
-        entrevistasVisibles = entrevistasVisibles.filter((iv) => Number(iv.organizationId) === Number(usuario.organizationId) || Number(iv.memberUserId) === Number(usuario.id));
+        visibles = visibles.filter((iv) => Number(iv.organizationId) === Number(usuario.organizationId) || Number(iv.memberUserId) === Number(usuario.id));
       }
-      const entrevistas = entrevistasVisibles.map((iv) => {
-        const org = (db.organizations || []).find((o) => Number(o.id) === Number(iv.organizationId));
-        return { nombre: iv.memberName, fecha: iv.date, hora: iv.startTime, organizacion: org ? org.name : '' };
+      if (orgMencionada) visibles = visibles.filter((iv) => Number(iv.organizationId) === Number(orgMencionada));
+      visibles.sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
+      const total = visibles.length;
+      const lista = visibles.slice(0, MAX_ITEMS).map((iv) => {
+        const org = orgPorId(db, iv.organizationId);
+        return { tipo: 'entrevista', titulo: iv.memberName, fecha: iv.date, hora: iv.startTime || '', org: org ? org.name : '', color: org?.color || null };
       });
-      contextoDinamico += '\n--- ENTREVISTAS AGENDADAS (pendientes, ya acotadas a lo que este usuario puede ver) ---\n' + JSON.stringify(entrevistas);
-      respuestaLocalFallback = entrevistas.length
-        ? '🙋 **Próximas entrevistas agendadas:**\n\n' + entrevistas.map((e) => `• **${e.nombre}** (${e.organizacion}) - ${e.fecha} ${e.hora}`).join('\n')
-        : '🙋 No hay entrevistas pendientes agendadas para ti.';
+      items.push(...lista);
+      contextoDinamico += `\n--- ENTREVISTAS PENDIENTES (${rango.etiqueta}, ya acotadas a lo que este usuario puede ver: ${total}) ---\n`
+        + lista.map((e) => `${e.fecha} ${e.hora} · ${e.titulo} · ${e.org}`).join('\n');
+      respuestaLocalFallback = total
+        ? `🙋 Tienes **${total}** entrevista${total === 1 ? '' : 's'} pendiente${total === 1 ? '' : 's'} para ${rango.etiqueta}:`
+        : `🙋 No hay entrevistas pendientes para ${rango.etiqueta}.`;
     }
 
-    if (mensajeMinusculas.match(/(aseo|limpieza|limpiar|edificio|capilla|turno|familia)/)) {
-      // El módulo de Aseo del Edificio es exclusivo de Obispado/Administrador
-      // (ver cleaning.js, isObispadoLeader) — antes este bloque le mostraba
-      // los turnos y las familias asignadas a cualquier usuario logueado que
-      // preguntara, sin verificar el permiso.
+    if (temaAseo) {
+      // Exclusivo de Obispado/Administrador (ver cleaning.js).
       if (isObispadoLeader(usuario, db)) {
-        const turnosAseo = (db.cleaningShifts || [])
-          .filter((t) => t.date >= hoy)
+        const turnos = (db.cleaningShifts || [])
+          .filter((t) => t.date >= toISO(hoyObj))
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .slice(0, 8)
           .map((t) => {
             const fam = (db.families || []).find((f) => Number(f.id) === Number(t.familyId));
-            return { fecha: t.date, familia: fam ? fam.name : 'Sin asignar' };
+            return { tipo: 'aseo', titulo: fam ? fam.name : 'Sin asignar', fecha: t.date, hora: '', org: 'Aseo del edificio', color: null };
           });
-        contextoDinamico += '\n--- TURNOS DE ASEO ---\n' + JSON.stringify(turnosAseo);
-        if (turnosAseo.length > 0) {
-          respuestaLocalFallback = '🧹 **Próximos turnos de aseo del edificio:**\n\n' + turnosAseo.map((t) => `• Fecha: **${t.fecha}** - Familia: **${t.familia}**`).join('\n');
-        }
+        items.push(...turnos);
+        contextoDinamico += '\n--- PRÓXIMOS TURNOS DE ASEO ---\n' + turnos.map((t) => `${t.fecha} · ${t.titulo}`).join('\n');
+        respuestaLocalFallback = turnos.length ? '🧹 **Próximos turnos de aseo del edificio:**' : '🧹 No hay turnos de aseo próximos.';
       } else {
         contextoDinamico += '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por el Aseo del Edificio, pero ese módulo es exclusivo del Administrador o el líder de Obispado. Explícaselo brevemente, sin inventar ni mostrar ningún dato de turnos o familias.';
         respuestaLocalFallback = '🧹 El módulo de Aseo del Edificio es visible solo para el Administrador o el líder de Obispado.';
       }
     }
 
-    if (mensajeMinusculas.match(/(recomendación|recomendacion|templo|porcentaje|cuántos|cuantos|jóvenes|jovenes|adultos|cumpleaños|miembros)/)) {
-      // El Directorio y "Enfoque Ministración" (de donde sale este dato) son
-      // exclusivos de Obispado/Administrador (ver directory.js,
-      // isObispadoLeader) — antes cualquier usuario logueado podía pedirle
-      // esto a Deseret sin tener acceso al módulo real.
+    if (temaTemplo) {
+      // Exclusivo de Obispado/Administrador (ver directory.js).
       if (isObispadoLeader(usuario, db)) {
         const miembros = db.directoryMembers || [];
         const totalMiembros = miembros.length;
         const conRecomendacion = miembros.filter((m) => m.templeRecommend).length;
         const porcentajeVigente = totalMiembros > 0 ? Math.round((conRecomendacion / totalMiembros) * 100) : 0;
         contextoDinamico += '\n--- ESTADÍSTICAS DE RECOMENDACIÓN DEL TEMPLO ---\n' + JSON.stringify({ totalMiembros, conRecomendacion, porcentajeVigente });
-        if (mensajeMinusculas.includes('porcentaje') || mensajeMinusculas.includes('cuántos') || mensajeMinusculas.includes('cuantos')) {
-          respuestaLocalFallback = `🏛️ **Estadísticas de Recomendación del Templo:**\n\n• Un **${porcentajeVigente}%** de los miembros registrados tiene su recomendación del templo vigente (${conRecomendacion} de ${totalMiembros}).`;
-        }
+        respuestaLocalFallback = `🏛️ Un **${porcentajeVigente}%** de los miembros registrados tiene su recomendación del templo vigente (${conRecomendacion} de ${totalMiembros}).`;
       } else {
         contextoDinamico += '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por estadísticas del Directorio/recomendación del templo, pero esa información es exclusiva del Administrador o el líder de Obispado. Explícaselo brevemente, sin inventar ni mostrar ningún dato.';
-        if (mensajeMinusculas.includes('porcentaje') || mensajeMinusculas.includes('cuántos') || mensajeMinusculas.includes('cuantos')) {
-          respuestaLocalFallback = '🏛️ Las estadísticas de recomendación del templo son visibles solo para el Administrador o el líder de Obispado.';
-        }
+        respuestaLocalFallback = '🏛️ Las estadísticas de recomendación del templo son visibles solo para el Administrador o el líder de Obispado.';
       }
     }
 
@@ -687,77 +1060,25 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
       respuestaLocalFallback = '🐝 ¡Hola! Puedo ayudarte a consultar o **agendar** actividades y entrevistas, revisar los turnos de aseo o verificar recomendaciones del templo. ¿Qué te gustaría hacer?';
     }
 
-    const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion.
+    const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
 Aquí tienes la información extraída de la base de datos:
 ${contextoDinamico}
 
 REGLAS DE COMPORTAMIENTO:
-1. Responde preguntas de CONSULTA E INFORMACIÓN directamente, usando SOLO los datos de la sección de arriba. NUNCA inventes datos que no estén ahí.
-2. NUNCA respondas en un solo párrafo gigante. Usa listas ordenadas con viñetas.
-3. Pon en **negrita** los títulos de actividades, nombres de familias, personas y fechas.
-4. Usa emojis amigables (🐝, 📅, 🧹, 🏛️, 🙋).
-5. Esta conversación es de SOLO CONSULTA — tú no agendas nada acá directamente. Si el usuario quiere agendar algo, dile que lo pida así de claro: "agenda una actividad/entrevista para…" — eso sí crea el registro de verdad. Nunca digas que ya agendaste algo si no te lo confirmó el sistema.
-6. Si ves un "AVISO DE PERMISOS" en la información de arriba, es una EXCEPCIÓN a la regla 1: en ese caso SÍ debes decirle al usuario, en una frase breve y amable, que esa información no está disponible para su perfil — nunca inventes ni te acerques a dar el dato de todas formas.`;
+1. Responde SOLO con los datos de arriba. NUNCA inventes datos que no estén ahí.
+2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
+3. Pon en **negrita** títulos, nombres y fechas. Usa algún emoji amigable (🐝, 📅, 🧹, 🏛️, 🙋).
+4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
+5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.`;
 
-    // Historial reciente (últimas interacciones) para que la IA tenga contexto
-    // de lo que se habló antes — antes se armaba en el frontend pero nunca
-    // llegaba a esta función por un bug de cableado en server.js.
-    const historyTurns = (historial || []).flatMap((h) => ([
-      { role: 'user', parts: [{ text: h.user || '' }] },
-      { role: 'model', parts: [{ text: h.bot || '' }] },
-    ]));
-
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey: geminiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
-          contents: [...historyTurns, { role: 'user', parts: [{ text: mensaje }] }],
-          config: { systemInstruction },
-        });
-        if (response && response.text) {
-          const texto = filtrarAlucinacion(response.text);
-          guardarCache(clave, texto);
-          return texto;
-        }
-      } catch (errGemini) {
-        console.warn('⚠️ Gemini falló (saturación/cuota). Pasando a Groq...', errGemini.message);
-      }
-    }
-
-    const groqKey = process.env.GROQ_API_KEY;
-    if (groqKey) {
-      try {
-        const groq = new Groq({ apiKey: groqKey });
-        const completion = await groq.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: systemInstruction },
-            ...(historial || []).flatMap((h) => ([
-              { role: 'user', content: h.user || '' },
-              { role: 'assistant', content: h.bot || '' },
-            ])),
-            { role: 'user', content: mensaje },
-          ],
-          temperature: 0.5,
-          max_tokens: 1024,
-        });
-        const respuestaGroq = completion.choices[0]?.message?.content;
-        if (respuestaGroq) {
-          const texto = filtrarAlucinacion(respuestaGroq);
-          guardarCache(clave, texto);
-          return texto;
-        }
-      } catch (errGroq) {
-        console.warn('⚠️ Groq falló. Usando Fallback Local...', errGroq.message);
-      }
-    }
-
-    if (respuestaLocalFallback) return respuestaLocalFallback;
-    return '🐝 No pude procesar tu solicitud en este momento. Por favor intenta de nuevo.';
+    const redactado = await redactarConIA(systemInstruction, historial, mensaje);
+    const resultado = redactado
+      ? resp(filtrarAlucinacion(redactado), items.length ? { items } : {})
+      : resp(respuestaLocalFallback, items.length ? { items } : {});
+    if (redactado) guardarCache(clave, resultado);
+    return resultado;
   } catch (error) {
     console.error('DETALLE DEL ERROR GENERAL:', error);
-    return '🐝 Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.';
+    return resp('🐝 Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.');
   }
 }

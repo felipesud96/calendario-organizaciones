@@ -173,8 +173,11 @@ const server = http.createServer(async (req, res) => {
         }
 
         const historial = Array.isArray(parsed.historial) ? parsed.historial.slice(-6) : [];
-        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '', historial, usuario);
-        return sendJson(res, 200, { respuesta: respuestaIA });
+        // procesarPreguntaChat devuelve { texto, opciones?, tarjeta?, items? }
+        // (botones de respuesta rápida, resumen para confirmar y tarjetas).
+        const r = await procesarPreguntaChat(String(parsed.mensaje || '').slice(0, 1000), historial, usuario);
+        const { texto, ...extra } = typeof r === 'string' ? { texto: r } : r;
+        return sendJson(res, 200, { respuesta: texto, ...extra });
       } catch (error) {
         console.error('Error en endpoint chat IA:', error);
         const mensajeError = "🐝 Ocurrió un inconveniente al validar la consulta. Por favor, intenta de nuevo.";
