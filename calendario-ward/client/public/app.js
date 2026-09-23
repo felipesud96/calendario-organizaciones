@@ -54,7 +54,9 @@ const state = {
   wardGrowthSnapshot: null,
   achPeriod: 'month', // Rachas y Logros: mes / quarter / semester / year / allTime
   achView: 'current', // 'current' (en curso) o 'history' (períodos ya cerrados)
-  calViewMode: 'month', // Calendario: 'month' (grilla) o 'agenda' (lista cronológica)
+  calViewMode: 'month', // Calendario: 'month' (grilla), 'week' (horas, arrastrar), 'agenda' (lista) o 'rooms' (salas)
+  calWeekStart: null,
+  roomsDate: null,
   searchOpen: false,
   notifOpen: false,
   miniCalOpen: false,
@@ -67,11 +69,22 @@ const root = document.getElementById('app');
 async function api(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
-  const res = await fetch(API + path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(API + path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    // A2: sin conexión. Las lecturas ya intentaron la copia guardada (sw.js);
+    // las escrituras no se guardan para después: se avisa claramente.
+    marcarSinConexion(true);
+    throw new Error(method === 'GET'
+      ? 'Sin conexión y sin datos guardados para esta pantalla.'
+      : 'Sin conexión: no se pudo guardar. Inténtalo de nuevo cuando vuelva internet.');
+  }
+  marcarSinConexion(res.headers.get('X-Sin-Conexion') === '1' || !navigator.onLine);
   let data = null;
   try { data = await res.json(); } catch (e) { /* sin cuerpo */ }
   if (!res.ok) {
@@ -81,6 +94,18 @@ async function api(path, { method = 'GET', body } = {}) {
     throw err;
   }
   return data;
+}
+
+// A2: el aviso "Sin conexión" (el mismo #offline-banner de index.html)
+// también se muestra cuando lo que se ve viene de la copia guardada.
+let sinConexionMostrado = false;
+function marcarSinConexion(sin) {
+  if (sin === sinConexionMostrado) return;
+  sinConexionMostrado = sin;
+  const el = document.getElementById('offline-banner');
+  if (!el) return;
+  if (sin) el.textContent = '📡 Sin conexión: ves la última información guardada en este dispositivo. Para guardar cambios necesitas internet.';
+  el.style.display = sin || !navigator.onLine ? 'block' : 'none';
 }
 
 function esc(s) {
@@ -895,6 +920,12 @@ async function boot() {
     render();
     maybeShowMandatoryProfileModal(() => maybeStartOnboardingTour());
   } catch (e) {
+    // A2: sin conexión (y sin copia guardada) no se cierra la sesión.
+    if (!e.status && !navigator.onLine) {
+      root.innerHTML = `<div class="login-wrap"><div class="login-card" style="text-align:center;"><img class="login-logo" src="/logo-bee.png" alt="" width="72" /><h2>Sin conexión</h2><p>No hay internet y todavía no hay información guardada en este dispositivo.</p><button class="btn btn-primary" id="retry-boot">Reintentar</button></div></div>`;
+      document.getElementById('retry-boot').addEventListener('click', () => boot());
+      return;
+    }
     setToken(null);
     renderLogin();
   }
@@ -1107,7 +1138,8 @@ function webPushSupported() {
 
 let swRegistration = null;
 async function registerServiceWorker() {
-  if (!webPushSupported()) return null;
+  // Se registra también sin Push: sw.js además guarda la app para usarla sin internet (A2).
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return null;
   try {
     swRegistration = await navigator.serviceWorker.register('/sw.js');
     return swRegistration;
@@ -1242,12 +1274,55 @@ function tourStepsForUser() {
   if (canSeeMeetingsTab()) steps.push({ icon: '📝', title: 'Reuniones y Consejos', text: 'Actas, compromisos, y tus propias asignaciones pendientes.' });
   if (canSeeAssignmentsTab()) steps.push({ icon: '🧹', title: 'Asignaciones', text: 'Turnos de aseo y registro de discursos de la reunión sacramental.' });
   if (canSeeStatsTab()) steps.push({ icon: '📊', title: 'Estadísticas', text: 'Evalúa actividades pasadas y consulta Rachas y Logros.' });
+  steps.push({ icon: '🐝', title: 'Deseret, tu asistente', text: 'El botón "Pregúntale a Deseret" (abajo a la derecha) abre la asistente: agenda, reprograma, anota compromisos, dicta actas y te recuerda cosas — escribiendo o por voz.' });
   steps.push({ icon: '🔍', title: 'Búsqueda', text: 'La lupa de arriba busca en toda la app a la vez — actividades, entrevistas, actas y discursos.' });
   steps.push({ icon: '🔔', title: 'Notificaciones', text: 'La campana te avisa lo que tienes pendiente en un solo lugar, sin tener que revisar pestaña por pestaña.' });
   return steps;
 }
 
-function markTourSeen() { localStorage.setItem('organizasion_tour_seen', '1'); }
+// ---------------- A18: Accesibilidad ----------------
+// Tamaño de letra, alto contraste y menos animaciones, por dispositivo.
+// index.html los aplica antes de pintar (sin parpadeo), igual que el tema.
+const A11Y_KEY = 'organizasion_a11y';
+function leerA11y() { try { return JSON.parse(localStorage.getItem(A11Y_KEY)) || {}; } catch (e) { return {}; } }
+function aplicarA11y(c) {
+  const h = document.documentElement;
+  if (c.contraste) h.setAttribute('data-contraste', 'alto'); else h.removeAttribute('data-contraste');
+  if (c.movimiento) h.setAttribute('data-movimiento', 'reducido'); else h.removeAttribute('data-movimiento');
+}
+function abrirAccesibilidad() {
+  const root = document.getElementById('confirm-root');
+  const c = leerA11y();
+  const guardar = (cambio) => { Object.assign(c, cambio); try { localStorage.setItem(A11Y_KEY, JSON.stringify(c)); } catch (e) { /* nada */ } aplicarA11y(c); pintar(); };
+  const pintar = () => {
+    root.innerHTML = `
+      <div class="modal-backdrop confirm-modal-backdrop" id="a11y-backdrop">
+        <div class="modal confirm-modal" role="dialog" aria-labelledby="a11y-titulo">
+          <div class="modal-header"><h3 id="a11y-titulo">Accesibilidad</h3><button class="modal-close" id="a11y-close" aria-label="Cerrar">×</button></div>
+          <div class="modal-body">
+            <div class="field"><label>Tamaño de la letra</label>
+              <div class="view-toggle" role="radiogroup">${FONT_SCALE_OPTIONS.map((o) => `<button type="button" role="radio" aria-checked="${getFontScale() === o.value}" class="view-toggle-btn ${getFontScale() === o.value ? 'active' : ''}" data-escala="${o.value}">${o.title}</button>`).join('')}</div>
+            </div>
+            <label class="a11y-op"><input type="checkbox" id="a11y-contraste" ${c.contraste ? 'checked' : ''} /> <span><b>Alto contraste</b><br><small>Texto más oscuro, bordes marcados y foco bien visible.</small></span></label>
+            <label class="a11y-op"><input type="checkbox" id="a11y-mov" ${c.movimiento ? 'checked' : ''} /> <span><b>Menos animaciones</b><br><small>Quita movimientos y transiciones.</small></span></label>
+            <p class="hint-box" style="margin-top:10px;">Se guarda en este dispositivo. También puedes moverte por toda la app con el teclado (Tab y Enter).</p>
+          </div>
+          <div class="modal-footer" style="justify-content:flex-end;"><button class="btn btn-primary" id="a11y-ok">Listo</button></div>
+        </div>
+      </div>`;
+    const cerrar = () => { root.innerHTML = ''; document.getElementById('a11y-toggle')?.focus(); };
+    document.getElementById('a11y-close').addEventListener('click', cerrar);
+    document.getElementById('a11y-ok').addEventListener('click', cerrar);
+    document.getElementById('a11y-backdrop').addEventListener('click', (e) => { if (e.target.id === 'a11y-backdrop') cerrar(); });
+    root.querySelectorAll('[data-escala]').forEach((b) => b.addEventListener('click', () => { setFontScale(b.dataset.escala); pintar(); }));
+    document.getElementById('a11y-contraste').addEventListener('change', (e) => guardar({ contraste: e.target.checked }));
+    document.getElementById('a11y-mov').addEventListener('change', (e) => guardar({ movimiento: e.target.checked }));
+    root.querySelector('[data-escala].active')?.focus();
+  };
+  pintar();
+}
+
+function markTourSeen() { localStorage.setItem('organizasion_tour_seen', '1'); if (state.view === 'home' && document.querySelector('.pp-card')) renderHomeView(); }
 
 function maybeStartOnboardingTour() {
   if (localStorage.getItem('organizasion_tour_seen')) return;
@@ -1381,6 +1456,7 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
               ${FONT_SCALE_OPTIONS.map((opt) => `<button type="button" class="font-scale-btn ${getFontScale() === opt.value ? 'active' : ''}" data-scale="${opt.value}" style="font-size:${14 + Number(opt.value) * 6}px;" title="${esc(opt.title)}">A</button>`).join('')}
             </div>
             <div class="hint-box" style="margin-top:8px;">Se aplica al toque, sin necesidad de guardar — es solo para este dispositivo, no cambia nada para el resto de la organización.</div>
+            <button type="button" class="btn btn-ghost btn-sm" id="prof-a11y" style="margin-top:6px;">Aa Más opciones de accesibilidad (alto contraste, menos animaciones)</button>
           </div>
           ${mandatory ? `<div class="hint-box" style="margin-top:0;">Antes de seguir, nos falta ${(!u.birthDate || !u.sex) ? 'tu fecha de nacimiento y tu sexo' : ''}${(!u.birthDate || !u.sex) && showCalling && !u.calling ? ' y ' : ''}${showCalling && !u.calling ? 'tu llamamiento' : ''} — se usan para saber con quién puedes agendar una entrevista (por ejemplo, un hombre adulto con Cuórum de Élderes o con el Obispado; una mujer adulta con Sociedad de Socorro o con el Obispado; un joven o una joven solo con el Obispado)${showCalling ? ', y quién de la presidencia realiza entrevistas' : ''}.</div>` : ''}
           <form id="prof-form">
@@ -1454,6 +1530,7 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
   // se aplica al toque (no requiere presionar "Guardar") y por lo tanto no
   // debe activar el aviso de "cambios sin guardar" que sí vigila el resto
   // del formulario de perfil.
+  document.getElementById('prof-a11y')?.addEventListener('click', abrirAccesibilidad);
   document.querySelectorAll('.font-scale-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       setFontScale(btn.dataset.scale);
@@ -1731,6 +1808,8 @@ function wireTopbarUtilities() {
 
 async function logout() {
   try { await api('/auth/logout', { method: 'POST' }); } catch (e) {}
+  // Los datos guardados para usar sin conexión son de esta sesión: se borran.
+  try { navigator.serviceWorker?.controller?.postMessage('limpiar-datos'); await caches?.delete('organizasion-datos-v1'); } catch (e) { /* sin caché */ }
   setToken(null);
   state.user = null;
   renderLogin();
@@ -2262,7 +2341,8 @@ function render() {
       </div>
       <div class="topbar-right">
         ${canSeeBishopricPanelTab() ? `<button type="button" class="icon-btn topbar-icon-btn ${state.view === 'bishopricPanel' ? 'active' : ''}" id="bishopric-toggle" title="Panel de Obispado">${icon('church')}</button>` : ''}
-        <button type="button" class="icon-btn topbar-icon-btn theme-toggle-btn" id="theme-toggle" title="Modo claro/oscuro"></button>
+        <button type="button" class="icon-btn topbar-icon-btn theme-toggle-btn" id="theme-toggle" title="Modo claro/oscuro" aria-label="Modo claro u oscuro"></button>
+        <button type="button" class="icon-btn topbar-icon-btn a11y-btn" id="a11y-toggle" title="Accesibilidad: tamaño de letra y contraste" aria-label="Accesibilidad">Aa</button>
         <button type="button" class="icon-btn topbar-icon-btn" id="search-toggle" title="Buscar">${icon('search')}</button>
         <button type="button" class="icon-btn topbar-icon-btn" id="notif-toggle" title="Notificaciones">${icon('bell')}<span class="notif-badge" id="notif-badge" hidden></span></button>
         <button type="button" class="icon-btn topbar-icon-btn" id="tour-toggle" title="Ver recorrido guiado">${icon('help')}</button>
@@ -2304,6 +2384,7 @@ function render() {
   const bishopricBtn = document.getElementById('bishopric-toggle');
   if (bishopricBtn) bishopricBtn.addEventListener('click', () => { state.view = 'bishopricPanel'; renderCurrentView(); });
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+  document.getElementById('a11y-toggle')?.addEventListener('click', abrirAccesibilidad);
   updateThemeToggleIcon();
   wireTopbarUtilities();
   wireBottomNav();
@@ -2528,6 +2609,45 @@ function puedeVerFichasCliente() {
   return !!state.user && ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(state.user.role);
 }
 
+// ---------------- A17: Primeros pasos para líderes nuevos ----------------
+const PP_OCULTO = 'organizasion_primeros_pasos_oculto';
+function primerosPasosEstado(pp) {
+  let tour = false; let deseret = false; let oculto = false;
+  try {
+    tour = !!localStorage.getItem('organizasion_tour_seen');
+    deseret = !!localStorage.getItem('deseret_usado');
+    oculto = localStorage.getItem(PP_OCULTO) === '1';
+  } catch (e) { /* sin almacenamiento */ }
+  return { oculto, pasos: [
+    { k: 'tour', ok: tour, t: 'Haz el recorrido guiado de la app', b: 'Ver recorrido' },
+    { k: 'perfil', ok: pp.perfil && pp.llamamiento, t: 'Completa tu perfil (teléfono, correo y llamamiento)', b: 'Abrir perfil' },
+    { k: 'push', ok: pp.push, t: 'Activa las notificaciones en este dispositivo', b: 'Activar' },
+    { k: 'deseret', ok: deseret, t: 'Pregúntale algo a Deseret (por ejemplo: "¿qué tengo esta semana?")', b: 'Probar' },
+    { k: 'agendo', ok: pp.agendo, t: 'Agenda tu primera entrevista, actividad o acta', b: 'Ir al calendario' },
+  ] };
+}
+function primerosPasosHtml(pp) {
+  if (!pp) return '';
+  const { oculto, pasos } = primerosPasosEstado(pp);
+  const hechos = pasos.filter((p) => p.ok).length;
+  if (oculto || hechos === pasos.length) return '';
+  return `<div class="card home-card pp-card">
+    <div class="pp-head"><div class="home-card-t">🚀 Primeros pasos <span class="pp-cuenta">${hechos} de ${pasos.length}</span></div><button class="btn btn-ghost btn-sm" id="pp-ocultar">Ocultar</button></div>
+    <div class="pp-barra" role="progressbar" aria-valuemin="0" aria-valuemax="${pasos.length}" aria-valuenow="${hechos}"><span style="width:${(hechos / pasos.length) * 100}%"></span></div>
+    ${pasos.map((p) => `<div class="pp-paso ${p.ok ? 'ok' : ''}"><span class="pp-check" aria-hidden="true">${p.ok ? '✓' : ''}</span><span class="pp-t">${esc(p.t)}</span>${p.ok ? '' : `<button class="btn btn-secondary btn-sm" data-pp="${p.k}">${esc(p.b)}</button>`}</div>`).join('')}
+  </div>`;
+}
+function wirePrimerosPasos() {
+  document.getElementById('pp-ocultar')?.addEventListener('click', () => { try { localStorage.setItem(PP_OCULTO, '1'); } catch (e) { /* nada */ } renderHomeView(); });
+  document.querySelectorAll('[data-pp]').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.pp;
+    if (k === 'tour') startOnboardingTour();
+    else if (k === 'perfil' || k === 'push') openProfileModal({ onDone: () => renderHomeView() });
+    else if (k === 'deseret') document.querySelector('.topbar-logo')?.click();
+    else if (k === 'agendo') { state.view = 'calendar'; renderCurrentView(); }
+  }));
+}
+
 async function renderHomeView() {
   const container = document.getElementById('view-root');
   container.innerHTML = skeletonViewHtml('Mi semana', { cards: 4, stats: 4 });
@@ -2575,6 +2695,7 @@ async function renderHomeView() {
         <button class="btn btn-primary btn-deseret" id="home-deseret"><img src="/deseret.svg" alt="" width="22" height="22" /> Preguntarle a Deseret</button>
       </div>
     </div>
+    ${primerosPasosHtml(r.primerosPasos)}
     <div class="home-kpis">${kpis}</div>
     ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">📥 Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
     <div class="card home-card"><div class="home-card-t">🗓️ Tu semana</div>${timeline}</div>`;
@@ -2586,6 +2707,7 @@ async function renderHomeView() {
   }));
   const b1 = document.getElementById('home-buscar-persona');
   if (b1) b1.addEventListener('click', () => abrirBuscadorPersonas());
+  wirePrimerosPasos();
   document.getElementById('home-deseret').addEventListener('click', () => {
     const logo = document.querySelector('.topbar-logo');
     if (logo) logo.click();
@@ -2723,7 +2845,10 @@ function renderCurrentView() {
 async function loadCalendarData() {
   const gridStart = gridStartDate(state.calMonth);
   const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 41);
-  const from = toISODate(gridStart), to = toISODate(gridEnd);
+  let from = toISODate(gridStart), to = toISODate(gridEnd);
+  // Semana / Salas pueden caer fuera de la grilla del mes: se amplía el rango.
+  const extra = calRangoCargado();
+  if (extra) { if (extra.from < from) from = extra.from; if (extra.to > to) to = extra.to; }
   const [events, interviews, stakeEvents] = await Promise.all([
     api(`/events?from=${from}&to=${to}`),
     api(`/interviews?from=${from}&to=${to}`),
@@ -2857,14 +2982,16 @@ async function renderCalendarView() {
       </div>
       <div class="view-toggle">
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'month' ? 'active' : ''}" id="cal-view-month" title="Vista de mes">🗓️ Mes</button>
+        <button type="button" class="view-toggle-btn ${state.calViewMode === 'week' ? 'active' : ''}" id="cal-view-week" title="Vista semanal por horas (arrastrar para mover)">🕘 Semana</button>
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'agenda' ? 'active' : ''}" id="cal-view-agenda" title="Vista de lista">📋 Agenda</button>
+        <button type="button" class="view-toggle-btn ${state.calViewMode === 'rooms' ? 'active' : ''}" id="cal-view-rooms" title="Ocupación de salas">🚪 Salas</button>
       </div>
       ${canManageAnyEvents() ? `<button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
     </div>
     <div id="mini-cal-panel" class="mini-cal-panel" hidden></div>
     ${await stakeStatusBarHtml()}
     <div class="org-filters">${chips}</div>
-    ${state.calViewMode === 'agenda' ? `
+    ${state.calViewMode === 'week' ? weekViewHtml() : state.calViewMode === 'rooms' ? roomsViewHtml() : state.calViewMode === 'agenda' ? `
     <div class="agenda-list">${agendaHtml}</div>
     ` : `
     <div class="cal-grid-wrap">
@@ -2876,9 +3003,25 @@ async function renderCalendarView() {
     `}
   `;
 
-  document.getElementById('cal-prev').addEventListener('click', () => shiftMonth(-1));
-  document.getElementById('cal-next').addEventListener('click', () => shiftMonth(1));
-  document.getElementById('cal-today').addEventListener('click', () => { state.calMonth = startOfMonth(new Date()); shiftMonth(0, true); });
+  // En Semana / Salas, las flechas avanzan una semana / un día.
+  const navCal = async (delta) => {
+    if (state.calViewMode === 'week') {
+      const d = new Date(state.calWeekStart || startOfWeek(new Date())); d.setDate(d.getDate() + 7 * delta);
+      state.calWeekStart = d; state.calMonth = startOfMonth(d);
+      await loadCalendarData(); return renderCalendarView();
+    }
+    if (state.calViewMode === 'rooms') {
+      state.roomsDate = addDaysToISO(state.roomsDate || toISODate(new Date()), delta);
+      await loadCalendarData(); return renderCalendarView();
+    }
+    return shiftMonth(delta);
+  };
+  document.getElementById('cal-prev').addEventListener('click', () => navCal(-1));
+  document.getElementById('cal-next').addEventListener('click', () => navCal(1));
+  document.getElementById('cal-today').addEventListener('click', () => {
+    state.calMonth = startOfMonth(new Date()); state.calWeekStart = startOfWeek(new Date()); state.roomsDate = toISODate(new Date());
+    shiftMonth(0, true);
+  });
   document.getElementById('cal-month-select').addEventListener('change', (e) => {
     state.calMonth = new Date(state.calMonth.getFullYear(), Number(e.target.value), 1);
     shiftMonth(0, true);
@@ -2936,6 +3079,21 @@ async function renderCalendarView() {
   }
   document.getElementById('cal-view-month').addEventListener('click', () => { state.calViewMode = 'month'; renderCalendarView(); });
   document.getElementById('cal-view-agenda').addEventListener('click', () => { state.calViewMode = 'agenda'; renderCalendarView(); });
+  document.getElementById('cal-view-week').addEventListener('click', async () => {
+    state.calViewMode = 'week';
+    if (!state.calWeekStart) {
+      const hoy = new Date();
+      state.calWeekStart = startOfWeek(hoy.getMonth() === state.calMonth.getMonth() && hoy.getFullYear() === state.calMonth.getFullYear() ? hoy : state.calMonth);
+    }
+    await loadCalendarData(); renderCalendarView();
+  });
+  document.getElementById('cal-view-rooms').addEventListener('click', async () => {
+    state.calViewMode = 'rooms';
+    if (!state.roomsDate) state.roomsDate = toISODate(new Date());
+    await loadCalendarData(); renderCalendarView();
+  });
+  if (state.calViewMode === 'week') wireWeekView(container);
+  if (state.calViewMode === 'rooms') wireRoomsView(container);
   container.querySelectorAll('.agenda-list .list-card').forEach((row) => row.addEventListener('click', () => {
     if (row.dataset.kind === 'event') {
       openItemModal(state.events.find((e) => e.id === Number(row.dataset.id)), 'event');
@@ -3012,6 +3170,269 @@ async function moveEventToDate(item, newDate) {
     }
   };
   await doMove(false);
+}
+
+
+// ---------------- Vista "Semana" (A3) y "Salas" (A5) del Calendario ----------------
+// Semana: 7 columnas con las horas del día; las actividades y entrevistas
+// que la persona puede editar se ARRASTRAN a otro día u hora (con el mouse,
+// o en el celular manteniendo presionado medio segundo). Salas: ocupación de
+// cada sala de la Capilla y la Casa Capilla en un día, para reservar sin
+// choques (tocar un espacio libre crea la actividad con la sala ya puesta).
+const WK_INICIO = 7;   // 07:00
+const WK_FIN = 23;     // 23:00
+const WK_PX_HORA = 48;
+const wkMin = (t) => (t ? toMinutes(t) : null);
+const hhmm = (min) => `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`;
+
+function startOfWeek(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+function calRangoCargado() {
+  if (state.calViewMode === 'week') {
+    const ini = state.calWeekStart || startOfWeek(new Date());
+    const fin = new Date(ini); fin.setDate(ini.getDate() + 6);
+    return { from: toISODate(ini), to: toISODate(fin) };
+  }
+  if (state.calViewMode === 'rooms') {
+    const d = state.roomsDate || toISODate(new Date());
+    return { from: d, to: d };
+  }
+  return null;
+}
+
+function itemsDelDia(iso) {
+  return [
+    ...state.events.filter((e) => e.date === iso && orgFilterActive(e.organizationId)).map((e) => ({ ...e, kind: 'event' })),
+    ...state.interviews.filter((iv) => iv.date === iso && orgFilterActive(iv.organizationId)).map((iv) => ({ ...iv, kind: 'interview', title: iv.memberNames || iv.memberName })),
+    ...state.stakeEvents.filter((s) => s.date === iso).map((s) => ({ ...s, kind: 'stake' })),
+  ];
+}
+const puedeArrastrar = (it) => (it.kind === 'event' && canEditEventsFor(it.organizationId))
+  || (it.kind === 'interview' && (it.status || 'scheduled') === 'scheduled' && canScheduleInterviewsFor(it.organizationId));
+
+// Carriles para que dos cosas a la misma hora queden lado a lado.
+function carriles(items) {
+  const orden = items.slice().sort((a, b) => a.ini - b.ini || b.fin - a.fin);
+  const grupos = []; let grupo = []; let finGrupo = -1;
+  for (const it of orden) {
+    if (it.ini >= finGrupo && grupo.length) { grupos.push(grupo); grupo = []; }
+    grupo.push(it); finGrupo = Math.max(finGrupo, it.fin);
+  }
+  if (grupo.length) grupos.push(grupo);
+  for (const g of grupos) {
+    const lanes = [];
+    for (const it of g) {
+      let l = lanes.findIndex((fin) => fin <= it.ini);
+      if (l < 0) { l = lanes.length; lanes.push(0); }
+      lanes[l] = it.fin; it.lane = l;
+    }
+    for (const it of g) it.lanes = lanes.length;
+  }
+  return orden;
+}
+
+function weekViewHtml() {
+  const ini = state.calWeekStart || startOfWeek(new Date());
+  const hoyIso = toISODate(new Date());
+  const dias = Array.from({ length: 7 }, (_, i) => { const d = new Date(ini); d.setDate(ini.getDate() + i); return d; });
+  const alto = (WK_FIN - WK_INICIO) * WK_PX_HORA;
+  const cabeceras = dias.map((d) => { const iso = toISODate(d); return `<div class="wk-head ${iso === hoyIso ? 'is-today' : ''}"><span>${DOW_LABELS[(d.getDay() + 6) % 7]}</span><b>${d.getDate()}</b></div>`; }).join('');
+  const todoDia = dias.map((d) => {
+    const iso = toISODate(d);
+    const sinHora = itemsDelDia(iso).filter((it) => !it.startTime || (it.kind === 'stake' && it.allDay));
+    return `<div class="wk-allday" data-date="${iso}">${sinHora.map((it) => `<button class="wk-chip" data-kind="${it.kind}" data-id="${it.id}" style="background:${it.kind === 'stake' ? '#7c3aed' : esc(it.organizationColor || '#64748b')}">${it.kind === 'stake' ? '🏛️ ' : ''}${esc(truncateTitle(it.title, 18))}</button>`).join('')}</div>`;
+  }).join('');
+  const columnas = dias.map((d) => {
+    const iso = toISODate(d);
+    const conHora = itemsDelDia(iso).filter((it) => it.startTime && !(it.kind === 'stake' && it.allDay)).map((it) => {
+      const i0 = wkMin(it.startTime);
+      const f0 = wkMin(it.endTime) ?? i0 + (it.kind === 'interview' ? 30 : 60);
+      return { it, ini: i0, fin: Math.max(f0, i0 + 20) };
+    });
+    const bloques = carriles(conHora).map(({ it, ini: i0, fin, lane, lanes }) => {
+      const top = Math.max(0, (i0 - WK_INICIO * 60) * WK_PX_HORA / 60);
+      const h = Math.max(22, (fin - i0) * WK_PX_HORA / 60 - 2);
+      const drag = puedeArrastrar(it);
+      const bg = it.kind === 'stake' ? '#7c3aed' : (it.organizationColor || '#64748b');
+      return `<button class="wk-item ${it.kind === 'interview' ? 'is-interview' : ''} ${drag ? 'wk-drag' : ''}" data-kind="${it.kind}" data-id="${it.id}"
+        data-ini="${i0}" data-fin="${fin}" style="top:${top}px; height:${h}px; left:calc(${(100 / lanes) * lane}% + 2px); width:calc(${100 / lanes}% - 4px); background:${esc(bg)}"
+        title="${esc(`${fmtTime(it.startTime)}${it.endTime ? '–' + fmtTime(it.endTime) : ''} ${it.title}${it.location ? ' — ' + locationDisplay(it) : ''}${drag ? ' (arrástrala para moverla)' : ''}`)}">
+        <span class="wk-hora">${esc(fmtTime(it.startTime))}</span> ${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : ''}${esc(it.title)}
+      </button>`;
+    }).join('');
+    return `<div class="wk-col ${iso === hoyIso ? 'is-today' : ''}" data-date="${iso}" style="height:${alto}px">${bloques}</div>`;
+  }).join('');
+  const horas = Array.from({ length: WK_FIN - WK_INICIO }, (_, i) => `<div class="wk-hour" style="height:${WK_PX_HORA}px">${pad2(WK_INICIO + i)}:00</div>`).join('');
+  return `
+    <div class="wk-hint">💡 ${canManageAnyEvents() ? 'Arrastra una actividad o entrevista para moverla (en el celular, mantenla presionada). Toca un espacio vacío para crear una actividad.' : 'Toca una actividad para ver el detalle.'}</div>
+    <div class="wk-wrap"><div class="wk-grid" style="--wk-h:${WK_PX_HORA}px">
+      <div class="wk-corner"></div>${cabeceras}
+      <div class="wk-allday-label">Todo el día</div>${todoDia}
+      <div class="wk-hours">${horas}</div>${columnas}
+    </div></div>`;
+}
+
+function roomsViewHtml() {
+  const iso = state.roomsDate || toISODate(new Date());
+  const salas = Object.entries(ROOMS_BY_LOCATION).flatMap(([loc, rooms]) => rooms.map((r) => ({ loc, sala: r })));
+  const del = itemsDelDia(iso).filter((it) => it.kind !== 'stake' && it.location && it.startTime);
+  const ancho = (WK_FIN - WK_INICIO) * 60;
+  const pct = (min) => `${((min - WK_INICIO * 60) / ancho) * 100}%`;
+  const filas = salas.map(({ loc, sala }) => {
+    const ocupan = del.filter((it) => normalizeLocation(it.location) === normalizeLocation(loc) && (!it.sala || normalizeLocation(it.sala) === normalizeLocation(sala)));
+    const bloques = ocupan.map((it) => {
+      const i0 = wkMin(it.startTime); const f0 = wkMin(it.endTime) ?? i0 + (it.kind === 'interview' ? 30 : 60);
+      const todoEdificio = !it.sala;
+      return `<button class="rm-block ${todoEdificio ? 'is-building' : ''}" data-kind="${it.kind}" data-id="${it.id}" style="left:${pct(Math.max(i0, WK_INICIO * 60))}; width:calc(${((Math.min(f0, WK_FIN * 60) - Math.max(i0, WK_INICIO * 60)) / ancho) * 100}% - 2px); background:${esc(it.organizationColor || '#64748b')}"
+        title="${esc(`${fmtTime(it.startTime)}–${fmtTime(it.endTime) || '?'} · ${it.kind === 'interview' ? 'Entrevista (' + (it.organizationName || '') + ')' : it.title}${todoEdificio ? ' · todo el edificio' : ''}`)}">${it.kind === 'interview' ? '👤 Entrevista' : esc(it.title)}</button>`;
+    }).join('');
+    return `<div class="rm-row"><div class="rm-name"><b>${esc(sala)}</b><small>${esc(loc)}</small></div><div class="rm-track" data-loc="${esc(loc)}" data-sala="${esc(sala)}">${bloques}</div></div>`;
+  }).join('');
+  const horas = Array.from({ length: WK_FIN - WK_INICIO }, (_, i) => `<span style="left:${pct((WK_INICIO + i) * 60)}">${WK_INICIO + i}</span>`).join('');
+  return `
+    <div class="rm-head">
+      <h3>🚪 Salas — ${esc(fmtDateHuman(iso))}</h3>
+      <input type="date" id="rooms-date" value="${iso}" />
+    </div>
+    <div class="wk-hint">💡 Cada barra es una reserva; las rayadas ocupan <b>todo el edificio</b> (se reservó sin elegir sala). ${canManageAnyEvents() ? 'Toca un espacio libre para reservar esa sala a esa hora.' : ''}</div>
+    <div class="rm-wrap"><div class="rm-grid">
+      <div class="rm-row rm-hours"><div class="rm-name"></div><div class="rm-track">${horas}</div></div>
+      ${filas}
+    </div></div>`;
+}
+
+function abrirItemCalendario(kind, id) {
+  if (kind === 'event') openItemModal(state.events.find((e) => e.id === Number(id)), 'event');
+  else if (kind === 'interview') openItemModal(state.interviews.find((i) => i.id === Number(id)), 'interview');
+  else openReadOnlyModal(state.stakeEvents.find((s) => s.id === Number(id)), 'stake');
+}
+
+function wireWeekView(container) {
+  container.querySelectorAll('.wk-chip, .wk-item:not(.wk-drag)').forEach((b) => b.addEventListener('click', () => abrirItemCalendario(b.dataset.kind, b.dataset.id)));
+  // Tocar un espacio vacío = nueva actividad a esa hora.
+  if (canManageAnyEvents()) {
+    container.querySelectorAll('.wk-col').forEach((col) => col.addEventListener('click', (e) => {
+      if (e.target.closest('.wk-item')) return;
+      const r = col.getBoundingClientRect();
+      const min = Math.round(((e.clientY - r.top) / WK_PX_HORA * 60 + WK_INICIO * 60) / 30) * 30;
+      openEventModal(null, { presetDate: col.dataset.date, presetStart: hhmm(Math.min(min, WK_FIN * 60 - 30)) });
+    }));
+  }
+  container.querySelectorAll('.wk-item.wk-drag').forEach((el) => {
+    let arrastre = null; // { x0, y0, activo, col, min }
+    const colBajo = (x, y) => document.elementsFromPoint(x, y).find((n) => n.classList?.contains('wk-col'));
+    const mover = (x, y) => {
+      const col = colBajo(x, y);
+      if (!col) return;
+      const r = col.getBoundingClientRect();
+      const dur = Number(el.dataset.fin) - Number(el.dataset.ini);
+      let min = Math.round(((y - r.top - arrastre.offY) / WK_PX_HORA * 60 + WK_INICIO * 60) / 15) * 15;
+      min = Math.max(WK_INICIO * 60, Math.min(min, WK_FIN * 60 - Math.min(dur, 60)));
+      if (el.parentElement !== col) col.appendChild(el);
+      el.style.top = `${(min - WK_INICIO * 60) * WK_PX_HORA / 60}px`;
+      el.style.left = '2px'; el.style.width = 'calc(100% - 4px)';
+      el.querySelector('.wk-hora').textContent = hhmm(min);
+      arrastre.col = col; arrastre.min = min;
+    };
+    const empezar = (x, y) => {
+      const r = el.getBoundingClientRect();
+      arrastre = { x0: x, y0: y, offY: y - r.top, activo: true, col: null, min: null };
+      el.classList.add('dragging');
+    };
+    const terminar = async () => {
+      const a = arrastre; arrastre = null;
+      el.classList.remove('dragging');
+      if (!a?.activo || !a.col || a.min == null) return renderCalendarView();
+      const dur = Number(el.dataset.fin) - Number(el.dataset.ini);
+      const nuevo = { date: a.col.dataset.date, startTime: hhmm(a.min), endTime: hhmm(Math.min(a.min + dur, 24 * 60 - 1)) };
+      const item = el.dataset.kind === 'event' ? state.events.find((ev) => ev.id === Number(el.dataset.id)) : state.interviews.find((iv) => iv.id === Number(el.dataset.id));
+      if (!item || (item.date === nuevo.date && item.startTime === nuevo.startTime)) return renderCalendarView();
+      await moverItemCalendario(el.dataset.kind, item, nuevo);
+    };
+    // Mouse / lápiz: arrastre directo (con un mínimo de 5 px para distinguirlo de un clic).
+    el.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      const x0 = e.clientX; const y0 = e.clientY; let empezo = false;
+      const onMove = (ev) => {
+        if (!empezo && Math.hypot(ev.clientX - x0, ev.clientY - y0) > 5) { empezo = true; empezar(x0, y0); }
+        if (empezo) { ev.preventDefault(); mover(ev.clientX, ev.clientY); }
+      };
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
+        if (empezo) terminar(); else abrirItemCalendario(el.dataset.kind, el.dataset.id);
+      };
+      window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+    });
+    // Celular: mantener presionado 450 ms para arrastrar; si no, se desplaza la página normalmente.
+    let timer = null; let tocado = null;
+    el.addEventListener('touchstart', (e) => {
+      const t = e.touches[0]; tocado = { x: t.clientX, y: t.clientY, movio: false };
+      timer = setTimeout(() => { empezar(tocado.x, tocado.y); navigator.vibrate?.(30); }, 450);
+    }, { passive: true });
+    el.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (arrastre?.activo) { e.preventDefault(); mover(t.clientX, t.clientY); return; }
+      if (tocado && Math.hypot(t.clientX - tocado.x, t.clientY - tocado.y) > 8) { tocado.movio = true; clearTimeout(timer); }
+    }, { passive: false });
+    el.addEventListener('touchend', (e) => {
+      clearTimeout(timer);
+      if (arrastre?.activo) { e.preventDefault(); terminar(); return; }
+      if (tocado && !tocado.movio) { e.preventDefault(); abrirItemCalendario(el.dataset.kind, el.dataset.id); }
+      tocado = null;
+    });
+  });
+}
+
+function wireRoomsView(container) {
+  container.querySelectorAll('.rm-block').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); abrirItemCalendario(b.dataset.kind, b.dataset.id); }));
+  const input = document.getElementById('rooms-date');
+  if (input) input.addEventListener('change', async () => { if (!input.value) return; state.roomsDate = input.value; await loadCalendarData(); renderCalendarView(); });
+  if (canManageAnyEvents()) {
+    container.querySelectorAll('.rm-track[data-sala]').forEach((tr) => tr.addEventListener('click', (e) => {
+      if (e.target.closest('.rm-block')) return;
+      const r = tr.getBoundingClientRect();
+      const min = Math.round(((e.clientX - r.left) / r.width * (WK_FIN - WK_INICIO) * 60 + WK_INICIO * 60) / 30) * 30;
+      openEventModal(null, { presetDate: state.roomsDate || toISODate(new Date()), presetStart: hhmm(Math.min(min, WK_FIN * 60 - 30)), presetLocation: tr.dataset.loc, presetSala: tr.dataset.sala });
+    }));
+  }
+}
+
+// Mover arrastrando: una actividad pasa por la misma revisión de choques
+// que al editarla; una entrevista se confirma antes (a la persona le llega
+// el aviso de cambio de horario si tiene correo o WhatsApp).
+async function moverItemCalendario(kind, item, nuevo) {
+  if (kind === 'interview') {
+    const ok = await confirmModal(`¿Mover la entrevista con ${item.memberNames || item.memberName} al ${fmtDateHuman(nuevo.date)} a las ${nuevo.startTime}?\n\nSi la persona tiene correo o WhatsApp, le llegará el aviso del cambio.`, { title: 'Mover entrevista', confirmText: 'Mover' });
+    if (!ok) return renderCalendarView();
+    try {
+      await api(`/interviews/${item.id}`, { method: 'PUT', body: nuevo });
+      toast(`Entrevista movida al ${fmtDateHuman(nuevo.date)} ${nuevo.startTime}`);
+    } catch (e) { toast(e.message, 'error'); }
+    await loadCalendarData(); return renderCalendarView();
+  }
+  const conflicts = await findConflictingActivities({ ...item, ...nuevo }, item.id);
+  if (conflicts.length) {
+    const list = conflicts.map((c) => `• ${c.organizationName} — ${c.kind === 'interview' ? 'ocupada por una entrevista (privada)' : esc(c.title || '')} · ${fmtTime(c.startTime)}${c.endTime ? ' - ' + fmtTime(c.endTime) : ''}`).join('\n');
+    const ok = await confirmModal(`Al moverla al ${fmtDateHuman(nuevo.date)} ${nuevo.startTime} choca con:\n\n${list}\n\n¿Moverla de todas formas?`, { title: 'Posible choque de horario/lugar', confirmText: 'Mover de todas formas' });
+    if (!ok) return renderCalendarView();
+  }
+  const doMove = async (override) => {
+    try {
+      await api(`/events/${item.id}`, { method: 'PUT', body: override ? { ...nuevo, overrideStakeConflict: true } : nuevo });
+      toast(`Actividad movida al ${fmtDateHuman(nuevo.date)} ${nuevo.startTime}`);
+    } catch (e) {
+      if (!override && e.data?.stakeConflicts?.length && e.data?.canOverride) {
+        const ok2 = await confirmModal('🏛️ Choca con una actividad de Estaca. ¿Autorizar y moverla de todas formas como líder de Obispado?', { title: 'Choque con Estaca', confirmText: 'Autorizar y mover' });
+        if (ok2) return doMove(true);
+      } else toast(e.message, 'error');
+    }
+  };
+  await doMove(false);
+  await loadCalendarData();
+  renderCalendarView();
 }
 
 // ---------------- Mini calendario emergente para "Ir a fecha" ----------------
@@ -4204,7 +4625,7 @@ function updateSupervisingAdultsSection(orgId, existingAdults) {
 // desde cero. La fecha se adelanta 7 días como punto de partida razonable
 // (lo más común es duplicar algo semanal), pero queda editable como
 // cualquier otro campo antes de guardar.
-function openEventModal(existing = null, { duplicate = false, presetDate = '' } = {}) {
+function openEventModal(existing = null, { duplicate = false, presetDate = '', presetStart = '', presetLocation = '', presetSala = '' } = {}) {
   const options = editableOrgOptions('event');
   if (!existing && options.length === 0) { toast('No tienes una organización asignada para crear actividades', 'error'); return; }
   const isEdit = !!existing && !duplicate;
@@ -4254,7 +4675,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
                 ${PURPOSE_OPTIONS.map((p) => `<option value="${p}" ${existing?.purpose === p ? 'selected' : ''}>${p}</option>`).join('')}
               </select>
             </div>
-            ${locationFieldHtml('ev', existing?.location, existing?.sala)}
+            ${locationFieldHtml('ev', existing?.location ?? (presetLocation || undefined), existing?.sala ?? (presetSala || undefined))}
             <div id="ev-conflict-warning"></div>
             <div class="field">
               <label>Notas adicionales (opcional)</label>
@@ -4267,7 +4688,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '' } 
             <div class="two-col">
               <div class="field">
                 <label>Hora de inicio</label>
-                <input type="time" name="startTime" required value="${existing?.startTime || ''}" />
+                <input type="time" name="startTime" required value="${existing?.startTime || presetStart || ''}" />
               </div>
               <div class="field">
                 <label>Hora de término (opcional)</label>
@@ -7526,6 +7947,7 @@ async function openMeetingModal(presetType) {
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-add-agenda">+ Agregar tema</button>
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-use-template" style="display:none;">${icon('copy')} Usar plantilla de temas</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="mt-my-templates">📑 Mis plantillas</button>
                 <button type="button" class="btn btn-secondary btn-sm" id="mt-pending-previous" style="display:none;">🔁 Traer compromisos pendientes del consejo anterior</button>
               </div>
               <div id="mt-template-hint" class="hint-box" style="display:none; margin-top:6px;"></div>
@@ -7587,6 +8009,11 @@ async function openMeetingModal(presetType) {
     }
   };
   document.getElementById('mt-add-agenda').addEventListener('click', addAgendaRow);
+  // A6: plantillas propias (guardadas desde un acta con "Guardar temas como plantilla").
+  document.getElementById('mt-my-templates').addEventListener('click', () => elegirMiPlantilla((temas) => {
+    temas.forEach((t) => { addAgendaRow(); agendaBox.lastElementChild.querySelector('.ar-topic').value = t; });
+    toast(`${temas.length} temas agregados desde tu plantilla`);
+  }));
 
   // Fase 6: quien crea el acta ve la plantilla de reunión de presidencia de
   // SU PROPIA organización (la que el servidor le va a asignar automático al
@@ -7893,6 +8320,47 @@ function isCouncilMeetingType(type) {
 const PRESIDENCY_FIXED_OPENING = 'Oración inicial';
 const PRESIDENCY_FIXED_THOUGHT = 'Pensamiento espiritual o lectura del Manual General';
 const PRESIDENCY_FIXED_CLOSING = 'Oración final';
+
+// ---------------- A6: "Mis plantillas" de reunión ----------------
+async function guardarComoPlantilla(m) {
+  const temas = (m.agendaItems || []).map((a) => a.topic).filter((t) => t && !isFixedPrayerTopic(t));
+  const nombre = await commentModal(`Se guardarán ${temas.length} temas:\n• ${temas.slice(0, 8).join('\n• ')}${temas.length > 8 ? '\n…' : ''}`, { title: 'Guardar como plantilla', confirmText: 'Guardar plantilla', placeholder: 'Nombre de la plantilla (ej. "Presidencia — mensual")' });
+  if (nombre === null) return;
+  if (!nombre) return toast('Ponle un nombre a la plantilla', 'error');
+  const compartida = await confirmModal('¿Quieres que también la puedan usar los demás líderes de tu organización?', { title: 'Compartir plantilla', confirmText: 'Sí, compartirla', cancelText: 'Solo para mí' });
+  try {
+    await api('/meeting-templates', { method: 'POST', body: { nombre, temas, compartida } });
+    toast('Plantilla guardada. La encuentras en "Nueva acta" → 📑 Mis plantillas');
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function elegirMiPlantilla(onElegir) {
+  let lista = [];
+  try { lista = await api('/meeting-templates'); } catch (e) { return toast(e.message, 'error'); }
+  const root = document.getElementById('confirm-root');
+  const cerrar = () => { root.innerHTML = ''; };
+  const pintar = () => {
+    root.innerHTML = `
+      <div class="modal-backdrop confirm-modal-backdrop" id="tpl-backdrop">
+        <div class="modal confirm-modal">
+          <div class="modal-header"><h3>📑 Mis plantillas</h3><button class="modal-close" id="tpl-close">×</button></div>
+          <div class="modal-body">
+            ${lista.length ? `<div class="card-list">${lista.map((t) => `
+              <div class="list-card">
+                <div class="lc-main"><div class="lc-title">${esc(t.nombre)}</div><div class="lc-sub">${t.temas.length} temas${t.compartida ? ' · compartida' : ''}${t.propia ? '' : ` · de ${esc(t.autor)}`}</div></div>
+                <div style="display:flex; gap:6px;"><button class="btn btn-primary btn-sm" data-usar="${t.id}">Usar</button>${t.propia ? `<button class="btn btn-ghost btn-sm" data-borrar="${t.id}" title="Borrar">${icon('trash')}</button>` : ''}</div>
+              </div>`).join('')}</div>` : '<p class="confirm-modal-message">Todavía no tienes plantillas. Abre un acta con temas y toca <b>📑 Guardar temas como plantilla</b>.</p>'}
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('tpl-close').addEventListener('click', cerrar);
+    document.getElementById('tpl-backdrop').addEventListener('click', (e) => { if (e.target.id === 'tpl-backdrop') cerrar(); });
+    root.querySelectorAll('[data-usar]').forEach((b) => b.addEventListener('click', () => { const t = lista.find((x) => x.id === Number(b.dataset.usar)); cerrar(); if (t) onElegir(t.temas); }));
+    root.querySelectorAll('[data-borrar]').forEach((b) => b.addEventListener('click', async () => {
+      try { await api(`/meeting-templates/${b.dataset.borrar}`, { method: 'DELETE' }); lista = lista.filter((x) => x.id !== Number(b.dataset.borrar)); pintar(); } catch (e) { toast(e.message, 'error'); }
+    }));
+  };
+  pintar();
+}
 
 const PRESIDENCY_AGENDA_TEMPLATES = {
   'Obispado': {
@@ -8390,6 +8858,7 @@ async function openMeetingDetailModal(m) {
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             ${hasShareableActa ? `<button class="btn btn-ghost" id="md-share-acta">🖼️ Compartir acta</button><button class="btn btn-ghost btn-sm" id="md-share-acta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-edit-meeting">✏️ Editar acta</button>` : ''}
+            ${!m.contentRedacted && (m.agendaItems || []).some((a) => a.topic && !isFixedPrayerTopic(a.topic)) ? `<button class="btn btn-ghost btn-sm" id="md-save-template" title="Reutilizar estos temas en próximas reuniones">📑 Guardar temas como plantilla</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-toggle-confidential">${m.confidential ? icon('unlock') + ' Quitar confidencialidad' : icon('lock') + ' Marcar confidencial'}</button>` : ''}
           </div>
@@ -8399,6 +8868,7 @@ async function openMeetingDetailModal(m) {
     </div>`;
   document.getElementById('md-modal-close').addEventListener('click', closeModal);
   document.getElementById('md-close').addEventListener('click', closeModal);
+  if (!canEdit) document.getElementById('md-save-template')?.addEventListener('click', () => guardarComoPlantilla(m));
   document.getElementById('md-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'md-modal-backdrop') closeModal(); });
   document.getElementById('md-toggle-agenda-mode')?.addEventListener('click', () => {
     meetingDetailViewState = { id: m.id, mode: summaryMode ? 'completo' : 'resumen' };
@@ -8454,6 +8924,7 @@ async function openMeetingDetailModal(m) {
     const addCommitmentBtn = document.getElementById('md-add-commitment');
     if (addCommitmentBtn) addCommitmentBtn.addEventListener('click', () => openAddCommitmentModal(m));
     document.getElementById('md-edit-meeting').addEventListener('click', () => openEditMeetingModal(m));
+    document.getElementById('md-save-template')?.addEventListener('click', () => guardarComoPlantilla(m));
     document.querySelectorAll('.commitment-edit').forEach((btn) => {
       btn.addEventListener('click', () => {
         const commitmentId = Number(btn.dataset.commitmentId);
@@ -10672,7 +11143,10 @@ async function renderTalksView() {
   container.innerHTML = `
     <div class="section-header">
       <div><p>Quién discursó cada domingo en la reunión sacramental, y cuántas veces lo ha hecho</p></div>
-      <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-secondary" id="tk-suggest">💡 Sugerir oradores</button>
+        <button class="btn btn-primary" id="tk-new">+ Nuevo registro</button>
+      </div>
     </div>
     <div class="card-list">
       ${currentGroups.length ? currentGroups.map(([d, entries]) => talkDateCardHtml(d, entries, true)).join('') : emptyStateHtml('Todavía no hay discursos registrados este mes', { id: 'tk-empty-new', label: '+ Agregar el primero' }, '🎤')}
@@ -10686,6 +11160,7 @@ async function renderTalksView() {
       </div>` : ''}
   `;
   document.getElementById('tk-new').addEventListener('click', () => openTalkModal());
+  document.getElementById('tk-suggest').addEventListener('click', () => abrirSugerenciasOradores());
   wireEmptyStateCta('tk-empty-new', () => openTalkModal());
   const historyToggle = document.getElementById('tk-history-toggle');
   if (historyToggle) historyToggle.addEventListener('click', () => { state.talksHistoryOpen = !state.talksHistoryOpen; renderTalksView(); });
@@ -10792,7 +11267,39 @@ function wireTalkCards(talks) {
 // discursante a un domingo que ya existe" (fecha fija); si no, funciona en
 // modo "registro nuevo" (se elige la fecha, y se le pueden agregar de una
 // varios discursantes con "+ Agregar otro discursante").
-async function openTalkModal(presetDate) {
+// A12: quién no ha discursado hace tiempo (o nunca), para rotar las asignaciones.
+async function abrirSugerenciasOradores(sexo = '') {
+  let lista = [];
+  try { lista = await api(`/talks/suggestions${sexo ? `?sexo=${sexo}` : ''}`); } catch (e) { return toast(e.message, 'error'); }
+  const natural = (n) => { const [ap, no] = String(n).split(','); return no ? `${no.trim()} ${ap.trim()}` : n; };
+  const root = document.getElementById('confirm-root');
+  const cerrar = () => { root.innerHTML = ''; };
+  root.innerHTML = `
+    <div class="modal-backdrop confirm-modal-backdrop" id="sg-backdrop">
+      <div class="modal confirm-modal" style="max-width:520px;">
+        <div class="modal-header"><h3>💡 Sugerencias de oradores</h3><button class="modal-close" id="sg-close">×</button></div>
+        <div class="modal-body">
+          <p class="confirm-modal-message">Personas del Directorio (12 años o más) que nunca han discursado o que llevan más tiempo sin hacerlo. Quienes ya tienen un discurso asignado no aparecen.</p>
+          <div class="view-toggle" style="margin:8px 0;">
+            <button type="button" class="view-toggle-btn ${!sexo ? 'active' : ''}" data-sexo="">Todos</button>
+            <button type="button" class="view-toggle-btn ${sexo === 'V' ? 'active' : ''}" data-sexo="V">Hombres</button>
+            <button type="button" class="view-toggle-btn ${sexo === 'M' ? 'active' : ''}" data-sexo="M">Mujeres</button>
+          </div>
+          <div class="card-list">${lista.length ? lista.map((p) => `
+            <div class="list-card">
+              <div class="lc-main"><div class="lc-title">${esc(natural(p.name))}</div><div class="lc-sub">${p.edad} años · ${p.ultima ? `último discurso: ${esc(fmtDateHuman(p.ultima))} (${p.veces} en total)` : 'nunca ha discursado'}</div></div>
+              <button class="btn btn-primary btn-sm" data-asignar="${esc(natural(p.name))}">Asignar</button>
+            </div>`).join('') : '<div class="empty-state">No hay sugerencias.</div>'}</div>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('sg-close').addEventListener('click', cerrar);
+  document.getElementById('sg-backdrop').addEventListener('click', (e) => { if (e.target.id === 'sg-backdrop') cerrar(); });
+  root.querySelectorAll('[data-sexo]').forEach((b) => b.addEventListener('click', () => abrirSugerenciasOradores(b.dataset.sexo)));
+  root.querySelectorAll('[data-asignar]').forEach((b) => b.addEventListener('click', () => { cerrar(); openTalkModal(undefined, { presetSpeaker: b.dataset.asignar }); }));
+}
+
+async function openTalkModal(presetDate, { presetSpeaker = '' } = {}) {
   let directory = [];
   let allTalks = [];
   try { directory = await api('/users/directory'); } catch (e) { directory = []; }
@@ -10882,6 +11389,10 @@ async function openTalkModal(presetDate) {
   };
   document.getElementById('tk-add-row').addEventListener('click', addRow);
   addRow();
+  if (presetSpeaker) {
+    const inp = rowsBox.querySelector('[id$="-member-name"]');
+    if (inp) { inp.value = presetSpeaker; inp.dispatchEvent(new Event('input')); }
+  }
 
   document.getElementById('tk-save').addEventListener('click', async () => {
     const form = document.getElementById('tk-form');
@@ -10987,6 +11498,7 @@ async function renderStatsView() {
     <div class="section-header"><div><h2>Estadísticas</h2><p>Evalúa tus actividades pasadas y revisa el resumen del año</p></div></div>
     <div class="subtabs">
       <button class="subtab-btn ${state.statsSubtab === 'pending' ? 'active' : ''}" data-tab="pending">Bandeja de Evaluación</button>
+      <button class="subtab-btn ${state.statsSubtab === 'tablero' ? 'active' : ''}" data-tab="tablero">📈 Tablero del barrio</button>
       <button class="subtab-btn ${state.statsSubtab === 'dashboard' ? 'active' : ''}" data-tab="dashboard">Panel de Control</button>
       ${isObispadoUser() ? `<button class="subtab-btn ${state.statsSubtab === 'rankings' ? 'active' : ''}" data-tab="rankings">Rachas y Logros</button>` : ''}
       ${canSeeMinisteringFocusTab() ? `<button class="subtab-btn ${state.statsSubtab === 'ministracion' ? 'active' : ''}" data-tab="ministracion">Enfoque Ministración</button>` : ''}
@@ -10997,7 +11509,58 @@ async function renderStatsView() {
   if (state.statsSubtab === 'pending') await renderStatsPending();
   else if (state.statsSubtab === 'rankings' && isObispadoUser()) await renderStatsRankings();
   else if (state.statsSubtab === 'ministracion' && canSeeMinisteringFocusTab()) await renderPastoralFocusView();
+  else if (state.statsSubtab === 'tablero') await renderTablero();
   else await renderStatsDashboard();
+}
+
+// ---------------- A19: Tablero del barrio (tendencias trimestrales) ----------------
+// Una fila de "stat tiles": valor del trimestre actual, cambio contra el
+// anterior y una mini-línea de los últimos 6 trimestres (el actual resaltado).
+// Pasando el mouse (o tocando) un punto se ve su valor; "Ver tabla" muestra
+// los mismos números en una tabla.
+async function renderTablero() {
+  const content = document.getElementById('stats-content');
+  content.innerHTML = skeletonCardsHtml(3);
+  let d;
+  try { d = await api('/tablero'); } catch (e) { content.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`; return; }
+  const fmt = (v, u) => (v == null ? '—' : `${v}${u}`);
+  const tile = (s) => {
+    const vals = s.valores;
+    const idx = vals.map((v, i) => (v == null ? -1 : i)).filter((i) => i >= 0);
+    const ult = idx.length ? idx[idx.length - 1] : -1;
+    const prev = idx.length > 1 ? idx[idx.length - 2] : -1;
+    const actual = ult >= 0 ? vals[ult] : null;
+    const delta = ult >= 0 && prev >= 0 ? vals[ult] - vals[prev] : null;
+    const W = 220, H = 56, P = 6;
+    const nums = vals.filter((v) => v != null);
+    const max = Math.max(...nums, s.unidad === '%' ? 0 : 1); const min = Math.min(...nums, 0);
+    const x = (i) => P + (i * (W - 2 * P)) / Math.max(1, vals.length - 1);
+    const y = (v) => H - P - ((v - min) / Math.max(1, max - min)) * (H - 2 * P);
+    const segs = []; let cur = [];
+    vals.forEach((v, i) => { if (v == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
+    if (cur.length) segs.push(cur);
+    const svg = nums.length ? `
+      <svg class="tb-spark" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(s.titulo)}: ${vals.map((v, i) => `${d.trimestres[i]} ${fmt(v, s.unidad)}`).join(', ')}">
+        <line x1="${P}" x2="${W - P}" y1="${H - P}" y2="${H - P}" class="tb-base" />
+        ${segs.map((pts) => `<polyline points="${pts.join(' ')}" class="tb-line" />`).join('')}
+        ${vals.map((v, i) => (v == null ? '' : `<g class="tb-pt ${i === ult ? 'is-last' : ''}"><circle cx="${x(i)}" cy="${y(v)}" r="10" class="tb-hit"><title>${d.trimestres[i]}: ${fmt(v, s.unidad)}</title></circle><circle cx="${x(i)}" cy="${y(v)}" r="${i === ult ? 4.5 : 3}" class="tb-dot" /></g>`)).join('')}
+      </svg>` : '<div class="tb-sin">Sin datos todavía</div>';
+    const dTxt = delta == null ? '' : `<span class="tb-delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}">${delta > 0 ? '▲' : delta < 0 ? '▼' : '='} ${Math.abs(delta)}${s.unidad === '%' ? ' pts' : ''} vs ${esc(d.trimestres[prev])}</span>`;
+    return `<div class="tb-tile" title="${esc(s.fuente)}">
+      <div class="tb-t">${esc(s.titulo)}</div>
+      <div class="tb-v">${fmt(actual, s.unidad)} <small>${ult >= 0 ? esc(d.trimestres[ult]) : ''}</small></div>
+      ${dTxt}
+      ${svg}
+      <div class="tb-ejes"><span>${esc(d.trimestres[0])}</span><span>${esc(d.trimestres[d.trimestres.length - 1])}</span></div>
+    </div>`;
+  };
+  const tabla = `<div class="tb-tabla-wrap"><table class="tb-tabla"><thead><tr><th></th>${d.trimestres.map((t) => `<th>${esc(t)}</th>`).join('')}</tr></thead>
+    <tbody>${d.series.map((s) => `<tr><th>${esc(s.titulo)}</th>${s.valores.map((v) => `<td>${fmt(v, s.unidad)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  content.innerHTML = `
+    <div class="tb-head"><p>Últimos 6 trimestres · <b>${esc(d.alcance)}</b></p><button class="btn btn-ghost btn-sm" id="tb-tabla-btn">${state.tableroTabla ? '📈 Ver gráficos' : '🔢 Ver tabla'}</button></div>
+    ${state.tableroTabla ? tabla : `<div class="tb-grid">${d.series.map(tile).join('')}</div>`}
+    <div class="hint-box" style="margin-top:12px;">Asistencia, recomendaciones y ministración salen de los trimestres cargados en <b>Crecimiento del Barrio</b>; entrevistas, compromisos y actividades se calculan con lo registrado en la app.</div>`;
+  document.getElementById('tb-tabla-btn').addEventListener('click', () => { state.tableroTabla = !state.tableroTabla; renderTablero(); });
 }
 
 async function renderStatsPending() {

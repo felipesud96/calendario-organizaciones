@@ -31,6 +31,10 @@ import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerPublicBookingRoutes } from './routes/publicBooking.js';
 import { registerPersonasSemanaRoutes } from './routes/personasSemana.js';
 import { registerTtsRoutes } from './routes/tts.js';
+import { registerPlantillasRoutes } from './routes/plantillas.js';
+import { registerTableroRoutes } from './routes/tablero.js';
+import { contextoDeseret } from './db.js';
+import { guardarDeshacer, startRecordatoriosScheduler, avisosDeHoy } from './deseretPlus.js';
 import { startWeeklySummaryScheduler } from './semana.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
@@ -94,6 +98,8 @@ registerInterviewRequestRoutes(router);
 registerPublicBookingRoutes(router);
 registerPersonasSemanaRoutes(router);
 registerTtsRoutes(router);
+registerPlantillasRoutes(router);
+registerTableroRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
@@ -215,6 +221,14 @@ const server = http.createServer(async (req, res) => {
   // lugar donde debía ir el HISTORIAL de la conversación (el frontend sí lo
   // mandaba, pero acá se descartaba) — por eso el chat nunca tenía memoria
   // de mensajes anteriores. Ahora se pasan ambos, cada uno en su lugar.
+  if (pathname === '/api/deseret/avisos' && req.method === 'GET') {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const usuario = token ? await getUserFromToken(token) : null;
+    if (!usuario) return sendJson(res, 401, { error: 'No autenticado' });
+    try { return sendJson(res, 200, avisosDeHoy(usuario) || {}); } catch (e) { console.warn('[avisos]', e.message); return sendJson(res, 200, {}); }
+  }
+
   if (pathname === '/api/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
@@ -236,8 +250,13 @@ const server = http.createServer(async (req, res) => {
         const historial = Array.isArray(parsed.historial) ? parsed.historial.slice(-6) : [];
         // procesarPreguntaChat devuelve { texto, opciones?, tarjeta?, items? }
         // (botones de respuesta rápida, resumen para confirmar y tarjetas).
-        const r = await procesarPreguntaChat(String(parsed.mensaje || '').slice(0, 1000), historial, usuario);
+        // Todo lo que Deseret escriba en este mensaje queda anotado (ver
+        // contextoDeseret en db.js) para poder "deshacer lo último".
+        const ctx = { cambios: [] };
+        // Dictar un acta necesita más texto que una pregunta normal.
+        const r = await contextoDeseret.run(ctx, () => procesarPreguntaChat(String(parsed.mensaje || '').slice(0, 4000), historial, usuario, { breve: parsed.breve === true }));
         const { texto, ...extra } = typeof r === 'string' ? { texto: r } : r;
+        if (ctx.cambios.length) await guardarDeshacer(usuario, texto, ctx.cambios).catch((e) => console.warn('[deshacer]', e.message));
         return sendJson(res, 200, { respuesta: texto, ...extra });
       } catch (error) {
         console.error('Error en endpoint chat IA:', error);
@@ -293,6 +312,7 @@ server.listen(PORT, () => {
   console.log(`Sirviendo frontend estático desde: ${CLIENT_DIR}`);
   startReminderScheduler();
   startWeeklySummaryScheduler();
+  startRecordatoriosScheduler();
   startStakeSyncScheduler();
   startAchievementsScheduler();
   startBackupScheduler();

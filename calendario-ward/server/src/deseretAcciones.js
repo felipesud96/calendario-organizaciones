@@ -28,7 +28,7 @@ import {
 import {
   resp, fechaLegible, parseFecha, parseHora, normalizeSearchText, palabrasDe,
   guardarBorrador, borrarBorrador, OPCIONES_CONFIRMAR, ES_AFIRMATIVO, vaciarCache,
-  toISO, opcionesFecha, OPCIONES_HORA, orgPorId, sumarDias,
+  toISO, opcionesFecha, OPCIONES_HORA, orgPorId, sumarDias, inferOrganizationId,
 } from './chat.js';
 
 // ---------------- Detección por reglas (sin IA) ----------------
@@ -501,6 +501,26 @@ function leerDestino(txt, actas) {
   return null;
 }
 
+// "toda la presidencia de la Primaria", "todo el obispado", "la presidencia
+// del cuórum" → las personas de esa presidencia a las que se puede asignar
+// (líderes de esa organización, sin los secretarios).
+function grupoDesdeTexto(texto, usuario, data, asignables) {
+  const t = normalizeSearchText(texto);
+  let orgId = null; let nombre = '';
+  if (/\b(todo el obispado|al obispado|el obispado completo|los del obispado|para el obispado)\b/.test(t)) {
+    orgId = (data.organizations || []).find((o) => o.name === 'Obispado')?.id; nombre = 'Obispado';
+  } else if (/\b(toda la presidencia|la presidencia|toda mi presidencia|mi presidencia)\b/.test(t)) {
+    orgId = inferOrganizationId(t.replace(/^.*?presidencia/, ''), data.organizations || []) || (/\bmi presidencia\b/.test(t) ? usuario.organizationId : null);
+    if (!orgId && /\b(toda la presidencia|la presidencia)\s*($|[:,.]|que\b)/.test(t)) orgId = usuario.organizationId;
+    const org = orgPorId(data, orgId);
+    nombre = org ? `Presidencia de ${org.name}` : '';
+  }
+  if (!orgId) return null;
+  const miembros = asignables.filter((u) => Number(u.organizationId) === Number(orgId) && u.role === 'leader' && u.calling !== 'Secretario');
+  if (!miembros.length) return null;
+  return { ids: miembros.map((u) => u.id), nombre };
+}
+
 async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, data, hoyObj) {
   if (!['admin', 'leader', 'ward_clerk'].includes(usuario.role)) {
     borrarBorrador(usuario);
@@ -516,6 +536,7 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
       // Quitar "…, sin reunión" / "…en el acta del consejo" (eso es DÓNDE, no QUÉ).
       .replace(/[,;]?\s*(sin (acta|reuni[oó]n|agenda)|como compromiso suelto|solo (el |un |como )?compromiso|en (una )?(nuev[oa]|otra) (acta|reuni[oó]n|agenda)|(en|al) (el |la )?(acta|reuni[oó]n|agenda) (de|del)\b.*)\s*[.!]?$/i, '')
       .replace(/\s+(para\s+)?(el|este|esta)\s+(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b.*$/i, '')
+      .replace(/\s+(para\s+|antes\s+del?\s+|hasta\s+)?(el\s+)?\d{1,2}\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|sept?iembre|octubre|noviembre|diciembre)(\s+de\s+\d{4})?\b.*$/i, '')
       .replace(/\s+(para\s+)?(el\s+)?(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?|ma[ñn]ana|hoy)\s*$/i, '').trim();
   }
   if (!d.responsableId && !d.responsableTexto) {
@@ -555,8 +576,17 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
     else if (RE_SUELTO.test(t) || RE_NUEVA.test(t) || /\b(acta|reunion)\b/.test(t)) d.destino = leerDestino(mensaje, actas) || d.destino;
   }
 
+  // D11: compromiso para un grupo completo ("toda la presidencia de la
+  // Sociedad de Socorro", "todo el obispado"): uno por persona, agrupados.
+  if (!d.responsableId && !d.responsableIds) {
+    // Solo se mira la parte del "para quién" (no la descripción, que podría
+    // mencionar "la presidencia" por otra razón).
+    const paraQuien = falta === 'responsable' ? mensaje : falta ? '' : (mensaje.match(/compromiso\w*\s+(?:para|a)\s+([^:]+?)(?::|$)/i)?.[1] || '');
+    const g = grupoDesdeTexto(`${d.responsableTexto || ''} ${paraQuien}`, usuario, data, asignables);
+    if (g && g.ids.length > 1) { d.responsableIds = g.ids; d.responsableId = g.ids[0]; d.grupoNombre = g.nombre; } else if (g) d.responsableId = g.ids[0];
+  }
   if (!d.responsableId) {
-    if (!d.responsableTexto) return preguntar('responsable', '👤 ¿Para quién es el compromiso?', { opciones: [{ label: 'Para mí', value: 'yo' }] });
+    if (!d.responsableTexto) return preguntar('responsable', '👤 ¿Para quién es el compromiso? (una persona, o un grupo como "toda la presidencia de la Primaria")', { opciones: [{ label: 'Para mí', value: 'yo' }] });
     if (/^(yo|mi|m[ií]|para m[ií]|m[ií] mismo|m[ií] misma)$/i.test(d.responsableTexto.trim())) d.responsableId = usuario.id;
     else {
       const cand = asignables.filter((u) => coincideNombre(d.responsableTexto, u.name));
@@ -568,7 +598,9 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
   if (!d.descripcion) return preguntar('descripcion', '📝 ¿Qué tiene que hacer? (describe el compromiso)');
   if (!d.fechaLimite) return preguntar('fecha', '📅 ¿Para cuándo?', { opciones: [...opcionesFecha(hoyObj).slice(1), { label: 'En una semana', value: toISO(sumarDias(hoyObj, 7)) }] });
 
-  const resp_ = asignables.find((u) => u.id === d.responsableId) || (d.responsableId === usuario.id ? usuario : null);
+  const resp_ = d.responsableIds
+    ? { name: `${d.grupoNombre} (${d.responsableIds.map((id) => asignables.find((u) => u.id === id)?.name.split(' ')[0]).filter(Boolean).join(', ')})` }
+    : asignables.find((u) => u.id === d.responsableId) || (d.responsableId === usuario.id ? usuario : null);
   if (!resp_) { borrarBorrador(usuario); return resp('🚫 No puedes asignarle compromisos a esa persona.'); }
   if (!d.destino) {
     // La pregunta lleva las opciones en el texto (numeradas) para que se
@@ -620,11 +652,15 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
       const esConsejo = /consejo de barrio/i.test(d.destino.titulo || '') && isObispadoLeader(usuario, data);
       m = nuevaActa(db, { title: d.destino.titulo || 'Reunión', type: esConsejo ? 'consejo_barrio' : 'general' });
     }
-    m.commitments.push({
-      id: nextId(db, 'commitments'), description: d.descripcion, dueDate: d.fechaLimite, assignedToUserId: d.responsableId,
-      groupId: null, confidential: false, priority: 'media', status: 'pending', completedAt: null, completionComment: '',
-      whatsappDueTodaySent: false, reassignHistory: [],
-    });
+    const ids = d.responsableIds || [d.responsableId];
+    const groupId = ids.length > 1 ? `grp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+    for (const assignedToUserId of ids) {
+      m.commitments.push({
+        id: nextId(db, 'commitments'), description: d.descripcion, dueDate: d.fechaLimite, assignedToUserId,
+        groupId, confidential: false, priority: 'media', status: 'pending', completedAt: null, completionComment: '',
+        whatsappDueTodaySent: false, reassignHistory: [],
+      });
+    }
     m.lastEditedBy = usuario.id; m.lastEditedAt = now.toISOString();
     return m.title;
   });
@@ -632,5 +668,6 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
   const donde = d.destino.tipo === 'suelto'
     ? 'Quedó como compromiso suelto (sin reunión)'
     : d.destino.tipo === 'nueva' ? `Creé la reunión **«${acta}»** con fecha de hoy y quedó ahí` : `Quedó en el acta **«${acta}»**`;
+  if (d.responsableIds) return resp(`✅ Compromiso grupal registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). ${d.destino.tipo === 'suelto' ? 'Quedó como compromiso suelto (sin reunión)' : `Quedó en el acta **«${acta}»**`}; a cada uno le aparece en *Mis Asignaciones*.`);
   return resp(`✅ Compromiso registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). ${donde}, y le aparece en *Mis Asignaciones*.`);
 }

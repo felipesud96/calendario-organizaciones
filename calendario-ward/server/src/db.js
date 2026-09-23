@@ -4,6 +4,7 @@
 // migrar a Postgres/MySQL más adelante es directo si el proyecto crece.
 
 import fs from 'fs';
+import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -513,11 +514,44 @@ export function nextId(data, collection) {
 // Pequeño mutex en memoria para evitar condiciones de carrera entre
 // escrituras concurrentes dentro del mismo proceso.
 let queue = Promise.resolve();
+// ----------------------------------------------------------------------
+// Deseret: "deshacer" y "simular". Mientras Deseret atiende un mensaje,
+// server.js corre todo dentro de contextoDeseret.run({ cambios: [] }):
+//   - cada escritura (withDb) anota cómo estaban ANTES los registros que
+//     cambió (para poder deshacer lo último que hizo Deseret), y
+//   - con { simular: true } cualquier escritura se rechaza (se usa para
+//     "ensayar" varias acciones antes de pedir una sola confirmación).
+// Fuera de Deseret (el resto de la app) no cambia nada.
+// ----------------------------------------------------------------------
+export const contextoDeseret = new AsyncLocalStorage();
+export const COLECCIONES_DESHACIBLES = ['interviews', 'events', 'meetings', 'interviewRequests', 'recordatorios'];
+function fotoColecciones(data) {
+  return Object.fromEntries(COLECCIONES_DESHACIBLES.map((c) => [c, new Map((data[c] || []).map((x) => [x.id, JSON.stringify(x)]))]));
+}
+function anotarCambios(ctx, antes, data) {
+  for (const c of COLECCIONES_DESHACIBLES) {
+    const ahora = new Map((data[c] || []).map((x) => [x.id, x]));
+    const ids = new Set([...antes[c].keys(), ...ahora.keys()]);
+    for (const id of ids) {
+      const a = antes[c].get(id) ?? null;
+      const d = ahora.has(id) ? JSON.stringify(ahora.get(id)) : null;
+      if (a === d) continue;
+      const previo = ctx.cambios.find((x) => x.c === c && x.id === id);
+      if (previo) previo.despues = d; // se conserva el "antes" más antiguo
+      else ctx.cambios.push({ c, id, antes: a, despues: d });
+    }
+  }
+}
+
 export function withDb(fn) {
+  const ctx = contextoDeseret.getStore();
   const result = queue.then(() => {
+    if (ctx?.simular) throw new Error('SIMULACION');
     const data = load();
+    const antes = ctx ? fotoColecciones(data) : null;
     const out = fn(data);
     vincularPorId(data); // los registros nuevos quedan vinculados al tiro
+    if (ctx) anotarCambios(ctx, antes, data);
     save(data);
     return out;
   });

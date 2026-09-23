@@ -15,6 +15,9 @@
       try {
         var t = localStorage.getItem('organizasion_theme');
         if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        var a = JSON.parse(localStorage.getItem('organizasion_a11y') || '{}');
+        if (a.contraste) document.documentElement.setAttribute('data-contraste', 'alto');
+        if (a.movimiento) document.documentElement.setAttribute('data-movimiento', 'reducido');
       } catch (e) { /* almacenamiento no disponible — se ve el tema del sistema, sin parpadeo que evitar */ }
     })();
   </script>

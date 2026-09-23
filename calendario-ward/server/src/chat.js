@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { load, withDb, nextId, interviewEligibility } from './db.js';
+import { load, withDb, nextId, interviewEligibility, contextoDeseret } from './db.js';
 import { canEditOrg, PURPOSE_OPTIONS, orgRequiresSupervisingAdults } from './routes/events.js';
 import { canScheduleOrg, orgAllowsInterviews, orgSeesAllInterviews } from './routes/interviews.js';
 import { findStakeConflicts } from './stakeCalendar.js';
@@ -10,6 +10,7 @@ import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from
 import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES } from './deseretAcciones.js';
 import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
 import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
+import { detectarPlus, manejarPlus } from './deseretPlus.js';
 
 // Cache local en memoria para respuestas ultrarrápidas (<10 ms) — solo para
 // preguntas de SOLO LECTURA (ver MÓDULO 2 más abajo). Nunca se usa para
@@ -139,6 +140,14 @@ function parseFecha(mensajeMin, hoyObj) {
   const enDias = mensajeMin.match(/\ben\s+(\d+)\s+d[ií]as?\b/);
   if (enDias) {
     const d = new Date(hoyObj); d.setDate(d.getDate() + Number(enDias[1])); return toISO(d);
+  }
+
+  // "el miércoles 30" / "el 30": ese número de día, este mes (o el próximo si ya pasó).
+  const diaNum = mensajeMin.match(/\b(?:(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+|el\s+)(\d{1,2})\b(?!\s*(?::|hrs?|horas|am|pm|de la))/);
+  if (diaNum && Number(diaNum[1]) >= 1 && Number(diaNum[1]) <= 31) {
+    const d = new Date(hoyObj.getFullYear(), hoyObj.getMonth(), Number(diaNum[1]), 12);
+    if (toISO(d) < toISO(hoyObj)) d.setMonth(d.getMonth() + 1);
+    return toISO(d);
   }
 
   for (const nombre of Object.keys(DIAS_INDEX)) {
@@ -823,6 +832,7 @@ Hoy es ${DIAS_NOMBRE[hoyObj.getDay()]} ${toISO(hoyObj)}. "El viernes" = el próx
 "8 de la noche" = 20:00; "después de la sacramental" no es una hora exacta: omite la hora.
 Organizaciones: ${(data.organizations || []).map((o) => o.name).join(', ')}.
 Si el usuario quiere AGENDAR algo, o modificar algo que ya existe (reprogramar, cancelar o marcar una entrevista, confirmar o rechazar una solicitud, completar o crear un compromiso), llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
+Si pide VARIAS cosas en la misma frase ("agenda a Juan el martes y anota un compromiso para Ana"), llama una función por cada una, en el orden en que las dijo.
 Si solo pregunta o conversa, no llames ninguna función.`;
 
   if (gemini) {
@@ -842,9 +852,10 @@ Si solo pregunta o conversa, no llames ninguna función.`;
           }],
         },
       });
-      const call = r?.functionCalls?.[0];
+      const calls = r?.functionCalls || [];
+      const call = calls[0];
       if (!call) return { tipo: null };
-      return { tipo: tipoDeHerramienta(call.name), herramienta: call.name, args: call.args || {} };
+      return { tipo: tipoDeHerramienta(call.name), herramienta: call.name, args: call.args || {}, llamadas: calls.map((c) => ({ herramienta: c.name, args: c.args || {} })) };
     } catch (err) {
       console.warn('⚠️ Gemini no pudo interpretar el pedido (paso a Groq/Cerebras):', err.message);
     }
@@ -859,11 +870,11 @@ Si solo pregunta o conversa, no llames ninguna función.`;
         temperature: 0,
         max_tokens: 300,
       });
-      const call = r?.choices?.[0]?.message?.tool_calls?.[0];
+      const calls = r?.choices?.[0]?.message?.tool_calls || [];
+      const call = calls[0];
       if (!call) return { tipo: null };
-      let args = {};
-      try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
-      return { tipo: tipoDeHerramienta(call.function.name), herramienta: call.function.name, args };
+      const parse = (c) => { try { return JSON.parse(c.function.arguments || '{}'); } catch { return {}; } };
+      return { tipo: tipoDeHerramienta(call.function.name), herramienta: call.function.name, args: parse(call), llamadas: calls.map((c) => ({ herramienta: c.function.name, args: parse(c) })) };
     } catch (err) {
       console.warn(`⚠️ ${prov.nombre} no pudo interpretar el pedido:`, err.message);
     }
@@ -890,6 +901,35 @@ function borradorDesdeIA(intencion, data, hoyObj) {
     orgId,
     purpose: PURPOSE_OPTIONS.includes(a.proposito) ? a.proposito : undefined,
   };
+}
+
+// Pide a la IA una respuesta en JSON (para estructurar un acta dictada).
+// Devuelve el objeto, o null si no hay IA o no respondió algo válido.
+async function jsonConIA(sistema, texto) {
+  const limpiar = (t) => { try { return JSON.parse(String(t || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim()); } catch { return null; } };
+  const gemini = clienteGemini();
+  if (gemini) {
+    try {
+      const r = await gemini.models.generateContent({
+        model: GEMINI_MODEL(),
+        contents: [{ role: 'user', parts: [{ text: texto }] }],
+        config: { systemInstruction: sistema, temperature: 0, responseMimeType: 'application/json' },
+      });
+      const j = limpiar(r?.text);
+      if (j) return j;
+    } catch (err) { console.warn('⚠️ Gemini (JSON) falló:', err.message); }
+  }
+  for (const prov of proveedoresIA()) {
+    try {
+      const r = await llamarOpenAICompatible(prov, {
+        messages: [{ role: 'system', content: sistema }, { role: 'user', content: texto }],
+        temperature: 0, max_tokens: 2000, response_format: { type: 'json_object' },
+      }, 25000);
+      const j = limpiar(r?.choices?.[0]?.message?.content);
+      if (j) return j;
+    } catch (err) { console.warn(`⚠️ ${prov.nombre} (JSON) falló:`, err.message); }
+  }
+  return null;
 }
 
 async function redactarConIA(systemInstruction, historial, mensaje) {
@@ -1209,7 +1249,81 @@ function contextoMinistracion(norm, usuario, db) {
   return { contexto, fallback };
 }
 
-export async function procesarPreguntaChat(mensaje, historial = [], usuario = null) {
+// ----------------------------------------------------------------------
+// D4 — VARIAS ACCIONES EN UNA FRASE
+// ----------------------------------------------------------------------
+// La IA devuelve una llamada por cada cosa pedida. Primero se "ensayan"
+// todas sin escribir nada (contextoDeseret con simular: true): si todas
+// quedan listas para confirmar, se pide UNA sola confirmación con una
+// tarjeta que resume todo. Si a alguna le falta información, se hacen por
+// partes: la primera ahora y las demás en cola, una tras otra.
+const colas = new Map(); // userId -> { llamadas, ts }
+function ejecutarLlamada(ll, usuario, hoyObj, db) {
+  const tipo = tipoDeHerramienta(ll.herramienta);
+  const mensaje = Object.values(ll.args || {}).filter((v) => typeof v === 'string').join(', ');
+  const mensajeMin = mensaje.toLowerCase();
+  if (tipo === 'accion') return manejarAccion({ accion: ll.herramienta, args: ll.args, mensaje, mensajeMin, usuario, hoyObj });
+  const previo = borradorDesdeIA({ tipo, args: ll.args }, db, hoyObj);
+  if (tipo === 'entrevista') return intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, db, previo);
+  if (!previo.titulo) delete previo.titulo;
+  return intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, db, previo);
+}
+export async function variasAcciones(llamadas, usuario, hoyObj, db) {
+  llamadas = llamadas.slice(0, 5);
+  const pasos = [];
+  for (const ll of llamadas) {
+    borrarBorrador(usuario);
+    let r = null;
+    try { r = await contextoDeseret.run({ cambios: [], simular: true }, () => ejecutarLlamada(ll, usuario, hoyObj, db)); } catch { r = null; }
+    pasos.push({ r, b: leerBorrador(usuario) });
+  }
+  borrarBorrador(usuario);
+  if (pasos.every((p) => p.b && p.b.falta === 'confirmar' && p.r?.tarjeta)) {
+    guardarBorrador(usuario, 'lote', { pasos: pasos.map((p) => ({ tipo: p.b.tipo, datos: p.b.datos })) }, 'confirmar');
+    const filas = pasos.map((p, i) => [`${i + 1}.`, [p.r.tarjeta.titulo, ...(p.r.tarjeta.filas || []).map((f) => f[1]).filter((v) => v && !String(p.r.tarjeta.titulo || '').includes(v)).slice(0, 3)].join(' · ')]);
+    return resp(`📋 Entendí **${pasos.length} cosas**. ¿Hago todo esto?`, {
+      tarjeta: { tipo: 'lote', titulo: `${pasos.length} acciones`, color: null, filas },
+      opciones: OPCIONES_CONFIRMAR,
+    });
+  }
+  colas.set(usuario.id, { llamadas: llamadas.slice(1), ts: Date.now() });
+  const r = await ejecutarLlamada(llamadas[0], usuario, hoyObj, db);
+  const { texto, ...extra } = r;
+  return resp(`Me pediste **${llamadas.length} cosas**; vamos por partes (1 de ${llamadas.length}).\n\n${texto}`, extra);
+}
+async function confirmarLote(borrador, mensajeMin, usuario) {
+  borrarBorrador(usuario);
+  if (!ES_AFIRMATIVO.test(mensajeMin)) return resp('👌 Listo, no hice nada.');
+  const textos = [];
+  for (const p of borrador.datos.pasos) {
+    guardarBorrador(usuario, p.tipo, p.datos, 'confirmar');
+    // eslint-disable-next-line no-use-before-define
+    const r = await procesarInterno('sí', [], usuario, {});
+    textos.push(r.texto);
+  }
+  borrarBorrador(usuario);
+  return resp(textos.map((t, i) => `**${i + 1}.** ${t}`).join('\n\n'));
+}
+
+export async function procesarPreguntaChat(mensaje, historial = [], usuario = null, opciones = {}) {
+  const r = await procesarInterno(mensaje, historial, usuario, opciones);
+  // Acciones en cola (pedidas en la misma frase): cuando termina una, sigue la próxima.
+  const cola = usuario ? colas.get(usuario.id) : null;
+  if (cola && (Date.now() - cola.ts > BORRADOR_TTL_MS || !cola.llamadas.length)) colas.delete(usuario.id);
+  else if (cola && !leerBorrador(usuario)) {
+    const sig = cola.llamadas.shift();
+    if (!cola.llamadas.length) colas.delete(usuario.id);
+    try {
+      const r2 = await ejecutarLlamada(sig, usuario, hoyEnChile(), load());
+      const { texto, ...extra } = r2;
+      return resp(`${r.texto}\n\n➡️ **Sigo con lo siguiente:**\n${texto}`, extra);
+    } catch { /* si falla, se deja la respuesta anterior */ }
+  }
+  return r;
+}
+
+async function procesarInterno(mensaje, historial = [], usuario = null, opciones = {}) {
+  const breve = !!opciones.breve;
   try {
     const db = load();
     const hoyObj = hoyEnChile();
@@ -1229,11 +1343,22 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     // Una acción explícita ("anota un compromiso…") gana sobre las consultas:
     // "…preparar el discurso, sin reunión" no es "preparar una reunión".
     const consultaExtra = usuario && detectarAccion(norm) ? null : detectarConsultaExtra(norm);
-    if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra) {
+    // Segunda tanda (deseretPlus.js): deshacer, recordatorios, dictar acta,
+    // sugerencias, búsqueda en actas, resumen por organización, Manual.
+    const plus = usuario ? detectarPlus(norm, db) : null;
+    if (plus === 'deshacer') { borrarBorrador(usuario); colas.delete(usuario.id); return await manejarPlus('deshacer', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, breve }); }
+    // Mientras se dicta un acta, todo lo que llegue es parte del dictado.
+    if (borrador?.tipo === 'plus' && borrador.datos.plus === 'dictar' && borrador.falta === 'dictado' && !/^\s*(cancela|cancelar)\b/i.test(mensajeMinusculas)) {
+      return await manejarPlus('dictar', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, borrador, breve });
+    }
+    if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra && !plus) {
       if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
         borrarBorrador(usuario);
-        return resp('👌 Listo, cancelé ese agendamiento. No se guardó nada.');
+        colas.delete(usuario.id);
+        return resp('👌 Listo, cancelé eso. No se guardó nada.');
       }
+      if (borrador.tipo === 'lote') return await confirmarLote(borrador, mensajeMinusculas, usuario);
+      if (borrador.tipo === 'plus') return await manejarPlus(null, { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, borrador, breve });
       const esPreguntaNueva = /^\s*(¿|qu[ée]\s|cu[aá]l|cu[aá]nt|cu[aá]ndo|d[oó]nde|qui[ée]n(es)?\s+(tiene|hay|son)|mu[ée]strame|hay\s)/i.test(mensajeMinusculas);
       if (!esPreguntaNueva) {
         if (borrador.tipo === 'accion') {
@@ -1245,6 +1370,12 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
         return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
       }
       borrarBorrador(usuario);
+    }
+
+    if (plus) {
+      borrarBorrador(usuario);
+      const r = await manejarPlus(plus, { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, breve });
+      if (r) return r;
     }
 
     // 1a-bis. Consultas especiales: ficha de persona, horarios libres,
@@ -1260,6 +1391,10 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     const accionRegla = usuario ? detectarAccion(norm) : null;
     if (usuario && (matchAgendar || accionRegla || PARECE_AGENDAR.test(norm))) {
       const intencion = await extraerIntencionConIA(mensaje, hoyObj, db);
+      if (intencion?.llamadas?.length > 1) {
+        borrarBorrador(usuario);
+        return await variasAcciones(intencion.llamadas, usuario, hoyObj, db);
+      }
       if (intencion && intencion.tipo === 'accion') {
         borrarBorrador(usuario);
         return await manejarAccion({ accion: intencion.herramienta, args: intencion.args, mensaje, mensajeMin: mensajeMinusculas, usuario, hoyObj });
@@ -1411,7 +1546,7 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     if (contextoDinamico === '') {
       registrarSinRespuesta(mensaje).catch(() => {});
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos, decirte qué tienes **esta semana**, sugerirte **horarios libres**, mostrarte la **ficha** de una persona, **prepararte una reunión** y contarte cómo vamos en **asistencia** y en el **Enfoque Ministración**. ¿Qué necesitas?';
+      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos (también para una presidencia completa), **dictar un acta**, ponerte **recordatorios**, decirte qué tienes **hoy** o **esta semana**, sugerirte **a quién entrevistar** y **horarios libres**, buscar **qué se acordó** en actas antiguas, resumir **cómo va una organización**, responder dudas del **Manual General** y contarte cómo vamos en **asistencia** y **ministración**. Si me equivoco, dime **"deshaz lo último"**. ¿Qué necesitas?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1421,7 +1556,7 @@ ${contextoDinamico}
 REGLAS DE COMPORTAMIENTO:
 1. Responde SOLO con los datos de arriba. NUNCA inventes datos que no estén ahí.
 2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
-3. Pon en **negrita** títulos, nombres y fechas. Tono profesional y cálido: usa pocos emojis y solo funcionales (📅, 🧹, 🏛️, 🙋); nunca 🐝.
+${breve ? '0. MODO CONDUCCIÓN: la respuesta se escuchará mientras la persona maneja. Máximo 2 frases cortas, sin listas ni viñetas.\n' : ''}3. Pon en **negrita** títulos, nombres y fechas. Tono profesional y cálido: usa pocos emojis y solo funcionales (📅, 🧹, 🏛️, 🙋); nunca 🐝.
 4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
 5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.
 6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.
@@ -1448,4 +1583,5 @@ export {
   guardarBorrador, borrarBorrador, leerBorrador, OPCIONES_CONFIRMAR, ES_AFIRMATIVO, vaciarCache,
   toISO, opcionesFecha, OPCIONES_HORA, orgPorId, sumarDias, hoyEnChile, DIAS_NOMBRE,
   redactarConIA, filtrarAlucinacion, contextoCrecimiento, contextoMinistracion,
+  jsonConIA, inferOrganizationId, MESES_NOMBRE,
 };

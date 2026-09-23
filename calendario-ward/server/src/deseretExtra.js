@@ -14,10 +14,11 @@ import { isWelfareCommitteeMember } from './routes/welfare.js';
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
 import { bloquesLibres } from './routes/publicBooking.js';
 import { resumenSemana, fraseResumen } from './semana.js';
+import { recordatoriosComoItems } from './deseretPlus.js';
 import { puedeVerFichas, buscarPersonas, fichaPersona, fichaComoTexto } from './persona.js';
 import { TIPOS_ENTREVISTA, QUIEN_LABEL, inferirTipoEntrevista, obispoDelBarrio } from './tiposEntrevista.js';
 import {
-  resp, fechaLegible, normalizeSearchText, redactarConIA, filtrarAlucinacion,
+  resp, fechaLegible, normalizeSearchText, redactarConIA, filtrarAlucinacion, parseFecha,
   contextoCrecimiento, contextoMinistracion, toISO, sumarDias,
 } from './chat.js';
 
@@ -25,7 +26,7 @@ import {
 const RE_FICHA = /\b(cuentame|hablame|dime|ficha|informacion|info|historial|que sabes|datos)\b\s+(de|del|sobre|acerca de)\s+/;
 const RE_HORARIOS = /\b(cuando puedo|que horarios?|horarios? (libres?|disponibles?)|mis horarios|tengo (hora|espacio|tiempo)|huecos?|espacios? libres?|disponibilidad para)\b/;
 const RE_PREPARAR = /\b(prepar\w*|arm\w*|sugi\w*|propon\w*|temas? para|agenda para)\b.*\b(consejo|reunion|coordinacion|presidencia|comite|junta)\b/;
-const RE_SEMANA = /\b(mi semana|que tengo|tengo algo|que me toca|mis pendientes|resumen de (la|mi) semana|como viene la semana|agenda de (hoy|manana|la semana))\b/;
+const RE_SEMANA = /\b(mi semana|mi dia|resumen del dia|que tengo|tengo algo|que me toca|mis pendientes|resumen de (la|mi) semana|como viene la semana|agenda de (hoy|manana|la semana))\b/;
 const RE_TIPOS = /\b(quien puede (hacer|entrevistar|dar|tomar)|quien (hace|da|toma) (la|las|el)|solo (lo|la) (hace|puede hacer) el obispo|solo el obispo|que entrevistas (puede|pueden|hace|hacen)|puede (un|el) consejero|pueden los consejeros|consejeros? (puede|pueden)|le corresponde al obispo)\b/;
 const RE_FEEDBACK = /\b(no supiste|sin respuesta|no respondidas|valoraciones de deseret|feedback de deseret|como le va a deseret)\b/;
 
@@ -188,14 +189,20 @@ Tono pastoral, centrado en las personas (Manual General 4.2: ministrar, no admin
 // ---------------- 6. Mi semana ----------------
 function consultaSemana(norm, usuario, data, hoyObj) {
   const hoy = toISO(hoyObj);
-  const soloHoy = /\bhoy\b/.test(norm);
+  const soloHoy = /\b(hoy|mi dia|del dia)\b/.test(norm);
   const manana = /\bmanana\b/.test(norm);
-  const desde = manana ? toISO(sumarDias(hoyObj, 1)) : hoy;
-  const r = resumenSemana(usuario, data, { desde, dias: soloHoy || manana ? 1 : 7 });
-  const periodo = soloHoy ? 'hoy' : manana ? 'mañana' : 'esta semana';
-  const items = [...r.entrevistas, ...r.compromisos, ...r.actividades].sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)).slice(0, 15)
+  // Un día puntual: "¿qué tengo el jueves?", "¿qué tengo el 30?"
+  const diaPuntual = !soloHoy && !manana && !/\bsemana\b/.test(norm) ? parseFecha(norm, hoyObj) : null;
+  const desde = diaPuntual || (manana ? toISO(sumarDias(hoyObj, 1)) : hoy);
+  const r = resumenSemana(usuario, data, { desde, dias: soloHoy || manana || diaPuntual ? 1 : 7 });
+  const periodo = soloHoy ? 'hoy' : manana ? 'mañana' : diaPuntual ? `el ${fechaLegible(diaPuntual)}` : 'esta semana';
+  const recs = recordatoriosComoItems(usuario, data, r.desde, r.hasta);
+  const items = [...r.entrevistas, ...r.compromisos, ...r.actividades, ...recs].sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)).slice(0, 15)
     .map((x) => ({ tipo: x.tipo === 'compromiso' ? 'compromiso' : x.tipo, titulo: x.titulo, fecha: x.fecha, hora: x.hora, org: x.org, color: x.color }));
-  return resp(`Para **${periodo}** tienes: ${fraseResumen(r)}.${r.totales.solicitudes ? '\n\n📥 Revisa las solicitudes en **Entrevistas → Solicitudes**.' : ''}`, items.length ? { items } : {});
+  const frase = fraseResumen(r);
+  const recTxt = recs.length ? `${recs.length} recordatorio${recs.length === 1 ? '' : 's'}` : '';
+  const todo = recTxt ? (/nada pendiente/.test(frase) ? recTxt : `${frase} y ${recTxt}`) : frase;
+  return resp(`Para **${periodo}** tienes: ${todo}.${r.totales.solicitudes ? '\n\n📥 Revisa las solicitudes en **Entrevistas → Solicitudes**.' : ''}`, items.length ? { items } : {});
 }
 
 // ---------------- 10. Aprender del uso ----------------

@@ -33,7 +33,22 @@ export function registerPersonasSemanaRoutes(router) {
 
   router.get('/api/mi-semana', requireAuth(async (req, res) => {
     const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 14);
-    sendJson(res, 200, resumenSemana(req.user, load(), { dias }));
+    const data = load();
+    const r = resumenSemana(req.user, data, { dias });
+    // A17: "Primeros pasos" para líderes y secretarios (se calcula solo; la
+    // tarjeta desaparece cuando está todo hecho o la persona la oculta).
+    if (['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(req.user.role)) {
+      const u = req.user;
+      r.primerosPasos = {
+        perfil: !!(u.phone && u.email),
+        llamamiento: !!(u.calling || u.isPresident || u.role !== 'leader'),
+        push: (data.webPush?.subscriptions || []).some((x) => Number(x.userId) === Number(u.id)),
+        agendo: (data.interviews || []).some((iv) => Number(iv.scheduledBy) === Number(u.id))
+          || (data.events || []).some((e) => Number(e.createdBy) === Number(u.id))
+          || (data.meetings || []).some((m) => Number(m.createdBy) === Number(u.id)),
+      };
+    }
+    sendJson(res, 200, r);
   }));
 
   router.post('/api/chat/feedback', requireAuth(async (req, res, params, body) => {

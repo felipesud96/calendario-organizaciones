@@ -213,7 +213,7 @@ function withCommitmentInfo(c, data, meeting, viewer) {
   };
 }
 
-function withMeetingInfo(m, data, viewer) {
+export function withMeetingInfo(m, data, viewer) {
   const org = data.organizations.find((o) => o.id === Number(m.organizationId));
   const fullAccess = !viewer || canSeeMeetingFullContent(viewer, m, data);
   return {
@@ -234,7 +234,7 @@ function withMeetingInfo(m, data, viewer) {
 // Puede editar el acta (agregar compromisos, archivar): quien la creó, o un
 // Administrador — igual que el resto de módulos del barrio, un
 // Administrador siempre puede intervenir.
-function canEditMeeting(user, meeting) {
+export function canEditMeeting(user, meeting) {
   return user.role === 'admin' || Number(user.id) === Number(meeting.createdBy);
 }
 
@@ -273,7 +273,7 @@ export function canSeeMeetingRecord(user, meeting, data) {
 // corresponden TODOS los temas sugeridos en cada reunión. Un tema marcado
 // así se salta al armar la minuta que se comparte antes con los consejeros
 // (ver buildMinutaShareText en app.js).
-const EMPTY_AGENDA_ITEM_NOTES = {
+export const EMPTY_AGENDA_ITEM_NOTES = {
   notes: '', necesidad: '', analisis: '', acuerdo: '', seguimiento: '',
   quienNecesita: '', queSeHara: '', quienLoHara: '', notApplicable: false,
   // Punto 12: marca si el "Seguimiento" de un tema de Consejo de Barrio ya
@@ -757,7 +757,11 @@ export function registerMeetingRoutes(router) {
       const targets = f.commitment.groupId
         ? f.meeting.commitments.filter((c) => c.groupId === f.commitment.groupId)
         : [f.commitment];
-      targets.forEach((c) => { c.description = description; c.dueDate = dueDate; if (priority) c.priority = priority; });
+      targets.forEach((c) => {
+        // Si cambia la fecha, los avisos de "por vencer / vence hoy / vencido" vuelven a correr.
+        if (c.dueDate !== dueDate) Object.assign(c, { commitmentReminderSent: false, whatsappDueTodaySent: false, pushPorVencerSent: false, pushVencidoSent: false });
+        c.description = description; c.dueDate = dueDate; if (priority) c.priority = priority;
+      });
       touchMeetingEdit(f.meeting, req.user.id);
     });
     const data = load();

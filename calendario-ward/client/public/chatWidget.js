@@ -49,6 +49,8 @@ const CLAVE_CHAT = 'deseret_chat_v2';   // sessionStorage: conversación de esta
 const CLAVE_VOZ = 'deseret_voz';        // localStorage: ¿leer respuestas en voz alta?
 const CLAVE_HEY = 'deseret_hey';        // localStorage: ¿escuchar "Hey Deseret"?
 const CLAVE_INTRO = 'deseret_intro_v1'; // localStorage: ¿ya se mostró la presentación?
+const CLAVE_AUTO = 'deseret_conduccion'; // localStorage: ¿modo conducción?
+const CLAVE_AVISOS = 'deseret_avisos_dia'; // localStorage: día en que ya se mostraron los avisos
 
 // Imagen de Deseret (abeja en un panal) y los íconos de línea de la ventana.
 const AVATAR = '/deseret.svg';
@@ -64,6 +66,7 @@ const ICONOS = {
   ok: svg('<path d="M20 6 9 17l-5-5"/>', ' width="14" height="14"'),
   arriba: svg('<path d="M7 10v12"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18.4 22H7V10l4.3-8a3 3 0 0 1 3.7 3.9z"/>', ' width="14" height="14"'),
   oido: svg('<path d="M6 8.5a6 6 0 0 1 12 0c0 3.5-3 4.5-3.5 7a3.5 3.5 0 0 1-6.5 1"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-1.5 2-1.5 3"/>'),
+  auto: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/><path d="M5 12h14"/>'),
   abajo: svg('<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 5.6 2H17v12l-4.3 8a3 3 0 0 1-3.7-3.9z"/>', ' width="14" height="14"'),
 };
 // Sugerencias de la pantalla de bienvenida.
@@ -89,7 +92,7 @@ const ESTILOS = `
     position: fixed; right: 24px; bottom: 24px; z-index: 95;
     display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 18px 0 7px;
     border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-weight: 700; font-size: 14px;
-    background: linear-gradient(135deg, var(--celeste-dark, #0369a1), var(--celeste, #0ea5e9)); color: #fff;
+    background: linear-gradient(135deg, #075985, #0284c7); color: #fff;
     box-shadow: 0 6px 18px rgba(3,105,161,.35); transition: transform .15s ease, box-shadow .15s ease;
   }
   #deseret-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(3,105,161,.4); }
@@ -119,6 +122,15 @@ const ESTILOS = `
   }
   .deseret-hey-aviso { font-size: 12px; background: #ecfdf5; color: #065f46; border-bottom: 1px solid #a7f3d0; padding: 6px 12px; display: none; }
   #chat-header button.hey-on { background: rgba(74,222,128,.3); opacity: 1; }
+  #chat-header button.auto-on { background: rgba(250,204,21,.35); opacity: 1; }
+  /* Modo conducción: letra grande, sin botones secundarios, micrófono enorme */
+  #chat-window.conduccion #chat-messages .msg { font-size: 18px; line-height: 1.5; }
+  #chat-window.conduccion .msg-actions, #chat-window.conduccion .deseret-items { display: none; }
+  #chat-window.conduccion .deseret-chip { font-size: 16px; padding: 9px 14px; }
+  #chat-window.conduccion #chat-mic-btn { width: 64px; height: 64px; }
+  #chat-window.conduccion #chat-mic-btn svg { width: 30px; height: 30px; }
+  .deseret-auto-aviso { display: none; font-size: 13px; background: #fef9c3; color: #713f12; border-bottom: 1px solid #fde68a; padding: 6px 12px; }
+  #chat-window.conduccion .deseret-auto-aviso { display: block; }
 
   /* Ventana */
   #chat-window {
@@ -134,7 +146,7 @@ const ESTILOS = `
   #chat-header {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 10px 10px 10px 14px;
-    background: linear-gradient(135deg, var(--celeste-dark, #0369a1), var(--celeste, #0ea5e9)); color: #fff;
+    background: linear-gradient(135deg, #075985, #0284c7); color: #fff;
   }
   .deseret-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .deseret-id img { width: 38px; height: 38px; flex: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)); }
@@ -169,7 +181,7 @@ const ESTILOS = `
   .deseret-bienvenida .t { font-weight: 700; font-size: 17px; color: var(--ink, #0f172a); margin-top: 6px; }
   .deseret-bienvenida .s { font-size: 13px; margin-top: 2px; }
   .deseret-bienvenida .deseret-chips { justify-content: center; margin-top: 12px; }
-  #chat-messages .msg.user { align-self: flex-end; background: var(--celeste, #0ea5e9); color: #fff; }
+  #chat-messages .msg.user { align-self: flex-end; background: #0284c7; color: #fff; }
   #chat-messages .msg.error { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
 
   /* Punto 14: indicador de "escribiendo" */
@@ -186,7 +198,7 @@ const ESTILOS = `
     border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; text-align: left;
   }
   .deseret-chip:hover { background: var(--celeste-light, #e0f2fe); }
-  .deseret-chip.primario { background: var(--celeste, #0ea5e9); color: #fff; font-weight: 600; }
+  .deseret-chip.primario { background: #0284c7; border-color: #0284c7; color: #fff; font-weight: 600; }
 
   /* Punto 6: tarjeta de confirmación */
   .deseret-confirm { margin-top: 8px; border: 1px solid var(--border, #dbeafe); border-left: 4px solid var(--c); border-radius: 10px; padding: 8px 10px; background: var(--celeste-lighter, #f0f9ff); }
@@ -218,7 +230,7 @@ const ESTILOS = `
   #chat-input:focus { outline: none; border-color: var(--celeste, #0ea5e9); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
   #chat-send-btn, #chat-mic-btn { flex: none; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border, #dbeafe); border-radius: 50%; cursor: pointer; background: var(--white, #fff); color: var(--ink-soft, #475569); }
   #chat-mic-btn:hover { color: var(--ink, #0f172a); background: var(--celeste-lighter, #f0f9ff); }
-  #chat-send-btn { background: var(--celeste, #0ea5e9); color: #fff; border-color: var(--celeste, #0ea5e9); }
+  #chat-send-btn { background: #0284c7; color: #fff; border-color: #0284c7; }
   #chat-send-btn:disabled { opacity: .6; cursor: default; }
   @keyframes pulse-wave {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
@@ -257,11 +269,13 @@ export function initChatWidget() {
             </div>
             <div class="deseret-botones">
               <button id="chat-hey-btn" title='Activar "Hey Deseret"' aria-label='Activar "Hey Deseret"' aria-pressed="false" style="display:none">${ICONOS.oido}</button>
+              <button id="chat-auto-btn" title="Modo conducción (solo voz, respuestas cortas)" aria-label="Modo conducción" aria-pressed="false">${ICONOS.auto}</button>
               <button id="chat-voice-btn" title="Leer respuestas en voz alta" aria-label="Leer respuestas en voz alta" aria-pressed="false">${ICONOS.vozOff}</button>
               <button id="chat-reset-btn" title="Reiniciar conversación" aria-label="Reiniciar conversación">${ICONOS.reiniciar}</button>
               <button id="chat-close-btn" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
             </div>
           </div>
+          <div class="deseret-auto-aviso">🚗 Modo conducción: háblame y te respondo en voz, corto. No mires la pantalla mientras manejas.</div>
           <div id="chat-messages" aria-live="polite"></div>
           <div id="chat-input-area">
             <button id="chat-mic-btn" title="Dictar por voz" aria-label="Dictar por voz">${ICONOS.mic}</button>
@@ -304,7 +318,7 @@ export function initChatWidget() {
 
   function htmlItems(items) {
     return `<div class="deseret-items">${items.map((it) => {
-      const icono = it.tipo === 'entrevista' ? '🙋 ' : it.tipo === 'aseo' ? '🧹 ' : '';
+      const icono = { entrevista: '🙋 ', aseo: '🧹 ', recordatorio: '⏰ ', acta: '📋 ', compromiso: '🎯 ' }[it.tipo] || '';
       return `<div class="deseret-item" style="--c:${colorSeguro(it.color)}">
         <div class="barra"></div>
         <div class="cuando"><b>${escapeHtml(fechaCorta(it.fecha))}</b>${escapeHtml(it.hora || '')}</div>
@@ -538,6 +552,8 @@ export function initChatWidget() {
   // Lo que se LEE en voz alta: el texto + la tarjeta de confirmación + las
   // opciones (si no venían ya numeradas en el texto) — sin esto, quien usa
   // solo la voz escucha "¿Lo registro así?" sin saber qué se va a registrar.
+  const DIAS_L = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const diaHablado = (iso) => { const [y, mm, d] = String(iso).split('-').map(Number); return y ? `el ${DIAS_L[new Date(y, mm - 1, d, 12).getDay()]} ${d}` : ''; };
   const sinEmoji = (t) => String(t || '').replace(/\p{Extended_Pictographic}/gu, '').replace(/^\s*\d+\.\s*/, '').trim();
   function textoParaVoz(m) {
     // Las aclaraciones entre paréntesis ("puedes cambiar la fecha…") se
@@ -545,6 +561,14 @@ export function initChatWidget() {
     const partes = [String(m.texto || '').replace(/\s*\((puedes|queda|ej\.)[^)]*\)/gi, '')];
     const t = m.extra?.tarjeta;
     if (t) partes.push(`${t.titulo || ''}. ${(t.filas || []).map((f) => f[1]).filter(Boolean).join('. ')}.`);
+    // Las tarjetas de la agenda también se leen ("¿qué tengo hoy?").
+    const items = (m.extra?.items || []).filter((it) => it.tipo !== 'acta');
+    if (items.length) {
+      const max = conduccion ? 3 : 6;
+      const unDia = items.every((it) => it.fecha === items[0].fecha);
+      const que = { entrevista: 'Entrevista con', actividad: '', compromiso: 'Compromiso:', recordatorio: 'Recordatorio:', aseo: 'Aseo:', solicitud: 'Solicitud de' };
+      partes.push(items.slice(0, max).map((it) => `${unDia ? '' : `${diaHablado(it.fecha)}, `}${it.hora ? `a las ${it.hora}, ` : ''}${que[it.tipo] ?? ''} ${it.titulo}`.replace(/\s+/g, ' ').trim()).join('. ') + (items.length > max ? `. Y ${items.length - max} más.` : '.'));
+    }
     const ops = m.extra?.opciones || [];
     if (ops.length && !/\*\*1\.\*\*/.test(m.texto)) {
       const esConfirmar = ops.some((o) => /confirmar/i.test(o.value));
@@ -569,6 +593,7 @@ export function initChatWidget() {
     enviando = true;
     sendBtn.disabled = true;
 
+    store.set('localStorage', 'deseret_usado', true); // A17: "Pregúntale algo a Deseret" ✓
     const dictada = ultimaFueDictada;
     ultimaFueDictada = false;
     quitarChipsViejos();
@@ -592,7 +617,7 @@ export function initChatWidget() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ mensaje: text, historial: estado.historial }),
+        body: JSON.stringify({ mensaje: text, historial: estado.historial, breve: conduccion }),
       });
       const data = await response.json();
       const { respuesta, error, ...extra } = data || {};
@@ -606,10 +631,12 @@ export function initChatWidget() {
     estado.msgs.push(msgBot);
     pintarMensaje(msgBot);
     guardar();
-    if (vozActiva || dictada) {
+    if (vozActiva || dictada || conduccion) {
       // Conversación por voz: si se habló y Deseret hizo una pregunta, al
       // terminar de leerla se vuelve a abrir el micrófono (manos libres).
-      const seguir = dictada && esperaRespuesta(msgBot)
+      // En modo conducción se vuelve a abrir SIEMPRE (si no dices nada, se
+      // apaga solo a los pocos segundos).
+      const seguir = (dictada && esperaRespuesta(msgBot)) || conduccion
         ? () => setTimeout(() => {
           if (chatWindow.style.display !== 'none' && !micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click();
         }, 300)
@@ -630,9 +657,52 @@ export function initChatWidget() {
   const toggleChat = () => {
     const abrir = chatWindow.style.display === 'none';
     chatWindow.style.display = abrir ? 'flex' : 'none';
-    if (abrir) { scrollAbajo(); chatInput.focus(); } else callar();
+    if (abrir) {
+      scrollAbajo(); chatInput.focus();
+      mostrarAvisos();
+      if (conduccion) setTimeout(() => { if (!micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click(); }, 400);
+    } else callar();
   };
   document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
+
+  // ---------------- D6: avisos al abrir el chat (una vez al día) ----------------
+  async function mostrarAvisos() {
+    const hoy = new Date().toLocaleDateString('en-CA');
+    if (store.get('localStorage', CLAVE_AVISOS) === hoy) return;
+    store.set('localStorage', CLAVE_AVISOS, hoy);
+    try {
+      let token = null;
+      try { token = localStorage.getItem('cow_token'); } catch { token = null; }
+      const r = await fetch('/api/deseret/avisos', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const a = r.ok ? await r.json() : null;
+      if (!a?.texto) return;
+      quitarChipsViejos();
+      messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+      const m = { role: 'bot', texto: a.texto, extra: { opciones: a.opciones || [] } };
+      estado.msgs.push(m);
+      pintarMensaje(m);
+      guardar();
+    } catch { /* sin conexión: no pasa nada */ }
+  }
+
+  // ---------------- D13: modo conducción ----------------
+  let conduccion = store.get('localStorage', CLAVE_AUTO) === true;
+  const autoBtn = document.getElementById('chat-auto-btn');
+  const pintarAuto = () => {
+    chatWindow.classList.toggle('conduccion', conduccion);
+    autoBtn.classList.toggle('auto-on', conduccion);
+    autoBtn.setAttribute('aria-pressed', String(conduccion));
+    autoBtn.title = conduccion ? 'Modo conducción activado — toca para salir' : 'Modo conducción (solo voz, respuestas cortas)';
+  };
+  pintarAuto();
+  autoBtn.addEventListener('click', () => {
+    conduccion = !conduccion;
+    store.set('localStorage', CLAVE_AUTO, conduccion);
+    pintarAuto();
+    if (conduccion) {
+      hablar('Modo conducción activado. Te escucho.', () => { if (!micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click(); });
+    } else callar();
+  });
 
   // ---------------- Botón flotante + presentación ----------------
   const fab = document.getElementById('deseret-fab');

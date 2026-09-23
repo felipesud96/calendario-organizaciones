@@ -18,6 +18,7 @@ import { isObispadoLeader } from './routes/stake.js';
 import { computeBishopricOverview } from './routes/dashboard.js';
 import { previousMeetingOfType } from './routes/meetings.js';
 import { quarterOf, quarterLabel } from './quarter.js';
+import { sendUserPush } from './webpush.js';
 
 const CHECK_EVERY_MS = 15 * 60 * 1000; // revisa cada 15 minutos
 const TARGET_MS = 24 * 60 * 60 * 1000; // recordatorio 24 horas antes
@@ -156,6 +157,49 @@ async function checkCommitmentDueTodayWhatsApp() {
       });
     }
   }
+}
+
+// A9: notificaciones push de compromisos, además del "vence HOY":
+//   - 2 días antes ("vence el jueves"), para alcanzar a hacerlo, y
+//   - al día siguiente de vencer, si sigue pendiente ("márcalo si ya lo cumpliste").
+// Con fecha de Chile (no UTC), una sola vez cada una por compromiso.
+function fechaChile(dias = 0) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TZ_APP || 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date(Date.now() + dias * 86400000)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+const DIAS_SEM = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+async function checkCommitmentPushAvisos() {
+  const data = load();
+  const en2 = fechaChile(2);
+  const ayer = fechaChile(-1);
+  const marcar = [];
+  for (const m of data.meetings) {
+    if (m.status !== 'active') continue;
+    for (const c of (m.commitments || [])) {
+      if (c.status !== 'pending') continue;
+      const aviso = c.dueDate === en2 && !c.pushPorVencerSent ? 'porVencer' : c.dueDate === ayer && !c.pushVencidoSent ? 'vencido' : null;
+      if (!aviso) continue;
+      const u = data.users.find((x) => x.id === Number(c.assignedToUserId));
+      if (u && pushEnabledFor(u, 'commitments')) {
+        const [y, mm, d] = c.dueDate.split('-').map(Number);
+        const dia = DIAS_SEM[new Date(Date.UTC(y, mm - 1, d, 12)).getUTCDay()];
+        try {
+          await sendUserPush(u, aviso === 'porVencer'
+            ? { title: '🎯 Compromiso por vencer', body: `"${c.description}" vence el ${dia} ${d} (en 2 días).`, url: '/?vista=home' }
+            : { title: '⏰ Compromiso vencido', body: `"${c.description}" venció ayer. Si ya lo cumpliste, márcalo como cumplido.`, url: '/?vista=home' });
+        } catch { /* sin suscripción */ }
+      }
+      marcar.push({ m: m.id, c: c.id, aviso });
+    }
+  }
+  if (!marcar.length) return;
+  await withDb((d) => {
+    for (const x of marcar) {
+      const c = d.meetings.find((mm) => mm.id === x.m)?.commitments?.find((cc) => cc.id === x.c);
+      if (c) c[x.aviso === 'porVencer' ? 'pushPorVencerSent' : 'pushVencidoSent'] = true;
+    }
+  });
 }
 
 // Punto 18 (idea de UX basada en el Manual General): unos días antes de la
@@ -336,6 +380,7 @@ export function startReminderScheduler() {
     checkDailyDigest(),
     checkInterviewTodayWhatsApp(),
     checkCommitmentDueTodayWhatsApp(),
+    checkCommitmentPushAvisos(),
     checkQuarterEndMinisteringFocusCommitments(),
   ]);
   runAll().catch((err) => console.error('[recordatorios] error inicial:', err));

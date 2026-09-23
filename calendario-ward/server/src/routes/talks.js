@@ -2,6 +2,7 @@ import { sendJson } from '../router.js';
 import { load, withDb, nextId } from '../db.js';
 import { requireRole } from '../guard.js';
 import { isObispadoLeader } from './stake.js';
+import { ageFromBirthDate } from '../pastoralFocus.js';
 
 // Módulo "Discursos" — vive dentro de la pestaña "Asignaciones" (junto a
 // Aseo del Edificio), estrictamente oculto para Miembros y Líderes comunes:
@@ -62,6 +63,39 @@ export function allSpeakersWithStats(data, range) {
 }
 
 export function registerTalkRoutes(router) {
+  // A12: sugerir oradores — personas del Directorio (12 años o más) que
+  // nunca han discursado o que llevan más tiempo sin hacerlo, sin contar a
+  // quienes ya tienen un discurso asignado de hoy en adelante.
+  router.get('/api/talks/suggestions', requireRole(['admin', 'leader'], async (req, res) => {
+    const data = load();
+    if (!isObispadoLeader(req.user, data)) return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado' });
+    const hoy = new Date().toISOString().slice(0, 10);
+    const clave = (n) => normalizeSearchText(String(n || '').replace(',', ' ')).split(/\s+/).filter(Boolean).sort().join(' ');
+    // Coincidencia por nombre: todas las palabras escritas en el discurso están en el nombre del Directorio.
+    const esDe = (t, m) => Number(t.speakerDirectoryId) === m.id || (!t.speakerDirectoryId && (() => {
+      const w = clave(t.speakerName).split(' ').filter((x) => x.length > 1);
+      const n = clave(m.name).split(' ');
+      return w.length >= 2 && w.every((x) => n.includes(x));
+    })());
+    const soloSexo = ['V', 'M'].includes(req.query.sexo) ? req.query.sexo : null;
+    const lista = [];
+    for (const m of data.directoryMembers || []) {
+      const edad = ageFromBirthDate(m.birthDate);
+      if (edad === null || edad < 12) continue;
+      if (soloSexo && m.sex !== soloSexo) continue;
+      const suyos = (data.talks || []).filter((t) => esDe(t, m));
+      if (suyos.some((t) => t.date >= hoy)) continue;
+      const ultima = suyos.map((t) => t.date).sort().slice(-1)[0] || null;
+      lista.push({ name: m.name, directoryId: m.id, edad, sexo: m.sex, veces: suyos.length, ultima });
+    }
+    lista.sort((a, b) => (a.ultima || '0000').localeCompare(b.ultima || '0000') || a.veces - b.veces || a.name.localeCompare(b.name));
+    // Entre los que nunca han discursado, se rota para no sugerir siempre a los mismos (orden alfabético).
+    const nunca = lista.filter((x) => !x.ultima);
+    const semana = Math.floor(Date.now() / (7 * 86400000));
+    const rotados = nunca.length ? [...nunca.slice(semana % nunca.length), ...nunca.slice(0, semana % nunca.length)] : [];
+    sendJson(res, 200, [...rotados, ...lista.filter((x) => x.ultima)].slice(0, 12));
+  }));
+
   router.get('/api/talks', requireRole(['admin', 'leader'], async (req, res) => {
     const data = load();
     if (!isObispadoLeader(req.user, data)) return sendJson(res, 403, { error: 'Solo el Administrador o el líder de Obispado pueden ver el registro de discursos' });
