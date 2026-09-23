@@ -503,24 +503,49 @@ export function initChatWidget() {
     };
     return voces.sort((a, b) => puntaje(b) - puntaje(a))[0] || null;
   }
-  function hablarNavegador(limpio, alTerminar) {
+  // Texto → frases para hablar, con PAUSAS naturales: cada línea, viñeta o
+  // dato de una lista ("Edad: 38", "• Asistencia alta") queda como frase
+  // aparte terminada en punto — antes todo se juntaba en una sola tirada sin
+  // respirar. Se quitan emojis y marcas de formato.
+  const MESES_L = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  function frasesParaVoz(texto) {
+    return String(texto || '')
+      .replace(/\*\*([^*]+)\*\*\s*:/g, '$1:')
+      .split(/\n+/)
+      .map((l) => l
+        .replace(/[*_`#>«»]/g, '')
+        .replace(/\p{Extended_Pictographic}|\uFE0F/gu, '')
+        .replace(/^\s*(?:[•\-–]|\d+\.)\s*/, '')
+        .replace(/\s*[·|]\s*/g, '. ')
+        .replace(/\s+[—–→]\s+/g, ', ')
+        // "2026-08-10" → "10 de agosto" (si no, lo lee como números sueltos).
+        .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (x, y, m, d) => `${Number(d)} de ${MESES_L[Number(m) - 1] || m}`)
+        .trim()
+        // "Aracena Gajardo, Gabriel" (así viene del Directorio) → "Gabriel Aracena Gajardo".
+        .replace(/^([\p{Lu}][\p{L}'-]+(?: [\p{Lu}][\p{L}'-]+)?), ([\p{Lu}][\p{L}'-]+(?: [\p{L}'-]+){0,3})$/u, '$2 $1')
+        .replace(/\s+/g, ' ')
+        .trim())
+      .filter((l) => /[\p{L}\p{N}]/u.test(l))
+      .map((l) => (/[.!?¿¡:;,]$/.test(l) ? l.replace(/[:;,]$/, '.') : `${l}.`));
+  }
+  function hablarNavegador(frases, alTerminar) {
     if (!puedeHablar) { if (alTerminar) alTerminar(); return; }
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(limpio);
-    u.voice = mejorVozNavegador();
-    u.lang = u.voice?.lang || 'es-CL';
-    u.rate = 1.05;
-    if (alTerminar) u.onend = alTerminar;
-    window.speechSynthesis.speak(u);
+    const voz = mejorVozNavegador();
+    // Una frase por "utterance": el navegador hace una pausa real entre cada una.
+    frases.forEach((f, i) => {
+      const u = new SpeechSynthesisUtterance(f);
+      u.voice = voz;
+      u.lang = voz?.lang || 'es-CL';
+      u.rate = 0.95;
+      if (i === frases.length - 1 && alTerminar) u.onend = alTerminar;
+      window.speechSynthesis.speak(u);
+    });
   }
   async function hablar(texto, alTerminar = null) {
     if (!texto) return;
-    const limpio = String(texto)
-      .replace(/[*_`#>«»]/g, '')
-      .replace(/\p{Extended_Pictographic}|️/gu, '')
-      .replace(/\s*·\s*/g, ', ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const frases = frasesParaVoz(texto);
+    const limpio = frases.join('\n');
     if (!limpio) return;
     callar();
     const turno = turnoVoz;
@@ -546,7 +571,7 @@ export function initChatWidget() {
         // bloqueado): se usa la del navegador para no quedar en silencio.
       }
     }
-    hablarNavegador(limpio, alTerminar);
+    hablarNavegador(frases, alTerminar);
   }
 
   // Lo que se LEE en voz alta: el texto + la tarjeta de confirmación + las
@@ -560,21 +585,21 @@ export function initChatWidget() {
     // omiten al leer: alargan la frase y en voz no aportan.
     const partes = [String(m.texto || '').replace(/\s*\((puedes|queda|ej\.)[^)]*\)/gi, '')];
     const t = m.extra?.tarjeta;
-    if (t) partes.push(`${t.titulo || ''}. ${(t.filas || []).map((f) => f[1]).filter(Boolean).join('. ')}.`);
+    if (t) partes.push([t.titulo, ...(t.filas || []).map((f) => f[1])].filter(Boolean).join('\n'));
     // Las tarjetas de la agenda también se leen ("¿qué tengo hoy?").
     const items = (m.extra?.items || []).filter((it) => it.tipo !== 'acta');
     if (items.length) {
       const max = conduccion ? 3 : 6;
       const unDia = items.every((it) => it.fecha === items[0].fecha);
       const que = { entrevista: 'Entrevista con', actividad: '', compromiso: 'Compromiso:', recordatorio: 'Recordatorio:', aseo: 'Aseo:', solicitud: 'Solicitud de' };
-      partes.push(items.slice(0, max).map((it) => `${unDia ? '' : `${diaHablado(it.fecha)}, `}${it.hora ? `a las ${it.hora}, ` : ''}${que[it.tipo] ?? ''} ${it.titulo}`.replace(/\s+/g, ' ').trim()).join('. ') + (items.length > max ? `. Y ${items.length - max} más.` : '.'));
+      partes.push(items.slice(0, max).map((it) => `${unDia ? '' : `${diaHablado(it.fecha)}, `}${it.hora ? `a las ${it.hora}, ` : ''}${que[it.tipo] ?? ''} ${it.titulo}`.replace(/\s+/g, ' ').trim()).join('\n') + (items.length > max ? `\nY ${items.length - max} más.` : ''));
     }
     const ops = m.extra?.opciones || [];
     if (ops.length && !/\*\*1\.\*\*/.test(m.texto)) {
       const esConfirmar = ops.some((o) => /confirmar/i.test(o.value));
       partes.push(esConfirmar ? 'Di sí para confirmar, o no para cancelar.' : `Puedes decir: ${ops.slice(0, 4).map((o) => sinEmoji(o.label)).join(', o ')}.`);
     }
-    return partes.join(' ');
+    return partes.join('\n');
   }
   // ¿Deseret quedó esperando una respuesta? (para volver a abrir el micrófono)
   const esperaRespuesta = (m) => !m.error && ((m.extra?.opciones || []).length > 0 || /\?\s*$/.test(String(m.texto || '').trim()));

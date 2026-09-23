@@ -48,8 +48,9 @@ export function limpiarParaVoz(texto) {
     .replace(/https?:\/\/\S+/g, '')
     .replace(/[*_`#>«»]/g, '')
     .replace(/\p{Extended_Pictographic}|️/gu, '')
-    .replace(/\s*·\s*/g, ', ')
-    .replace(/\s+/g, ' ')
+    .replace(/\s*·\s*/g, '. ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
     .trim()
     .slice(0, MAX_CHARS);
 }
@@ -57,8 +58,10 @@ export function limpiarParaVoz(texto) {
 async function sintetizar(texto) {
   const { key, region, voz } = config();
   const lang = voz.slice(0, 5);
-  // Un poco más rápida que la velocidad por defecto: suena más conversacional.
-  const ssml = `<speak version="1.0" xml:lang="${lang}" xmlns="http://www.w3.org/2001/10/synthesis"><voice name="${escXml(voz)}"><prosody rate="+6%">${escXml(texto)}</prosody></voice></speak>`;
+  // Velocidad un poco más pausada que la normal, y una pausa entre cada
+  // línea (cada dato de una ficha o de una lista), como al leer en voz alta.
+  const cuerpo = texto.split('\n').map((l) => escXml(l.trim())).filter(Boolean).join('<break time="450ms"/>');
+  const ssml = `<speak version="1.0" xml:lang="${lang}" xmlns="http://www.w3.org/2001/10/synthesis"><voice name="${escXml(voz)}"><prosody rate="-5%">${cuerpo}</prosody></voice></speak>`;
   const r = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
     method: 'POST',
     headers: {
