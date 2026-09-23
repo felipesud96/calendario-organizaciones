@@ -25,7 +25,10 @@ export const TIPOS_ENTREVISTA = [
   { key: 'recomendacion_elder', label: 'Recomendación para ordenación a élder', quien: 'obispo', ref: '31.2.6' },
   { key: 'mision', label: 'Recomendación para misión de tiempo completo', quien: 'obispo', ref: '24.4.2' },
   { key: 'llamamiento_presidente', label: 'Llamamiento de presidente(a) de una organización del barrio', quien: 'obispo', ref: '30.8' },
-  { key: 'dignidad', label: 'Arrepentimiento de pecados graves', quien: 'obispo', ref: 'cap. 32' },
+  // Se muestra de forma discreta a propósito (la persona puede ver esta
+  // opción en el enlace público): solo "conversar con el obispo", sin
+  // mencionar el motivo. Cubre, entre otros, lo del capítulo 32.
+  { key: 'dignidad', label: 'Conversar con el obispo', quien: 'obispo' },
   { key: 'endoso', label: 'Endoso eclesiástico (universidad / instituto / Fondo Perpetuo)', quien: 'obispo', ref: '34.3.1.2' },
   { key: 'diezmos', label: 'Declaración de diezmos', quien: 'obispo' },
   { key: 'ofrendas_ayuno', label: 'Ayuda con ofrendas de ayuno (bienestar)', quien: 'obispo', ref: '22.6.1' },
@@ -155,7 +158,7 @@ const PISTAS = [
   ['ofrendas_ayuno', /\b(ofrendas? de ayuno|ayuda economica|bienestar)\b/],
   ['llamamiento_presidente', /\bllamamiento\b.*\bpresident\w*\b/],
   ['llamamiento', /\b(llamamiento|llamar a servir)\b/],
-  ['dignidad', /\b(arrepentimiento|confesion|dignidad)\b/],
+  ['dignidad', /\b(arrepentimiento|confesion|dignidad|hablar con el obispo|conversar con el obispo)\b/],
   ['endoso', /\b(endoso|fondo perpetuo|instituto|universidad)\b/],
 ];
 export function inferirTipoEntrevista(norm) {
