@@ -30,6 +30,7 @@ import { registerNotificationsSummaryRoutes } from './routes/notifications-summa
 import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerPublicBookingRoutes } from './routes/publicBooking.js';
 import { registerPersonasSemanaRoutes } from './routes/personasSemana.js';
+import { registerTtsRoutes } from './routes/tts.js';
 import { startWeeklySummaryScheduler } from './semana.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
@@ -92,6 +93,7 @@ registerNotificationsSummaryRoutes(router);
 registerInterviewRequestRoutes(router);
 registerPublicBookingRoutes(router);
 registerPersonasSemanaRoutes(router);
+registerTtsRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);

@@ -339,7 +339,7 @@ export function initChatWidget() {
           if (o.ficha && typeof window.abrirFichaPersona === 'function') {
             b.addEventListener('click', () => {
               chatWindow.style.display = 'none';
-              if (puedeHablar) window.speechSynthesis.cancel();
+              callar();
               window.abrirFichaPersona(o.ficha);
             });
           }
@@ -436,30 +436,103 @@ export function initChatWidget() {
     voiceBtn.setAttribute('aria-pressed', String(vozActiva));
     voiceBtn.title = vozActiva ? 'Leer respuestas en voz alta: activado' : 'Leer respuestas en voz alta: desactivado';
   };
-  if (!puedeHablar) voiceBtn.style.display = 'none';
+  if (!puedeHablar) estadoVozServidor().then((ok) => { if (!ok) voiceBtn.style.display = 'none'; });
   pintarBotonVoz();
   voiceBtn.addEventListener('click', () => {
     vozActiva = !vozActiva;
     store.set('localStorage', CLAVE_VOZ, vozActiva);
     pintarBotonVoz();
-    if (!vozActiva && puedeHablar) window.speechSynthesis.cancel();
+    if (!vozActiva) callar();
   });
 
-  function hablar(texto, alTerminar = null) {
-    if (!puedeHablar || !texto) return;
+  // Voz: primero la voz neuronal chilena del servidor (Azure, si está
+  // configurada); si no está o falla, la mejor voz en español del
+  // navegador, prefiriendo Chile y Latinoamérica antes que España.
+  let vozServidor = null; // null = sin consultar; true/false = respuesta del servidor
+  const tokenSesion = () => { try { return localStorage.getItem('cow_token'); } catch { return null; } };
+  const estadoVozServidor = async () => {
+    if (vozServidor !== null) return vozServidor;
+    try {
+      const token = tokenSesion();
+      const r = await fetch('/api/tts/estado', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      vozServidor = r.ok && (await r.json()).disponible === true;
+    } catch { vozServidor = false; }
+    return vozServidor;
+  };
+  // Un solo <audio> reutilizado. En iPhone (y algunos Android) el audio que
+  // llega después de una espera solo suena si ese mismo elemento ya se
+  // reprodujo con un toque: por eso se "desbloquea" con el primer toque en
+  // el chat, reproduciéndolo en silencio.
+  const audio = new Audio();
+  audio.preload = 'auto';
+  let audioDesbloqueado = false;
+  chatWindow.addEventListener('pointerdown', () => {
+    if (audioDesbloqueado) return;
+    audioDesbloqueado = true;
+    audio.muted = true;
+    audio.play().catch(() => {}).finally(() => { audio.pause(); audio.muted = false; });
+  }, { capture: true });
+  let turnoVoz = 0; // para descartar un audio que llega después de "callar"
+  function callar() {
+    turnoVoz++;
+    try { audio.pause(); } catch { /* no había nada sonando */ }
+    if (puedeHablar) window.speechSynthesis.cancel();
+  }
+  function mejorVozNavegador() {
+    const voces = puedeHablar ? window.speechSynthesis.getVoices().filter((v) => /^es[-_]/i.test(v.lang)) : [];
+    const puntaje = (v) => {
+      const lang = v.lang.replace('_', '-').toLowerCase();
+      let p = { 'es-cl': 60, 'es-419': 45, 'es-us': 42, 'es-mx': 40, 'es-ar': 40, 'es-co': 38, 'es-pe': 38 }[lang] ?? (lang === 'es-es' ? 5 : 25);
+      if (/natural|online|neural|premium|enhanced|google/i.test(v.name)) p += 30; // voces más naturales
+      if (/catalina|lorenzo/i.test(v.name)) p += 20; // voces chilenas de Microsoft (Edge)
+      return p;
+    };
+    return voces.sort((a, b) => puntaje(b) - puntaje(a))[0] || null;
+  }
+  function hablarNavegador(limpio, alTerminar) {
+    if (!puedeHablar) { if (alTerminar) alTerminar(); return; }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(limpio);
+    u.voice = mejorVozNavegador();
+    u.lang = u.voice?.lang || 'es-CL';
+    u.rate = 1.05;
+    if (alTerminar) u.onend = alTerminar;
+    window.speechSynthesis.speak(u);
+  }
+  async function hablar(texto, alTerminar = null) {
+    if (!texto) return;
     const limpio = String(texto)
-      .replace(/[*_`#>]/g, '')
-      .replace(/\p{Extended_Pictographic}/gu, '')
+      .replace(/[*_`#>«»]/g, '')
+      .replace(/\p{Extended_Pictographic}|️/gu, '')
+      .replace(/\s*·\s*/g, ', ')
       .replace(/\s+/g, ' ')
       .trim();
     if (!limpio) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(limpio);
-    const voces = window.speechSynthesis.getVoices();
-    u.voice = voces.find((v) => v.lang === 'es-CL') || voces.find((v) => /^es[-_]/i.test(v.lang)) || null;
-    u.lang = u.voice?.lang || 'es-CL';
-    if (alTerminar) u.onend = alTerminar;
-    window.speechSynthesis.speak(u);
+    callar();
+    const turno = turnoVoz;
+    if (await estadoVozServidor()) {
+      try {
+        const token = tokenSesion();
+        const r = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ texto: limpio }),
+        });
+        if (!r.ok) throw new Error(String(r.status));
+        const blob = await r.blob();
+        if (turno !== turnoVoz) return; // se pidió callar mientras llegaba
+        if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+        audio.src = URL.createObjectURL(blob);
+        audio.onended = alTerminar || null;
+        await audio.play();
+        return;
+      } catch {
+        if (turno !== turnoVoz) return;
+        // Falló la voz del servidor (sin internet, cuota agotada, audio
+        // bloqueado): se usa la del navegador para no quedar en silencio.
+      }
+    }
+    hablarNavegador(limpio, alTerminar);
   }
 
   // Lo que se LEE en voz alta: el texto + la tarjeta de confirmación + las
@@ -557,7 +630,7 @@ export function initChatWidget() {
   const toggleChat = () => {
     const abrir = chatWindow.style.display === 'none';
     chatWindow.style.display = abrir ? 'flex' : 'none';
-    if (abrir) { scrollAbajo(); chatInput.focus(); } else if (puedeHablar) window.speechSynthesis.cancel();
+    if (abrir) { scrollAbajo(); chatInput.focus(); } else callar();
   };
   document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
 
@@ -765,7 +838,7 @@ export function initChatWidget() {
 
     micBtn.addEventListener('click', () => {
       if (!isListening) {
-        if (puedeHablar) window.speechSynthesis.cancel();
+        callar();
         try { recognition.start(); } catch { /* ya estaba activo */ }
       } else {
         stopListeningState();
