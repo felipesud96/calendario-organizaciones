@@ -24,7 +24,7 @@ const OBISPADO_ONLY_TYPES = ['consejo_barrio', 'coordinacion_ministracion'];
 // las del Obispado, y mezclarlas todas sería incorrecto.
 export function lastMeetingDateOfType(data, type, organizationId) {
   const dates = data.meetings
-    .filter((m) => m.type === type && (organizationId == null || Number(m.organizationId) === Number(organizationId)))
+    .filter((m) => !m.sueltos && m.type === type && (organizationId == null || Number(m.organizationId) === Number(organizationId)))
     .map((m) => m.date).sort();
   return dates.length ? dates[dates.length - 1] : null;
 }
@@ -40,7 +40,7 @@ export function lastMeetingDateOfType(data, type, organizationId) {
 // presidencia podría traer temas de la reunión de otra organización distinta
 // que también usó el tipo 'general').
 export function previousMeetingOfType(data, type, beforeDate, organizationId) {
-  const candidates = data.meetings.filter((m) => m.type === type && m.date < beforeDate && (organizationId == null || Number(m.organizationId) === Number(organizationId)));
+  const candidates = data.meetings.filter((m) => !m.sueltos && m.type === type && m.date < beforeDate && (organizationId == null || Number(m.organizationId) === Number(organizationId)));
   if (!candidates.length) return null;
   return candidates.sort((a, b) => b.date.localeCompare(a.date))[0];
 }

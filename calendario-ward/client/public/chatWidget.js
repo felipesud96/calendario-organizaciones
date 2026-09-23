@@ -445,7 +445,7 @@ export function initChatWidget() {
     if (!vozActiva && puedeHablar) window.speechSynthesis.cancel();
   });
 
-  function hablar(texto) {
+  function hablar(texto, alTerminar = null) {
     if (!puedeHablar || !texto) return;
     const limpio = String(texto)
       .replace(/[*_`#>]/g, '')
@@ -458,8 +458,29 @@ export function initChatWidget() {
     const voces = window.speechSynthesis.getVoices();
     u.voice = voces.find((v) => v.lang === 'es-CL') || voces.find((v) => /^es[-_]/i.test(v.lang)) || null;
     u.lang = u.voice?.lang || 'es-CL';
+    if (alTerminar) u.onend = alTerminar;
     window.speechSynthesis.speak(u);
   }
+
+  // Lo que se LEE en voz alta: el texto + la tarjeta de confirmación + las
+  // opciones (si no venían ya numeradas en el texto) — sin esto, quien usa
+  // solo la voz escucha "¿Lo registro así?" sin saber qué se va a registrar.
+  const sinEmoji = (t) => String(t || '').replace(/\p{Extended_Pictographic}/gu, '').replace(/^\s*\d+\.\s*/, '').trim();
+  function textoParaVoz(m) {
+    // Las aclaraciones entre paréntesis ("puedes cambiar la fecha…") se
+    // omiten al leer: alargan la frase y en voz no aportan.
+    const partes = [String(m.texto || '').replace(/\s*\((puedes|queda|ej\.)[^)]*\)/gi, '')];
+    const t = m.extra?.tarjeta;
+    if (t) partes.push(`${t.titulo || ''}. ${(t.filas || []).map((f) => f[1]).filter(Boolean).join('. ')}.`);
+    const ops = m.extra?.opciones || [];
+    if (ops.length && !/\*\*1\.\*\*/.test(m.texto)) {
+      const esConfirmar = ops.some((o) => /confirmar/i.test(o.value));
+      partes.push(esConfirmar ? 'Di sí para confirmar, o no para cancelar.' : `Puedes decir: ${ops.slice(0, 4).map((o) => sinEmoji(o.label)).join(', o ')}.`);
+    }
+    return partes.join(' ');
+  }
+  // ¿Deseret quedó esperando una respuesta? (para volver a abrir el micrófono)
+  const esperaRespuesta = (m) => !m.error && ((m.extra?.opciones || []).length > 0 || /\?\s*$/.test(String(m.texto || '').trim()));
 
   // ---------------- Dictado por voz (es-CL) con auto-envío ----------------
   let autoSendTimer = null;
@@ -512,7 +533,16 @@ export function initChatWidget() {
     estado.msgs.push(msgBot);
     pintarMensaje(msgBot);
     guardar();
-    if (vozActiva || dictada) hablar(msgBot.texto);
+    if (vozActiva || dictada) {
+      // Conversación por voz: si se habló y Deseret hizo una pregunta, al
+      // terminar de leerla se vuelve a abrir el micrófono (manos libres).
+      const seguir = dictada && esperaRespuesta(msgBot)
+        ? () => setTimeout(() => {
+          if (chatWindow.style.display !== 'none' && !micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click();
+        }, 300)
+        : null;
+      hablar(textoParaVoz(msgBot), seguir);
+    }
     enviando = false;
     sendBtn.disabled = false;
     chatInput.focus();

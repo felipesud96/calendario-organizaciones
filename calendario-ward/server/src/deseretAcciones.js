@@ -56,7 +56,7 @@ export const HERRAMIENTAS_ACCIONES = [
   { name: 'confirmar_solicitud', description: 'Confirmar una solicitud de entrevista pendiente.', props: { nombre: 'Quién pidió la entrevista', hora: 'Hora HH:MM si quiere cambiarla' } },
   { name: 'rechazar_solicitud', description: 'Rechazar una solicitud de entrevista pendiente.', props: { nombre: 'Quién pidió la entrevista', motivo: 'Motivo, si lo dijo' } },
   { name: 'completar_compromiso', description: 'Marcar como completado un compromiso propio.', props: { texto: 'Palabras clave del compromiso', comentario: 'Comentario, si lo dijo' } },
-  { name: 'crear_compromiso', description: 'Registrar un compromiso nuevo para alguien.', props: { responsable: 'Nombre del responsable ("yo" si es para sí mismo)', descripcion: 'Qué tiene que hacer', fecha_limite: 'AAAA-MM-DD, si la dijo' } },
+  { name: 'crear_compromiso', description: 'Registrar un compromiso nuevo para alguien.', props: { responsable: 'Nombre del responsable ("yo" si es para sí mismo)', descripcion: 'Qué tiene que hacer', fecha_limite: 'AAAA-MM-DD, si la dijo', reunion: 'Dónde anotarlo, SOLO si lo dijo: nombre del acta/reunión, "nueva" o "ninguna" (compromiso suelto, sin reunión)' } },
 ].map((h) => ({
   type: 'function',
   function: {
@@ -456,6 +456,51 @@ async function accionCompletarCompromiso(d, falta, mensaje, mensajeMin, usuario,
   return resp(ok ? `✅ ¡Bien hecho! Marqué como completado: **${f.c.description}**.` : 'Ese compromiso ya estaba completado.');
 }
 
+// ¿Dónde se anota un compromiso nuevo? En un acta activa, en una reunión
+// nueva, o "suelto" (sin reunión formal: queda en un acta interna
+// "Compromisos sin reunión" de esa persona, y le aparece igual en
+// Mis Asignaciones al responsable).
+const RE_SUELTO = /\b(sin (acta|reunion|agenda|consejo)|solo (el |un |como )?compromiso|suelto|ninguna( reunion| acta)?|no (es )?de (ninguna )?(reunion|acta))\b/;
+const RE_NUEVA = /\b(nuev[oa]|otra|crear|crea|abre|abrir)\b.*\b(acta|reunion|agenda|consejo)\b|^\s*(una )?(nuev[oa]|otra)\b/;
+const TITULO_SUELTOS = 'Compromisos sin reunión';
+function opcionesDestino(actas) {
+  return [
+    ...actas.map((m, i) => ({ label: `${i + 1}. 📋 ${m.title.slice(0, 40)} (${fechaCortaActa(m.date)})`, value: String(i + 1) })),
+    { label: `${actas.length + 1}. 🆕 Reunión nueva`, value: 'reunión nueva' },
+    { label: `${actas.length + 2}. 📌 Solo el compromiso`, value: 'sin reunión' },
+  ];
+}
+function actasEditables(usuario, data) {
+  return (data.meetings || [])
+    .filter((m) => m.status === 'active' && !m.sueltos && (usuario.role === 'admin' || Number(m.createdBy) === Number(usuario.id)))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .slice(0, 3);
+}
+const fechaCortaActa = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '');
+function etiquetaDestino(d) {
+  if (d.destino?.tipo === 'suelto') return 'Solo el compromiso (sin reunión)';
+  if (d.destino?.tipo === 'nueva') return `Reunión nueva: ${d.destino.titulo || '(sin nombre)'}`;
+  if (d.destino?.tipo === 'acta') return `Acta: ${d.destino.titulo}`;
+  return '';
+}
+// Interpreta la respuesta a "¿Dónde lo anoto?" (texto, número o voz).
+function leerDestino(txt, actas) {
+  const t = normalizeSearchText(txt);
+  if (RE_SUELTO.test(t)) return { tipo: 'suelto' };
+  if (RE_NUEVA.test(t)) return { tipo: 'nueva' };
+  const ordinales = [/\b(1|uno|una|primer\w*)\b/, /\b(2|dos|segund\w*)\b/, /\b(3|tres|tercer\w*)\b/, /\b(4|cuatro|cuart\w*)\b/, /\b(5|cinco|quint\w*)\b/];
+  const n = ordinales.findIndex((re) => re.test(t));
+  const opciones = [...actas.map((m) => ({ tipo: 'acta', id: m.id, titulo: m.title })), { tipo: 'nueva' }, { tipo: 'suelto' }];
+  // Solo en respuestas cortas ("1", "la segunda", "opción 3"): en una frase
+  // larga, "una" o "dos" suelen ser parte de la descripción.
+  if (n >= 0 && opciones[n] && palabrasDe(t).length <= 3) return opciones[n];
+  // Por nombre: "en la del consejo", "la de presidencia".
+  const palabras = palabrasDe(t).filter((w) => w.length >= 4 && !['acta', 'reunion', 'agenda', 'anota', 'anotalo', 'ponlo', 'agregalo'].includes(w));
+  const hit = actas.filter((m) => palabras.some((w) => palabrasDe(m.title).some((x) => x.startsWith(w))));
+  if (hit.length === 1) return { tipo: 'acta', id: hit[0].id, titulo: hit[0].title };
+  return null;
+}
+
 async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, data, hoyObj) {
   if (!['admin', 'leader', 'ward_clerk'].includes(usuario.role)) {
     borrarBorrador(usuario);
@@ -468,6 +513,9 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
   if (!d.descripcion) {
     d.descripcion = (d.args?.descripcion || (mensaje.match(/:\s*(.+)$/)?.[1]) || '').trim()
       .replace(/\s+(para\s+)?(el|este|esta)\s+(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b.*$/i, '')
+      // Quitar "…, sin reunión" / "…en el acta del consejo" (eso es DÓNDE, no QUÉ).
+      .replace(/[,;]?\s*(sin (acta|reuni[oó]n|agenda)|como compromiso suelto|solo (el |un |como )?compromiso|en (una )?(nuev[oa]|otra) (acta|reuni[oó]n|agenda)|(en|al) (el |la )?(acta|reuni[oó]n|agenda) (de|del)\b.*)\s*[.!]?$/i, '')
+      .replace(/\s+(para\s+)?(el|este|esta)\s+(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b.*$/i, '')
       .replace(/\s+(para\s+)?(el\s+)?(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?|ma[ñn]ana|hoy)\s*$/i, '').trim();
   }
   if (!d.responsableId && !d.responsableTexto) {
@@ -477,6 +525,35 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
   if (falta === 'descripcion') d.descripcion = mensaje.trim();
   if (falta === 'fecha') d.fechaLimite = parseFecha(mensajeMin, hoyObj);
   if (!d.fechaLimite) d.fechaLimite = (d.args?.fecha_limite && /^\d{4}-\d{2}-\d{2}$/.test(d.args.fecha_limite) ? d.args.fecha_limite : null) || (falta ? null : parseFecha(mensajeMin, hoyObj));
+
+  // Dónde anotarlo: si ya lo dijo en la primera frase ("…sin reunión",
+  // "…en el acta del consejo", "…en una reunión nueva") no se pregunta.
+  const actas = actasEditables(usuario, data);
+  if (!falta && !d.destino) {
+    const dicho = [d.args?.reunion, /\b(sin (acta|reunion|reunión|agenda)|suelto|solo (el |un )?compromiso|(nuev[oa]|otra) (acta|reuni[oó]n|agenda)|(en|al) (el |la )?(acta|reuni[oó]n|agenda|consejo)\b.*)/i.exec(mensaje)?.[0]].filter(Boolean).join(' ');
+    if (dicho) {
+      if (/^\s*ningun/i.test(d.args?.reunion || '')) d.destino = { tipo: 'suelto' };
+      else d.destino = leerDestino(dicho, actas) || undefined;
+    }
+  }
+  if (falta === 'destino') {
+    const x = leerDestino(mensaje, actas);
+    if (!x) {
+      guardarBorrador(usuario, 'accion', d, 'destino');
+      return resp('No entendí dónde anotarlo. Elige una opción (o di "sin reunión" / "reunión nueva"):', { opciones: opcionesDestino(actas) });
+    }
+    d.destino = x;
+  }
+  if (falta === 'titulo_acta') {
+    const titulo = mensaje.trim().replace(/^(se llama|llamala|ponle|el nombre es)\s+/i, '').replace(/[.!]+$/, '');
+    d.destino = { tipo: 'nueva', titulo: titulo.charAt(0).toUpperCase() + titulo.slice(1) };
+  }
+  // En la confirmación también se puede cambiar dónde va.
+  if (falta === 'confirmar' && !ES_AFIRMATIVO.test(mensajeMin)) {
+    const t = normalizeSearchText(mensaje);
+    if (/\bcambiar (donde|reunion|acta)\b/.test(t)) d.destino = undefined;
+    else if (RE_SUELTO.test(t) || RE_NUEVA.test(t) || /\b(acta|reunion)\b/.test(t)) d.destino = leerDestino(mensaje, actas) || d.destino;
+  }
 
   if (!d.responsableId) {
     if (!d.responsableTexto) return preguntar('responsable', '👤 ¿Para quién es el compromiso?', { opciones: [{ label: 'Para mí', value: 'yo' }] });
@@ -493,6 +570,20 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
 
   const resp_ = asignables.find((u) => u.id === d.responsableId) || (d.responsableId === usuario.id ? usuario : null);
   if (!resp_) { borrarBorrador(usuario); return resp('🚫 No puedes asignarle compromisos a esa persona.'); }
+  if (!d.destino) {
+    // La pregunta lleva las opciones en el texto (numeradas) para que se
+    // entienda también cuando Deseret la lee en voz alta.
+    const lista = [...actas.map((m) => `el acta «${m.title}» del ${fechaCortaActa(m.date)}`), 'una reunión nueva', 'solo el compromiso, sin reunión'];
+    const texto = `📋 ¿Dónde lo anoto? ${lista.map((x, i) => `**${i + 1}.** ${x}`).join(' · ')}`;
+    return preguntar('destino', texto, { opciones: opcionesDestino(actas) });
+  }
+  if (d.destino.tipo === 'nueva' && !d.destino.titulo) {
+    const org = orgPorId(data, usuario.organizationId);
+    const sug = [org ? `Reunión de presidencia ${org.name}` : 'Reunión de presidencia', ...(isObispadoLeader(usuario, data) ? ['Consejo de barrio', 'Reunión de obispado'] : []), 'Reunión de coordinación'];
+    return preguntar('titulo_acta', '🆕 ¿Cómo se llama la reunión? (queda con fecha de hoy; después puedes completarla en Reuniones y Consejos)', { opciones: sug.map((x) => ({ label: x, value: x })) });
+  }
+  if (d.destino.tipo === 'acta' && !actas.some((m) => m.id === d.destino.id)) d.destino = undefined;
+  if (!d.destino) return preguntar('destino', '📋 Esa acta ya no está activa. ¿Dónde lo anoto?', { opciones: opcionesDestino(actas) });
   if (falta !== 'confirmar' || !ES_AFIRMATIVO.test(mensajeMin)) {
     if (falta === 'confirmar') {
       // "el sábado" / "para el 30" en el paso de confirmar = corregir la fecha.
@@ -500,28 +591,34 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
       if (f2) d.fechaLimite = f2;
       else if (/^\s*(no|cancel\w*)\b/i.test(mensajeMin)) { borrarBorrador(usuario); return resp('👌 No lo registré.'); }
     }
-    return preguntar('confirmar', '📝 ¿Lo registro así? (puedes cambiar la fecha, ej. "el sábado")', {
-      tarjeta: { tipo: 'compromiso', titulo: d.descripcion, color: null, filas: [['👤', resp_.name], ['📅', `Para el ${fechaLegible(d.fechaLimite)}`]] },
-      opciones: OPCIONES_CONFIRMAR,
+    return preguntar('confirmar', '📝 ¿Lo registro así? (puedes cambiar la fecha, ej. "el sábado", o dónde se anota)', {
+      tarjeta: { tipo: 'compromiso', titulo: d.descripcion, color: null, filas: [['👤', resp_.name], ['📅', `Para el ${fechaLegible(d.fechaLimite)}`], ['📋', etiquetaDestino(d)]] },
+      opciones: [...OPCIONES_CONFIRMAR, { label: '📋 Cambiar dónde se anota', value: 'cambiar dónde' }],
     });
   }
   borrarBorrador(usuario);
-  // Se agrega al acta activa más reciente creada por esta persona; si no
-  // tiene ninguna, se crea un acta general "Compromisos registrados con
-  // Deseret" (aparece en Reuniones y Consejos como cualquier otra).
+  // Se anota donde la persona eligió: un acta activa, una reunión nueva
+  // (con fecha de hoy) o su acta interna de "Compromisos sin reunión".
   const now = new Date();
+  const hora = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const nuevaActa = (db, extra) => {
+    const m = {
+      id: nextId(db, 'meetings'), date: toISO(hoyObj), startTime: hora, endTime: null,
+      type: 'general', confidential: false, organizationId: usuario.organizationId || null, status: 'active',
+      createdBy: usuario.id, createdAt: now.toISOString(), archivedAt: null, lastEditedBy: null, lastEditedAt: null,
+      agendaItems: [], commitments: [], councilPrepReminderSent: false, ...extra,
+    };
+    db.meetings.push(m);
+    return m;
+  };
   const acta = await withDb((db) => {
-    let m = db.meetings.filter((x) => x.status === 'active' && Number(x.createdBy) === Number(usuario.id))
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+    let m = null;
+    if (d.destino.tipo === 'acta') m = db.meetings.find((x) => x.id === d.destino.id && x.status === 'active');
+    if (!m && d.destino.tipo === 'suelto') m = db.meetings.find((x) => x.sueltos && x.status === 'active' && Number(x.createdBy) === Number(usuario.id));
+    if (!m && d.destino.tipo === 'suelto') m = nuevaActa(db, { title: TITULO_SUELTOS, sueltos: true });
     if (!m) {
-      m = {
-        id: nextId(db, 'meetings'), title: 'Compromisos registrados con Deseret', date: toISO(hoyObj),
-        startTime: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, endTime: null,
-        type: 'general', confidential: false, organizationId: usuario.organizationId || null, status: 'active',
-        createdBy: usuario.id, createdAt: now.toISOString(), archivedAt: null, lastEditedBy: null, lastEditedAt: null,
-        agendaItems: [], commitments: [], councilPrepReminderSent: false,
-      };
-      db.meetings.push(m);
+      const esConsejo = /consejo de barrio/i.test(d.destino.titulo || '') && isObispadoLeader(usuario, data);
+      m = nuevaActa(db, { title: d.destino.titulo || 'Reunión', type: esConsejo ? 'consejo_barrio' : 'general' });
     }
     m.commitments.push({
       id: nextId(db, 'commitments'), description: d.descripcion, dueDate: d.fechaLimite, assignedToUserId: d.responsableId,
@@ -532,5 +629,8 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
     return m.title;
   });
   vaciarCache();
-  return resp(`✅ Compromiso registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). Quedó en el acta "${acta}" y le aparece en *Mis Asignaciones*.`);
+  const donde = d.destino.tipo === 'suelto'
+    ? 'Quedó como compromiso suelto (sin reunión)'
+    : d.destino.tipo === 'nueva' ? `Creé la reunión **«${acta}»** con fecha de hoy y quedó ahí` : `Quedó en el acta **«${acta}»**`;
+  return resp(`✅ Compromiso registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). ${donde}, y le aparece en *Mis Asignaciones*.`);
 }

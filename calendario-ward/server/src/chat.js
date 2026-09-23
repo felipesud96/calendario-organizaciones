@@ -1226,7 +1226,9 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
     // Un pedido nuevo ("organiza un asado…") reemplaza al borrador en curso.
     const pedidoNuevo = /^(?:(?:quiero|necesito|puedes|podrias|me|por favor)\s+)*(agend|anot|organiz|program|crea|reserv|agreg|anad)\w*/.test(norm);
-    const consultaExtra = detectarConsultaExtra(norm);
+    // Una acción explícita ("anota un compromiso…") gana sobre las consultas:
+    // "…preparar el discurso, sin reunión" no es "preparar una reunión".
+    const consultaExtra = usuario && detectarAccion(norm) ? null : detectarConsultaExtra(norm);
     if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra) {
       if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
         borrarBorrador(usuario);
