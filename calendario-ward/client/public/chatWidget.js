@@ -240,7 +240,17 @@ export function initChatWidget() {
           b.className = `deseret-chip${/confirmar/i.test(o.value) ? ' primario' : ''}`;
           b.textContent = o.label;
           // Botones especiales: "📇 Ver ficha completa" abre la Ficha 360° de la app.
-          if (o.ficha && typeof window.abrirFichaPersona === 'function') b.addEventListener('click', () => window.abrirFichaPersona(o.ficha));
+          // Se cierra el chat antes de abrirla: la ficha es un modal de la app
+          // (z-index 100) y quedaba DETRÁS de la ventana de Deseret (1000) —
+          // en el celular, donde el chat ocupa toda la pantalla, no se veía.
+          // La conversación no se pierde: al volver a tocar la abeja sigue ahí.
+          if (o.ficha && typeof window.abrirFichaPersona === 'function') {
+            b.addEventListener('click', () => {
+              chatWindow.style.display = 'none';
+              if (puedeHablar) window.speechSynthesis.cancel();
+              window.abrirFichaPersona(o.ficha);
+            });
+          }
           else b.addEventListener('click', () => enviar(o.value, o.label));
           chips.appendChild(b);
         });
