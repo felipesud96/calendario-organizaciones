@@ -14,7 +14,87 @@ function escapeHtml(str) {
 export function initChatWidget() {
   // 1. Estilos CSS (Eliminación de contorno azul, pulso de micrófono y tarjetas)
   const style = document.createElement('style');
+  style.id = 'deseret-styles';
   style.innerHTML = `
+    /* Logo de la barra superior = botón de Deseret */
+    .topbar-logo.deseret-trigger {
+      cursor: pointer;
+      border-radius: 50%;
+      transition: transform .15s ease;
+    }
+    .topbar-logo.deseret-trigger:hover { transform: scale(1.08); }
+    .topbar-logo.deseret-trigger:active { transform: scale(.95); }
+    .deseret-logo-wrap { position: relative; display: inline-flex; }
+    .deseret-logo-wrap::after {
+      content: 'IA';
+      position: absolute; right: -6px; bottom: -4px;
+      background: var(--celeste, #0ea5e9); color: #fff;
+      font-size: 9px; font-weight: 700; line-height: 1;
+      padding: 2px 4px; border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* Ventana del chat */
+    #chat-window {
+      position: fixed; right: 16px; bottom: 16px; z-index: 1000;
+      width: 370px; max-width: calc(100vw - 32px);
+      height: 540px; max-height: calc(100vh - 32px);
+      flex-direction: column;
+      background: var(--white, #fff); color: var(--ink, #0f172a);
+      border: 1px solid var(--border, #dbeafe);
+      border-radius: var(--radius, 12px);
+      box-shadow: var(--shadow-lg, 0 10px 30px rgba(3,105,161,.18));
+      overflow: hidden;
+    }
+    #chat-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; font-weight: 700;
+      background: var(--celeste, #0ea5e9); color: #fff;
+    }
+    #chat-header button {
+      background: transparent; border: 0; color: #fff;
+      font-size: 16px; cursor: pointer; padding: 4px 6px;
+    }
+    #chat-messages {
+      flex: 1; overflow-y: auto; padding: 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      background: var(--celeste-lighter, #f0f9ff);
+    }
+    #chat-messages .msg {
+      max-width: 85%; padding: 8px 11px; border-radius: 12px;
+      font-size: 14px; line-height: 1.4; word-wrap: break-word;
+    }
+    #chat-messages .msg.bot {
+      align-self: flex-start;
+      background: var(--white, #fff); border: 1px solid var(--border, #dbeafe);
+    }
+    #chat-messages .msg.user {
+      align-self: flex-end; background: var(--celeste, #0ea5e9); color: #fff;
+    }
+    #chat-messages .msg.error { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
+    #chat-input-area {
+      display: flex; gap: 6px; padding: 8px;
+      border-top: 1px solid var(--border, #dbeafe);
+      background: var(--white, #fff);
+    }
+    #chat-input {
+      flex: 1; min-width: 0; padding: 8px 10px; font-size: 16px;
+      border: 1px solid var(--border, #dbeafe); border-radius: 8px;
+      background: var(--white, #fff); color: var(--ink, #0f172a);
+    }
+    #chat-send-btn, #chat-mic-btn {
+      border: 1px solid var(--border, #dbeafe); border-radius: 8px;
+      padding: 0 10px; cursor: pointer;
+      background: var(--celeste-lighter, #f0f9ff); color: var(--ink, #0f172a);
+    }
+    #chat-send-btn { background: var(--celeste, #0ea5e9); color: #fff; border-color: var(--celeste, #0ea5e9); font-weight: 600; }
+    @media (max-width: 600px) {
+      #chat-window {
+        right: 0; bottom: 0; width: 100vw; max-width: 100vw;
+        height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0;
+      }
+    }
+
     #organiza-chat-widget button, #deseret-header-btn, .chat-btn, #chat-reset-btn, #chat-mic-btn {
       outline: none !important;
       -webkit-tap-highlight-color: transparent !important;
@@ -101,25 +181,43 @@ export function initChatWidget() {
     });
   }
 
-  // Reemplazar logo del Header
-  const reemplazarLogoPorBoton = () => {
-    const logoOriginal = document.querySelector('header img') || 
-                         document.querySelector('.logo img') || 
-                         document.querySelector('img[src*="logo"]');
+  // El logo de la abeja de la barra superior abre a Deseret.
+  // app.js vuelve a dibujar la barra (innerHTML) en cada cambio de vista y
+  // después de iniciar sesión, así que reemplazar el <img> una sola vez al
+  // cargar (como se hacía antes) no servía: el logo nuevo llegaba sin el
+  // botón. Ahora: 1) el clic se escucha en el documento (delegación), y
+  // 2) un MutationObserver marca el logo cada vez que la barra se redibuja.
+  document.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('.topbar-logo, #deseret-header-btn')) {
+      e.preventDefault();
+      toggleChat();
+    }
+  });
 
-    if (logoOriginal && !document.getElementById('deseret-header-btn')) {
-      const btnDeseret = document.createElement('button');
-      btnDeseret.id = 'deseret-header-btn';
-      btnDeseret.title = 'Hablar con Deseret (IA)';
-      btnDeseret.innerHTML = `<img src="./logo-bee.png" alt="Deseret IA" />`;
-      btnDeseret.addEventListener('click', toggleChat);
-
-      logoOriginal.parentNode.replaceChild(btnDeseret, logoOriginal);
+  const marcarLogo = () => {
+    const logo = document.querySelector('.topbar-logo');
+    if (!logo) {
+      // Sin barra superior = pantalla de login: se cierra el chat.
+      if (chatWindow.style.display !== 'none') chatWindow.style.display = 'none';
+      return;
+    }
+    if (logo.classList.contains('deseret-trigger')) return;
+    logo.classList.add('deseret-trigger');
+    logo.setAttribute('title', 'Hablar con Deseret (IA)');
+    logo.setAttribute('role', 'button');
+    logo.setAttribute('tabindex', '0');
+    logo.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleChat(); }
+    });
+    if (!logo.parentElement.classList.contains('deseret-logo-wrap')) {
+      const wrap = document.createElement('span');
+      wrap.className = 'deseret-logo-wrap';
+      logo.parentNode.insertBefore(wrap, logo);
+      wrap.appendChild(logo);
     }
   };
-
-  reemplazarLogoPorBoton();
-  setTimeout(reemplazarLogoPorBoton, 600);
+  marcarLogo();
+  new MutationObserver(marcarLogo).observe(document.getElementById('app') || document.body, { childList: true, subtree: true });
 
   // 3. Reconocimiento de Voz con Auto-Envío e Indicador Visual (Puntos 1 y 4)
   let autoSendTimer = null;
@@ -128,7 +226,7 @@ export function initChatWidget() {
   if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.lang = 'es-ES';
+    recognition.lang = 'es-CL';
     recognition.continuous = false;
     recognition.interimResults = false;
 
@@ -234,6 +332,7 @@ export function initChatWidget() {
       // base de datos) queda como texto plano, no como markup ejecutable.
       const respuestaFormatted = escapeHtml(respuestaTexto)
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<em>$2</em>')
         .replace(/\n/g, '<br>');
 
       const msgId = 'bot-msg-' + Date.now();
@@ -260,7 +359,11 @@ export function initChatWidget() {
     if (!el) return;
     const textToCopy = el.querySelector('div').innerText;
     navigator.clipboard.writeText(textToCopy).then(() => {
-      alert('¡Respuesta copiada al portapapeles!');
+      const btn = el.querySelector('.btn-action');
+      if (!btn) return;
+      const original = btn.textContent;
+      btn.textContent = '✅ Copiado';
+      setTimeout(() => { btn.textContent = original; }, 1500);
     });
   };
 
