@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import Groq from 'groq-sdk';
-import { load, withDb, nextId } from './db.js';
+import { load, withDb, nextId, interviewEligibility } from './db.js';
 import { canEditOrg, PURPOSE_OPTIONS, orgRequiresSupervisingAdults } from './routes/events.js';
 import { canScheduleOrg, orgAllowsInterviews, orgSeesAllInterviews } from './routes/interviews.js';
 import { findStakeConflicts } from './stakeCalendar.js';
@@ -291,6 +291,50 @@ function nombreDesdeRespuesta(texto) {
   return limpio;
 }
 
+// ----------------------------------------------------------------------
+// BUSCAR AL MIEMBRO (usuarios registrados + Directorio del barrio)
+// ----------------------------------------------------------------------
+// Igual que el selector de miembro del formulario de Entrevistas: si el
+// nombre coincide con un USUARIO REGISTRADO se vincula (memberUserId, así
+// le aparece en su Mis Actividades y le llegan los avisos); si coincide con
+// alguien del DIRECTORIO se usa su nombre completo tal como está ahí (sin
+// vincular, porque puede no tener cuenta). Cada palabra que se escribió
+// tiene que estar en el nombre, en cualquier orden — así "Jaime Cuenca"
+// encuentra "Cuenca Rojas, Jaime Andrés".
+function palabrasDe(nombre) {
+  return normalizeSearchText(nombre).replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean);
+}
+
+function buscarMiembros(nombre, data) {
+  const buscadas = palabrasDe(nombre).filter((w) => w.length > 1 && !['de', 'del', 'la', 'las', 'los', 'hermano', 'hermana', 'hno', 'hna'].includes(w));
+  if (!buscadas.length) return [];
+  const coincide = (candidato) => {
+    const palabras = palabrasDe(candidato);
+    return buscadas.every((b) => palabras.some((p) => p === b || (b.length >= 3 && p.startsWith(b))));
+  };
+  const vistos = new Set();
+  const resultado = [];
+  for (const u of data.users || []) {
+    if (!u.name || u.role === 'admin' || !coincide(u.name)) continue;
+    vistos.add(normalizeSearchText(u.name));
+    resultado.push({ name: u.name, userId: u.id, user: u });
+  }
+  for (const m of data.directoryMembers || []) {
+    if (!m.name || !coincide(m.name)) continue;
+    // Si la misma persona ya salió como usuario registrado, no se repite.
+    const norm = normalizeSearchText(m.name);
+    const yaEsta = vistos.has(norm) || resultado.some((r) => r.userId && palabrasDe(m.name).every((w) => palabrasDe(r.name).includes(w)));
+    if (yaEsta) continue;
+    vistos.add(norm);
+    resultado.push({ name: m.name, userId: null });
+  }
+  return resultado;
+}
+
+function listaOpciones(opciones) {
+  return opciones.map((o, i) => `${i + 1}. **${o.name}**${o.userId ? ' 🔗 registrado' : ''}`).join('\n');
+}
+
 function purposeDesdeRespuesta(mensajeMin) {
   const directo = PURPOSE_OPTIONS.find((p) => normalizeSearchText(mensajeMin).includes(normalizeSearchText(p)));
   return directo || inferPurpose(mensajeMin);
@@ -375,6 +419,32 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
   if (!usuario) return '🔒 Para agendar entrevistas necesitas haber iniciado sesión.';
 
   const d = { ...(previo || {}) };
+  const preguntar = (f, texto) => { guardarBorrador(usuario, 'entrevista', d, f); return texto; };
+
+  // Respuestas a "¿cuál de estas personas?" y "¿lo agendo igual?".
+  if (falta === 'elegirMiembro' && Array.isArray(d.opciones)) {
+    const num = mensajeMin.match(/^\s*(?:el|la|opci[oó]n|n[uú]mero)?\s*(\d{1,2})\b/);
+    const primeraPalabra = normalizeSearchText(mensajeMin).split(/\s+/)[0];
+    if (num && d.opciones[Number(num[1]) - 1]) {
+      const elegido = d.opciones[Number(num[1]) - 1];
+      d.memberName = elegido.name; d.memberUserId = elegido.userId; d.miembroResuelto = true;
+    } else if (/^(ninguno|ninguna|ningun)$/.test(primeraPalabra)) {
+      d.miembroResuelto = true; // se deja el nombre tal como lo escribió
+    } else {
+      d.memberName = nombreDesdeRespuesta(mensaje); d.miembroResuelto = false;
+    }
+    delete d.opciones;
+  } else if (falta === 'confirmarNombre') {
+    if (/^\s*(s[ií]|dale|ok|okay|confirmo|agend[aá]\w*|as[ií] est[aá] bien|correcto)(?=[\s,.!]|$)/i.test(mensajeMin)) {
+      d.miembroResuelto = true;
+    } else if (/^\s*no\b/i.test(mensajeMin) && !nombreDesdeRespuesta(mensaje.replace(/^\s*no[\s,.]*/i, ''))) {
+      d.memberName = null; d.miembroResuelto = false;
+      return preguntar('nombre', '🙋 ¿Cómo se llama entonces? Escríbeme nombre y apellido.');
+    } else {
+      d.memberName = nombreDesdeRespuesta(mensaje.replace(/^\s*no[\s,.]*(es\s+)?/i, '')); d.miembroResuelto = false;
+    }
+  }
+
   if (!d.memberName) {
     const nombreMatch = mensaje.match(/entrevist\w*\s+(?:a|con)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ.'\- ]+?)(?:\s+(?:el|para|a las?|el d[ií]a|ma[ñn]ana|hoy|pasado|este|esta|pr[oó]xim\w*|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b|[.,]|$)/i);
     if (nombreMatch) d.memberName = nombreMatch[1].trim();
@@ -385,16 +455,38 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
   d.orgId = d.orgId || inferOrganizationId(mensajeMin, data.organizations);
   if (!d.orgId && usuario.role === 'leader') d.orgId = Number(usuario.organizationId);
 
-  const preguntar = (f, texto) => { guardarBorrador(usuario, 'entrevista', d, f); return texto; };
-
   if (!d.memberName) return preguntar('nombre', `🙋 ¿A quién quieres entrevistar?${d.fecha ? ` (ya tengo el ${d.fecha}${d.hora ? ' a las ' + d.hora : ''})` : ''}`);
   if (!d.fecha) return preguntar('fecha', `📅 Me falta la **fecha** para la entrevista con **${d.memberName}**. ¿Qué día?`);
   if (!d.hora) return preguntar('hora', `🕐 Me falta la **hora** para la entrevista con **${d.memberName}** el ${d.fecha}. ¿A qué hora?`);
   if (!d.orgId) return preguntar('organizacion', `🏷️ ¿De qué organización es esta entrevista?`);
 
+  // Asociar el nombre con una persona real (usuario registrado o Directorio).
+  if (!d.miembroResuelto) {
+    const encontrados = buscarMiembros(d.memberName, data);
+    if (encontrados.length === 1) {
+      d.memberName = encontrados[0].name;
+      d.memberUserId = encontrados[0].userId;
+      d.miembroResuelto = true;
+    } else if (encontrados.length > 1) {
+      d.opciones = encontrados.slice(0, 8).map(({ name, userId }) => ({ name, userId }));
+      const extra = encontrados.length > 8 ? `\n_(y ${encontrados.length - 8} más — si no está, escribe el nombre más completo)_` : '';
+      return preguntar('elegirMiembro', `🔎 Encontré varias personas que coinciden con **${d.memberName}**:\n\n${listaOpciones(d.opciones)}${extra}\n\nResponde con el **número**, o "ninguno" para dejarlo como lo escribiste.`);
+    } else {
+      return preguntar('confirmarNombre', `🔎 No encontré a **${d.memberName}** en el Directorio ni entre los usuarios registrados. ¿La agendo igual con ese nombre? (responde **sí**, o escríbeme el nombre correcto)`);
+    }
+  }
+
   borrarBorrador(usuario);
   if (!orgAllowsInterviews(data, d.orgId)) return `🚫 Esa organización no agenda entrevistas en la app. No la guardé.`;
   if (!canScheduleOrg(usuario, d.orgId)) return `🚫 No tienes permiso para agendar entrevistas de esa organización. No la guardé.`;
+
+  // Misma validación del Manual General que el formulario (solo se puede
+  // revisar si la persona tiene cuenta registrada con su perfil completo).
+  const orgEntrevista = data.organizations.find((o) => o.id === Number(d.orgId));
+  const cuenta = d.memberUserId ? (data.users || []).find((u) => u.id === Number(d.memberUserId)) : null;
+  if (cuenta && orgEntrevista && interviewEligibility(orgEntrevista.name, cuenta) === false) {
+    return `🚫 Esta entrevista es de ${orgEntrevista.name} y **${cuenta.name}** no corresponde según su perfil (sexo/edad) — según el Manual General, agéndala con el Obispado. No la guardé.`;
+  }
 
   const org = data.organizations.find((o) => o.id === Number(d.orgId));
   const now = new Date().toISOString();
@@ -404,7 +496,7 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
       id,
       groupId: id,
       memberName: d.memberName,
-      memberUserId: null,
+      memberUserId: d.memberUserId ? Number(d.memberUserId) : null,
       memberPhone: '',
       memberEmail: '',
       description: '',
@@ -433,7 +525,7 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
   vaciarCache();
 
   return `✅ **¡Listo! Entrevista agendada:**\n\n` +
-    `• **${interview.memberName}**\n` +
+    `• **${interview.memberName}**${interview.memberUserId ? ' 🔗 vinculado a su cuenta' : ''}\n` +
     `• 📅 ${interview.date} a las ${interview.startTime}\n` +
     `• 🏷️ ${org?.name || ''}\n\n` +
     `_Ya aparece en el módulo de Entrevistas. Si algo no es correcto, edítala desde ahí._`;
