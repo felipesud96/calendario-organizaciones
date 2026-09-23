@@ -164,6 +164,7 @@ function commitmentGroupSummary(c, meeting, data) {
       displayStatus: x.status === 'pending' && x.dueDate && x.dueDate < todayISO() ? 'overdue' : x.status,
       completedAt: x.completedAt,
       completionComment: x.completionComment,
+      completedByName: x.completedByName || null,
     })),
   };
 }
@@ -894,8 +895,13 @@ export function registerMeetingRoutes(router) {
     const data0 = load();
     const found = findMeetingWithCommitment(data0, id);
     if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
-    if (Number(found.commitment.assignedToUserId) !== Number(req.user.id)) {
-      return sendJson(res, 403, { error: 'Solo la persona responsable puede marcar este compromiso como completado' });
+    // También puede marcarlo quien lleva el acta (o un Administrador) —
+    // p. ej. cuando en el consejo se informa que ya se hizo. En ese caso
+    // queda registrado QUIÉN lo marcó (completedByName), para que se sepa
+    // que no lo marcó el responsable mismo.
+    const esResponsable = Number(found.commitment.assignedToUserId) === Number(req.user.id);
+    if (!esResponsable && !canEditMeeting(req.user, found.meeting)) {
+      return sendJson(res, 403, { error: 'Solo la persona responsable (o quien lleva el acta) puede marcar este compromiso como completado' });
     }
     if (found.meeting.status !== 'active') {
       return sendJson(res, 400, { error: 'El acta de este compromiso ya fue archivada' });
@@ -913,10 +919,36 @@ export function registerMeetingRoutes(router) {
     const completed = await withDb((data) => {
       const f = findMeetingWithCommitment(data, id);
       if (!f || f.commitment.status === 'completed') return null;
-      Object.assign(f.commitment, { status: 'completed', completedAt: new Date().toISOString(), completionComment: comment });
+      Object.assign(f.commitment, {
+        status: 'completed', completedAt: new Date().toISOString(), completionComment: comment,
+        completedByUserId: esResponsable ? null : req.user.id,
+        completedByName: esResponsable ? null : req.user.name,
+      });
       return true;
     });
     if (!completed) return sendJson(res, 400, { error: 'Este compromiso ya estaba marcado como completado' });
+    const data = load();
+    const f2 = findMeetingWithCommitment(data, id);
+    sendJson(res, 200, withCommitmentInfo(f2.commitment, data, f2.meeting, req.user));
+  }));
+
+  // Deshacer "completado" (se marcó por error): vuelve a pendiente.
+  router.put('/api/commitments/:id/reopen', requireRole(['admin', 'leader', 'ward_clerk', 'executive_secretary', 'financial_clerk'], async (req, res, params) => {
+    const id = Number(params.id);
+    const found = findMeetingWithCommitment(load(), id);
+    if (!found) return sendJson(res, 404, { error: 'Compromiso no encontrado' });
+    const esResponsable = Number(found.commitment.assignedToUserId) === Number(req.user.id);
+    if (!esResponsable && !canEditMeeting(req.user, found.meeting)) {
+      return sendJson(res, 403, { error: 'Solo la persona responsable (o quien lleva el acta) puede reabrir este compromiso' });
+    }
+    if (found.meeting.status !== 'active') return sendJson(res, 400, { error: 'El acta de este compromiso ya fue archivada' });
+    const ok = await withDb((data) => {
+      const f = findMeetingWithCommitment(data, id);
+      if (!f || f.commitment.status !== 'completed') return null;
+      Object.assign(f.commitment, { status: 'pending', completedAt: null, completionComment: '', completedByUserId: null, completedByName: null });
+      return true;
+    });
+    if (!ok) return sendJson(res, 400, { error: 'Este compromiso no estaba completado' });
     const data = load();
     const f2 = findMeetingWithCommitment(data, id);
     sendJson(res, 200, withCommitmentInfo(f2.commitment, data, f2.meeting, req.user));

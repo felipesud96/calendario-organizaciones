@@ -3196,6 +3196,34 @@ function confirmModal(message, opts = {}) {
   });
 }
 
+// Igual que confirmModal, pero con un comentario opcional. Devuelve el
+// texto escrito ('' si se dejó vacío) o null si se canceló.
+function commentModal(message, opts = {}) {
+  const { title = 'Confirmar', confirmText = 'Guardar', placeholder = 'Comentario (opcional)' } = opts;
+  return new Promise((resolve) => {
+    const root = document.getElementById('confirm-root');
+    root.innerHTML = `
+      <div class="modal-backdrop confirm-modal-backdrop" id="confirm-backdrop">
+        <div class="modal confirm-modal">
+          <div class="modal-header"><h3>${esc(title)}</h3></div>
+          <div class="modal-body">
+            <p class="confirm-modal-message">${esc(message)}</p>
+            <textarea id="confirm-comment" rows="3" maxlength="500" placeholder="${esc(placeholder)}" style="width:100%; margin-top:8px; font:inherit; font-size:14px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; resize:vertical;"></textarea>
+          </div>
+          <div class="modal-footer" style="justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost" id="confirm-cancel">Cancelar</button>
+            <button type="button" class="btn btn-primary" id="confirm-ok">${esc(confirmText)}</button>
+          </div>
+        </div>
+      </div>`;
+    const cleanup = (result) => { root.innerHTML = ''; resolve(result); };
+    document.getElementById('confirm-cancel').addEventListener('click', () => cleanup(null));
+    document.getElementById('confirm-ok').addEventListener('click', () => cleanup(document.getElementById('confirm-comment').value.trim()));
+    document.getElementById('confirm-backdrop').addEventListener('click', (e) => { if (e.target.id === 'confirm-backdrop') cleanup(null); });
+    document.getElementById('confirm-comment').focus();
+  });
+}
+
 // Advierte antes de cerrar un modal si su formulario tiene cambios sin
 // guardar, para que un clic accidental en la X, el fondo oscuro o
 // "Cancelar" no borre lo que la persona ya escribió. Se llama con el
@@ -8320,9 +8348,12 @@ async function openMeetingDetailModal(m) {
                         <div style="min-width:0; font-size:12.5px;">
                           <span>${esc(mem.assignedToName)}</span>
                           ${mem.status === 'completed' && mem.completionComment ? `<div style="color:var(--ink-soft); font-style:italic;">💬 "${esc(mem.completionComment)}"</div>` : ''}
+                          ${mem.status === 'completed' && mem.completedByName ? `<div style="color:var(--ink-soft); font-size:11.5px;">Marcado por ${esc(mem.completedByName)}</div>` : ''}
                         </div>
                         <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
                           ${commitmentStatusPillHtml({ displayStatus: mem.displayStatus })}
+                          ${canEdit && mem.status === 'pending' ? `<button type="button" class="btn btn-ghost btn-sm commitment-complete" data-commitment-id="${mem.id}" title="Marcar cumplido (${esc(mem.assignedToName)})">✅</button>` : ''}
+                          ${canEdit && mem.status === 'completed' ? `<button type="button" class="btn btn-ghost btn-sm commitment-reopen" data-commitment-id="${mem.id}" title="Volver a pendiente">↩️</button>` : ''}
                           ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-reassign" data-commitment-id="${mem.id}" title="Reasignar a ${esc(mem.assignedToName)}">🔄</button>` : ''}
                           ${canEdit ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${mem.id}" title="Quitar a ${esc(mem.assignedToName)} de este compromiso">${icon('trash')}</button>` : ''}
                         </div>
@@ -8341,13 +8372,14 @@ async function openMeetingDetailModal(m) {
                     <div style="font-weight:600; font-size:13.5px;">${c.redacted ? icon('lock') + ' ' : ''}${esc(c.description)}</div>
                     <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Responsable: ${esc(c.assignedToName)} · vence ${esc(fmtDateHuman(c.dueDate))}</div>
                     ${c.status === 'completed' && c.completionComment ? `<div style="font-size:12px; color:var(--ink-soft); margin-top:4px; font-style:italic;">💬 "${esc(c.completionComment)}"</div>` : ''}
+                    ${c.status === 'completed' && c.completedByName ? `<div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px;">Marcado como cumplido por ${esc(c.completedByName)}</div>` : ''}
                   </div>
                   <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
                     ${commitmentStatusPillHtml(c)}
                     ${commitmentPriorityBadgeHtml(c.priority)}
                   </div>
                 </div>
-                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar</button>${!c.redacted ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-reassign" data-commitment-id="${c.id}">🔄 Reasignar</button><button type="button" class="btn btn-ghost btn-sm commitment-add-member" data-commitment-id="${c.id}">+ Agregar persona</button>` : ''}<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${c.id}">${icon('trash')} Eliminar</button></div>` : ''}
+                ${canEdit ? `<div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${!c.redacted && c.status === 'pending' ? `<button type="button" class="btn btn-secondary btn-sm commitment-complete" data-commitment-id="${c.id}">✅ Marcar cumplido</button>` : ''}${!c.redacted && c.status === 'completed' ? `<button type="button" class="btn btn-ghost btn-sm commitment-reopen" data-commitment-id="${c.id}">↩️ Volver a pendiente</button>` : ''}<button type="button" class="btn btn-ghost btn-sm commitment-edit" data-commitment-id="${c.id}">✏️ Editar</button>${!c.redacted ? `<button type="button" class="btn btn-ghost btn-sm commitment-member-reassign" data-commitment-id="${c.id}">🔄 Reasignar</button><button type="button" class="btn btn-ghost btn-sm commitment-add-member" data-commitment-id="${c.id}">+ Agregar persona</button>` : ''}<button type="button" class="btn btn-ghost btn-sm commitment-member-remove" data-commitment-id="${c.id}">${icon('trash')} Eliminar</button></div>` : ''}
               </div>`;
             }).join('') : emptyStateHtml('Sin compromisos todavía', canEdit ? { id: 'md-empty-add', label: '+ Agregar el primero' } : null, '🎯')}
           </div>
@@ -8427,6 +8459,35 @@ async function openMeetingDetailModal(m) {
         const commitmentId = Number(btn.dataset.commitmentId);
         const c = m.commitments.find((x) => x.id === commitmentId);
         if (c) openEditCommitmentModal(m, c);
+      });
+    });
+    // Marcar un compromiso como cumplido desde el acta (queda registrado
+    // quién lo marcó) y deshacerlo si fue por error.
+    const buscarCompromiso = (id) => m.commitments.find((x) => x.id === id)
+      || m.commitments.flatMap((x) => x.group?.members || []).find((x) => x.id === id);
+    document.querySelectorAll('.commitment-complete').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        const c = buscarCompromiso(commitmentId);
+        const quien = c?.assignedToName ? ` de ${c.assignedToName}` : '';
+        const comment = await commentModal(`¿Marcar como cumplido el compromiso${quien}?`, { title: 'Compromiso cumplido', confirmText: '✅ Marcar cumplido', placeholder: '¿Cómo resultó? (opcional)' });
+        if (comment === null) return;
+        try {
+          await api(`/commitments/${commitmentId}/complete`, { method: 'PUT', body: { comment } });
+          toast('Compromiso marcado como cumplido');
+          openMeetingDetailModal(await api(`/meetings/${m.id}`));
+        } catch (e) { toast(e.message, 'error'); }
+      });
+    });
+    document.querySelectorAll('.commitment-reopen').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const commitmentId = Number(btn.dataset.commitmentId);
+        if (!(await confirmModal('¿Volver este compromiso a pendiente? Se borrará el comentario de cumplimiento.', { title: 'Volver a pendiente', confirmText: 'Volver a pendiente' }))) return;
+        try {
+          await api(`/commitments/${commitmentId}/reopen`, { method: 'PUT' });
+          toast('Compromiso de nuevo pendiente');
+          openMeetingDetailModal(await api(`/meetings/${m.id}`));
+        } catch (e) { toast(e.message, 'error'); }
       });
     });
     // Punto 2: reasignar SIN borrar/crear — conserva el id (y el historial

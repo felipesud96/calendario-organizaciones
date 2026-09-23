@@ -47,6 +47,8 @@ const store = {
 };
 const CLAVE_CHAT = 'deseret_chat_v2';   // sessionStorage: conversación de esta pestaña
 const CLAVE_VOZ = 'deseret_voz';        // localStorage: ¿leer respuestas en voz alta?
+const CLAVE_HEY = 'deseret_hey';        // localStorage: ¿escuchar "Hey Deseret"?
+const CLAVE_INTRO = 'deseret_intro_v1'; // localStorage: ¿ya se mostró la presentación?
 
 // Imagen de Deseret (abeja en un panal) y los íconos de línea de la ventana.
 const AVATAR = '/deseret.svg';
@@ -61,6 +63,7 @@ const ICONOS = {
   copiar: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', ' width="14" height="14"'),
   ok: svg('<path d="M20 6 9 17l-5-5"/>', ' width="14" height="14"'),
   arriba: svg('<path d="M7 10v12"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18.4 22H7V10l4.3-8a3 3 0 0 1 3.7 3.9z"/>', ' width="14" height="14"'),
+  oido: svg('<path d="M6 8.5a6 6 0 0 1 12 0c0 3.5-3 4.5-3.5 7a3.5 3.5 0 0 1-6.5 1"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-1.5 2-1.5 3"/>'),
   abajo: svg('<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 5.6 2H17v12l-4.3 8a3 3 0 0 1-3.7-3.9z"/>', ' width="14" height="14"'),
 };
 // Sugerencias de la pantalla de bienvenida.
@@ -80,6 +83,42 @@ const ESTILOS = `
     font-size: 9px; font-weight: 700; line-height: 1;
     padding: 2px 4px; border-radius: 6px; pointer-events: none;
   }
+
+  /* Botón flotante de Deseret (para que se note que hay un asistente) */
+  #deseret-fab {
+    position: fixed; right: 24px; bottom: 24px; z-index: 95;
+    display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 18px 0 7px;
+    border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-weight: 700; font-size: 14px;
+    background: linear-gradient(135deg, var(--celeste-dark, #0369a1), var(--celeste, #0ea5e9)); color: #fff;
+    box-shadow: 0 6px 18px rgba(3,105,161,.35); transition: transform .15s ease, box-shadow .15s ease;
+  }
+  #deseret-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(3,105,161,.4); }
+  #deseret-fab img { width: 40px; height: 40px; flex: none; }
+  #deseret-fab .escuchando { position: absolute; left: 36px; top: 6px; width: 11px; height: 11px; border-radius: 50%; background: #4ade80; border: 2px solid #fff; display: none; animation: deseret-latido 1.6s infinite; }
+  #deseret-fab.hey .escuchando { display: block; }
+  @keyframes deseret-latido { 0%,100% { box-shadow: 0 0 0 0 rgba(74,222,128,.7); } 50% { box-shadow: 0 0 0 6px rgba(74,222,128,0); } }
+  body:has(.add-event-fab) #deseret-fab { bottom: 90px; }
+  body:has(.modal-backdrop) #deseret-fab, body:has(.modal-backdrop) #deseret-intro { display: none !important; }
+  #deseret-intro {
+    position: fixed; right: 24px; bottom: 88px; z-index: 96; max-width: 280px;
+    background: var(--white, #fff); color: var(--ink, #0f172a); border: 1px solid var(--border, #dbeafe);
+    border-radius: 14px; padding: 12px 14px; font-size: 13.5px; line-height: 1.45; box-shadow: 0 10px 30px rgba(3,105,161,.22);
+  }
+  #deseret-intro::after { content: ''; position: absolute; right: 34px; bottom: -7px; width: 12px; height: 12px; background: inherit; border-right: 1px solid var(--border, #dbeafe); border-bottom: 1px solid var(--border, #dbeafe); transform: rotate(45deg); }
+  #deseret-intro b { display: block; margin-bottom: 2px; }
+  #deseret-intro .x { position: absolute; top: 4px; right: 8px; border: 0; background: none; font-size: 16px; color: var(--ink-soft, #64748b); cursor: pointer; }
+  body:has(.add-event-fab) #deseret-intro { bottom: 154px; }
+  @media (max-width: 640px) {
+    #deseret-fab { right: 16px; width: 52px; padding: 0; justify-content: center; bottom: calc(80px + env(safe-area-inset-bottom)); }
+    #deseret-fab .txt { display: none; }
+    #deseret-fab .escuchando { left: 34px; top: 4px; }
+    body:has(.mobile-fab) #deseret-fab { bottom: calc(80px + 56px + 12px + env(safe-area-inset-bottom)); }
+    #deseret-intro { right: 16px; left: 16px; max-width: none; bottom: calc(144px + env(safe-area-inset-bottom)); }
+    body:has(.mobile-fab) #deseret-intro { bottom: calc(212px + env(safe-area-inset-bottom)); }
+    #deseret-intro::after { right: 36px; }
+  }
+  .deseret-hey-aviso { font-size: 12px; background: #ecfdf5; color: #065f46; border-bottom: 1px solid #a7f3d0; padding: 6px 12px; display: none; }
+  #chat-header button.hey-on { background: rgba(74,222,128,.3); opacity: 1; }
 
   /* Ventana */
   #chat-window {
@@ -207,6 +246,9 @@ export function initChatWidget() {
   if (!document.getElementById('organiza-chat-widget')) {
     document.body.insertAdjacentHTML('beforeend', `
       <div id="organiza-chat-widget">
+        <button id="deseret-fab" type="button" style="display:none" title="Pregúntale a Deseret (asistente IA)" aria-label="Abrir a Deseret, asistente IA">
+          <img src="${AVATAR}" alt="" /><span class="escuchando"></span><span class="txt">Pregúntale a Deseret</span>
+        </button>
         <div id="chat-window" style="display: none;" role="dialog" aria-label="Deseret, asistente de IA">
           <div id="chat-header">
             <div class="deseret-id">
@@ -214,6 +256,7 @@ export function initChatWidget() {
               <div><div class="nombre">Deseret</div><div class="estado">Asistente IA</div></div>
             </div>
             <div class="deseret-botones">
+              <button id="chat-hey-btn" title='Activar "Hey Deseret"' aria-label='Activar "Hey Deseret"' aria-pressed="false" style="display:none">${ICONOS.oido}</button>
               <button id="chat-voice-btn" title="Leer respuestas en voz alta" aria-label="Leer respuestas en voz alta" aria-pressed="false">${ICONOS.vozOff}</button>
               <button id="chat-reset-btn" title="Reiniciar conversación" aria-label="Reiniciar conversación">${ICONOS.reiniciar}</button>
               <button id="chat-close-btn" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
@@ -487,6 +530,138 @@ export function initChatWidget() {
     if (abrir) { scrollAbajo(); chatInput.focus(); } else if (puedeHablar) window.speechSynthesis.cancel();
   };
   document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
+
+  // ---------------- Botón flotante + presentación ----------------
+  const fab = document.getElementById('deseret-fab');
+  let hayApp = false; // ¿estamos dentro de la app (no en el login)?
+  fab.addEventListener('click', () => { cerrarIntro(); if (chatWindow.style.display === 'none') toggleChat(); });
+  const cerrarIntro = () => {
+    document.getElementById('deseret-intro')?.remove();
+    store.set('localStorage', CLAVE_INTRO, true);
+  };
+  function mostrarIntro() {
+    if (store.get('localStorage', CLAVE_INTRO) || document.getElementById('deseret-intro') || !hayApp) return;
+    // Si está abierto el tour de bienvenida u otro modal, esperar a que se cierre.
+    if (document.querySelector('.modal-backdrop')) { setTimeout(mostrarIntro, 3000); return; }
+    const d = document.createElement('div');
+    d.id = 'deseret-intro';
+    d.setAttribute('role', 'status');
+    d.innerHTML = `<button class="x" type="button" aria-label="Cerrar">×</button><b>¡Hola! Soy Deseret 👋</b>Tu asistente con IA. Pregúntame lo que necesites o pídeme agendar una entrevista o actividad.${heySoportado ? ' También puedes activar <b style="display:inline">“Hey Deseret”</b> para llamarme con la voz.' : ''}`;
+    d.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); cerrarIntro(); });
+    d.addEventListener('click', () => { cerrarIntro(); if (chatWindow.style.display === 'none') toggleChat(); });
+    document.getElementById('organiza-chat-widget').appendChild(d);
+    setTimeout(() => { if (document.getElementById('deseret-intro')) cerrarIntro(); }, 15000);
+  }
+  // El botón y la escucha siguen el estado de la ventana, sin importar
+  // quién la abrió o cerró (logo, botón, chip de ficha, cierre de sesión).
+  const sincronizar = () => {
+    const abierta = chatWindow.style.display !== 'none';
+    fab.style.display = hayApp && !abierta ? 'flex' : 'none';
+    if (abierta) { cerrarIntro(); hey.pausar(); } else hey.reanudar();
+  };
+  new MutationObserver(sincronizar).observe(chatWindow, { attributes: true, attributeFilter: ['style'] });
+
+  // ---------------- "Hey Deseret": abrir el chat con la voz ----------------
+  // Escucha continua con el reconocimiento de voz del navegador (Chrome /
+  // Edge). Es OPCIONAL (apagado por defecto, se activa por dispositivo) y
+  // solo escucha mientras la pestaña de la app está visible y el chat
+  // cerrado. Al oír "Hey Deseret" abre el chat; si la frase ya trae la
+  // pregunta ("Hey Deseret, ¿qué tengo esta semana?") la envía de una.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const heySoportado = !!SR;
+  const heyBtn = document.getElementById('chat-hey-btn');
+  const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Al inicio de la frase, o justo después de un saludo ("hey", "oye"...).
+  const RE_HEY = /(?:^\s*|\b(?:hey|hei|ey|ei|oye|hola|ok|okey|okay)\s*)(?:de\s?s[ae]r[ae]t+h?|desert|dese\s?red|di\s?seret|deceret)\b[\s,.!?¿¡]*(.*)$/;
+  const hey = (() => {
+    let activo = heySoportado && store.get('localStorage', CLAVE_HEY) === true;
+    let rec = null; let corriendo = false; let pausado = false; let reintentos = 0;
+    const puedeCorrer = () => activo && !pausado && hayApp && !document.hidden;
+    function arrancar() {
+      if (corriendo || !puedeCorrer()) return;
+      rec = new SR();
+      rec.lang = 'es-CL'; rec.continuous = true; rec.interimResults = false;
+      rec.onresult = (ev) => {
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          if (!ev.results[i].isFinal) continue;
+          const original = ev.results[i][0].transcript;
+          const m = norm(original).match(RE_HEY);
+          if (m) {
+            // La pregunta se toma del texto ORIGINAL (con tildes): las
+            // últimas N palabras, N = las que venían después de "Deseret".
+            const n = m[1].trim().split(/\s+/).filter(Boolean).length;
+            reintentos = 0;
+            despertar(n ? original.trim().split(/\s+/).slice(-n).join(' ') : '');
+            return;
+          }
+        }
+      };
+      rec.onerror = (ev) => {
+        if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+          activo = false; store.set('localStorage', CLAVE_HEY, false); pintar();
+          estado.msgs.push({ role: 'bot', texto: 'No tengo permiso para usar el micrófono, así que desactivé **“Hey Deseret”**. Puedes darle permiso en el candado de la barra de direcciones y volver a activarlo.', error: true });
+          guardar(); repintarTodo();
+        }
+      };
+      rec.onend = () => {
+        corriendo = false;
+        // Chrome corta la escucha continua cada tanto: se vuelve a encender
+        // (con una pausa creciente si se corta muy seguido).
+        if (puedeCorrer()) setTimeout(arrancar, Math.min(500 * 2 ** reintentos++, 15000));
+      };
+      try { rec.start(); corriendo = true; } catch { corriendo = false; }
+      setTimeout(() => { if (corriendo) reintentos = 0; }, 10000);
+    }
+    function detener() { if (rec && corriendo) { try { rec.abort(); } catch { /* ya estaba detenido */ } } corriendo = false; }
+    function despertar(resto) {
+      detener();
+      if (chatWindow.style.display === 'none') toggleChat();
+      const pregunta = resto.replace(/^[,.\s]+/, '');
+      if (pregunta.split(/\s+/).filter(Boolean).length >= 2) {
+        ultimaFueDictada = true; // la respuesta se lee en voz alta
+        enviar(pregunta);
+      } else {
+        // Solo dijo "Hey Deseret": se abre el micrófono para la pregunta.
+        setTimeout(() => { if (micBtn.style.display !== 'none') micBtn.click(); }, 350);
+      }
+    }
+    function pintar() {
+      heyBtn.classList.toggle('hey-on', activo);
+      heyBtn.setAttribute('aria-pressed', String(activo));
+      heyBtn.title = activo ? '“Hey Deseret” activado — toca para desactivar' : 'Activar “Hey Deseret” (llamarme con la voz)';
+      fab.classList.toggle('hey', activo);
+      fab.title = activo ? 'Deseret te escucha: di “Hey Deseret”' : 'Pregúntale a Deseret (asistente IA)';
+    }
+    document.addEventListener('visibilitychange', () => { if (document.hidden) detener(); else arrancar(); });
+    return {
+      activo: () => activo,
+      pintar,
+      pausar() { pausado = true; detener(); },
+      reanudar() { pausado = false; reintentos = 0; arrancar(); },
+      alternar() {
+        activo = !activo;
+        store.set('localStorage', CLAVE_HEY, activo);
+        pintar();
+        if (!activo) detener();
+        return activo;
+      },
+    };
+  })();
+  if (heySoportado) {
+    heyBtn.style.display = '';
+    hey.pintar();
+    heyBtn.addEventListener('click', () => {
+      const on = hey.alternar();
+      estado.msgs.push({ role: 'bot', texto: on
+        ? '🎙️ **“Hey Deseret” activado** en este dispositivo. Cuando cierres el chat quedaré escuchando mientras la app esté abierta en pantalla: di **“Hey Deseret”** y me abro (o di de una vez tu pregunta, por ejemplo: “Hey Deseret, ¿qué tengo esta semana?”).\n\nEl navegador te pedirá permiso para el micrófono. Ojo: mientras escucho, el reconocimiento de voz del navegador procesa el audio (en Chrome, en los servidores de Google). Funciona mejor en computador con Chrome o Edge. Puedes apagarlo cuando quieras con este mismo botón.'
+        : '“Hey Deseret” desactivado. Ya no estoy escuchando.' });
+      guardar(); repintarTodo();
+      if (on) {
+        // Pedir el permiso del micrófono ahora (con el clic), no más tarde.
+        navigator.mediaDevices?.getUserMedia?.({ audio: true }).then((st) => st.getTracks().forEach((t) => t.stop())).catch(() => {});
+      }
+    });
+  }
   document.getElementById('chat-reset-btn').addEventListener('click', () => {
     estado = { msgs: [{ role: 'bot', texto: '¡Hola! Conversación reiniciada. ¿Qué necesitas?' }], historial: [] };
     guardar();
@@ -507,6 +682,9 @@ export function initChatWidget() {
 
   const marcarLogo = () => {
     const logo = document.querySelector('.topbar-logo');
+    const antes = hayApp;
+    hayApp = !!logo;
+    if (antes !== hayApp) { sincronizar(); if (hayApp) setTimeout(mostrarIntro, 1500); }
     if (!logo) {
       // Sin barra superior = pantalla de login (o se cerró sesión): se cierra
       // el chat y se borra la conversación, para que la próxima persona que
