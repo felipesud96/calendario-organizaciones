@@ -40,7 +40,7 @@ function forbidden(res) {
   });
 }
 
-function isMinisteringFocusLeaderHombres(user, data) {
+export function isMinisteringFocusLeaderHombres(user, data) {
   if (!user) return false;
   if (user.role === 'admin') return true;
   if (user.role !== 'leader') return false;
@@ -48,7 +48,7 @@ function isMinisteringFocusLeaderHombres(user, data) {
   return !!org && org.name === 'Cuórum de Élderes';
 }
 
-function isMinisteringFocusLeaderMujeres(user, data) {
+export function isMinisteringFocusLeaderMujeres(user, data) {
   if (!user) return false;
   if (user.role === 'admin') return true;
   if (user.role !== 'leader') return false;

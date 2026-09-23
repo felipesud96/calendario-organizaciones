@@ -4,6 +4,9 @@ import { canEditOrg, PURPOSE_OPTIONS, orgRequiresSupervisingAdults } from './rou
 import { canScheduleOrg, orgAllowsInterviews, orgSeesAllInterviews } from './routes/interviews.js';
 import { findStakeConflicts } from './stakeCalendar.js';
 import { isObispadoLeader } from './routes/stake.js';
+import { INDICATOR_DEFS, sortedQuarters, pctForIndicator } from './wardGrowth.js';
+import { computeCuadrante, isAdultMale, isAdultFemale, CUADRANTES } from './pastoralFocus.js';
+import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
 
 // Cache local en memoria para respuestas ultrarrápidas (<10 ms) — solo para
 // preguntas de SOLO LECTURA (ver MÓDULO 2 más abajo). Nunca se usa para
@@ -929,6 +932,166 @@ function rangoConsulta(norm, mensajeMin, hoyObj) {
   return { desde: hoy, hasta: toISO(sumarDias(hoyObj, 30)), etiqueta: 'los próximos 30 días' };
 }
 
+// ----------------------------------------------------------------------
+// CRECIMIENTO DEL BARRIO (indicadores trimestrales) — "¿vamos mejorando en
+// la asistencia?". Mismos permisos que GET /api/ward-growth/quarters:
+// admin, cualquier líder y secretario de barrio.
+// ----------------------------------------------------------------------
+const VER_CRECIMIENTO = ['admin', 'leader', 'ward_clerk'];
+const INDICADORES_ASISTENCIA = [7, 14, 15, 16, 17, 18, 19, 22];
+const INDICADORES_POR_TEMA = [
+  [/\bsacramental\b/, [7]],
+  [/\b(elderes|cuorum|melquisedec)\b/, [14, 15, 12]],
+  [/\b(socorro|mujeres adultas)\b/, [16, 13]],
+  [/\b(jas|jovenes adultos)\b/, [17]],
+  [/\bhombres jovenes\b/, [18]],
+  [/\bmujeres jovenes\b/, [19]],
+  [/\b(primaria|ninos)\b/, [21, 22]],
+  [/\bconversos?\b/, [3, 23, 24, 25, 26]],
+  [/\b(templo|recomendacion(es)?)\b/, [9, 20, 1, 2]],
+  [/\b(sellad\w*|sellamientos?)\b/, [1, 5]],
+  [/\b(investid\w*|investiduras?)\b/, [2]],
+  [/\b(bautism\w*)\b/, [3, 8, 21]],
+  [/\b(reactivad\w*|menos activos)\b/, [6]],
+  [/\b(misional|misioner\w*)\b/, [4]],
+  [/\b(ministracion|ministrantes?)\b/, [12, 13, 26]],
+];
+const etiquetaTrimestre = (q) => `T${q.quarter} ${q.year}`;
+
+function contextoCrecimiento(norm, db) {
+  const qs = sortedQuarters(db.quarterlyStats || []);
+  if (!qs.length) return { contexto: '\n--- CRECIMIENTO DEL BARRIO ---\nTodavía no hay trimestres cargados en "Crecimiento del Barrio".', fallback: '📊 Todavía no hay trimestres cargados en **Crecimiento del Barrio**, así que no puedo comparar.' };
+  const ultimo = qs[qs.length - 1];
+  const anterior = qs.length > 1 ? qs[qs.length - 2] : null;
+  const primero = qs.length > 2 ? qs[0] : null;
+
+  let numeros = [];
+  for (const [re, nums] of INDICADORES_POR_TEMA) if (re.test(norm)) numeros.push(...nums);
+  if (!numeros.length && /\basist\w*/.test(norm)) numeros = INDICADORES_ASISTENCIA;
+  if (!numeros.length) numeros = INDICATOR_DEFS.filter((d) => d.hasPotential).map((d) => d.number);
+  numeros = [...new Set(numeros)];
+
+  const filas = [];
+  for (const n of numeros) {
+    const def = INDICATOR_DEFS.find((d) => d.number === n);
+    const e = ultimo.indicators?.[String(n)];
+    if (!def || !e) continue;
+    const pUlt = pctForIndicator(ultimo, n);
+    const pAnt = anterior ? pctForIndicator(anterior, n) : null;
+    const pPri = primero ? pctForIndicator(primero, n) : null;
+    const eAnt = anterior?.indicators?.[String(n)];
+    filas.push({
+      n, label: def.label, real: e.real, pot: e.pot, pUlt, pAnt, pPri,
+      realAnt: eAnt ? eAnt.real : null,
+      diff: pUlt !== null && pAnt !== null ? pUlt - pAnt : null,
+    });
+  }
+  const fmt = (f) => {
+    const actual = f.pUlt !== null ? `${f.real}/${f.pot} (${f.pUlt}%)` : `${f.real}`;
+    const vsAnt = f.diff !== null ? ` · vs ${etiquetaTrimestre(anterior)}: ${f.pAnt}% (${f.diff >= 0 ? '+' : ''}${f.diff} pp)`
+      : (f.realAnt !== null && f.realAnt !== undefined ? ` · vs ${etiquetaTrimestre(anterior)}: ${f.realAnt}` : '');
+    const vsPri = f.pPri !== null && f.pUlt !== null ? ` · desde ${etiquetaTrimestre(primero)}: ${f.pPri}% (${f.pUlt - f.pPri >= 0 ? '+' : ''}${f.pUlt - f.pPri} pp)` : '';
+    return `${f.label}: ${actual}${vsAnt}${vsPri}`;
+  };
+  const contexto = `\n--- CRECIMIENTO DEL BARRIO (último trimestre cargado: ${etiquetaTrimestre(ultimo)}; ${qs.length} trimestres en total; "real/potencial (%)" y cambio en puntos porcentuales) ---\n`
+    + filas.map(fmt).join('\n');
+
+  const conDiff = filas.filter((f) => f.diff !== null);
+  const suben = conDiff.filter((f) => f.diff > 0).length;
+  const bajan = conDiff.filter((f) => f.diff < 0).length;
+  const veredicto = !conDiff.length ? ''
+    : suben > bajan ? `📈 En general **vamos mejorando**: ${suben} de ${conDiff.length} indicadores subieron respecto de ${etiquetaTrimestre(anterior)}.`
+      : bajan > suben ? `📉 En general **vamos bajando**: ${bajan} de ${conDiff.length} indicadores bajaron respecto de ${etiquetaTrimestre(anterior)}.`
+        : `↔️ Resultado **mixto**: ${suben} indicadores subieron y ${bajan} bajaron respecto de ${etiquetaTrimestre(anterior)}.`;
+  const fallback = `${veredicto ? veredicto + '\n\n' : ''}**${etiquetaTrimestre(ultimo)}:**\n`
+    + filas.slice(0, 10).map((f) => `• ${f.label}: **${f.pUlt !== null ? f.pUlt + '%' : f.real}**${f.diff !== null ? ` (${f.diff > 0 ? '▲ +' : f.diff < 0 ? '▼ ' : '= '}${f.diff} pp)` : ''}`).join('\n');
+  return { contexto, fallback };
+}
+
+// ----------------------------------------------------------------------
+// ENFOQUE MINISTRACIÓN (cuadrantes) — "¿cómo vamos en el enfoque?".
+// Mismos permisos que GET /api/pastoral-focus: Administrador, presidencia
+// de Cuórum de Élderes (solo hombres) y de Sociedad de Socorro (solo
+// mujeres). Los nombres solo se mandan si se piden explícitamente.
+// ----------------------------------------------------------------------
+const RANGO_CUADRANTE = { Rescatar: 0, Actividad: 1, Enfoque: 1, Retener: 2 };
+const RANGO_ASISTENCIA = { Bajo: 0, Medio: 1, Alto: 2 };
+const DIAS_TENDENCIA = 90;
+
+function contextoMinistracion(norm, usuario, db) {
+  const verH = isMinisteringFocusLeaderHombres(usuario, db);
+  const verM = isMinisteringFocusLeaderMujeres(usuario, db);
+  if (!verH && !verM) {
+    return {
+      contexto: '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por Enfoque Ministración, pero ese módulo está habilitado solo para el Administrador y los líderes de Cuórum de Élderes y Sociedad de Socorro. Explícaselo brevemente, sin inventar datos.',
+      fallback: '🤝 **Enfoque Ministración** está disponible solo para el Administrador y los líderes de Cuórum de Élderes y Sociedad de Socorro.',
+    };
+  }
+  const miembros = (db.directoryMembers || []).filter((m) => (verH && isAdultMale(m)) || (verM && isAdultFemale(m)));
+  const porId = new Map(miembros.map((m) => [m.id, m]));
+  const desde = new Date(Date.now() - DIAS_TENDENCIA * 86400000).toISOString();
+
+  const conteo = Object.fromEntries(CUADRANTES.map((c) => [c, 0]));
+  const asist = { Alto: 0, Medio: 0, Bajo: 0 };
+  let evaluados = 0; let mejoran = 0; let empeoran = 0; let asistSube = 0; let asistBaja = 0;
+  const nombresPor = Object.fromEntries(CUADRANTES.map((c) => [c, []]));
+  const movimientos = [];
+  for (const f of db.pastoralFocus || []) {
+    const m = porId.get(f.memberId);
+    if (!m || !f.asistencia) continue;
+    evaluados += 1;
+    const actual = computeCuadrante(f);
+    conteo[actual] += 1;
+    asist[f.asistencia] = (asist[f.asistencia] || 0) + 1;
+    nombresPor[actual].push(m.name);
+    // Estado de hace ~90 días: el registro de historial MÁS ANTIGUO dentro
+    // del período guarda cómo estaba la persona antes de esos cambios.
+    const cambios = (f.history || []).filter((h) => h.changedAt >= desde).sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+    if (!cambios.length) continue;
+    const antes = cambios[0];
+    const dc = RANGO_CUADRANTE[actual] - RANGO_CUADRANTE[antes.cuadrante];
+    if (dc > 0) mejoran += 1; else if (dc < 0) empeoran += 1;
+    const da = (RANGO_ASISTENCIA[f.asistencia] ?? 0) - (RANGO_ASISTENCIA[antes.asistencia] ?? 0);
+    if (da > 0) asistSube += 1; else if (da < 0) asistBaja += 1;
+    if (antes.cuadrante !== actual) movimientos.push(`${m.name}: ${antes.cuadrante} → ${actual}`);
+  }
+  const quien = verH && verM ? 'hombres y mujeres adultos' : verH ? 'hombres adultos (Cuórum de Élderes)' : 'mujeres adultas (Sociedad de Socorro)';
+  const pideNombres = /\b(quien(es)?|nombres?|lista|cuales|personas)\b/.test(norm);
+
+  let contexto = `\n--- ENFOQUE MINISTRACIÓN (${quien}; ${evaluados} evaluados) ---\n`
+    + `Cuadrantes hoy: ${CUADRANTES.map((c) => `${c} ${conteo[c]}`).join(', ')}.\n`
+    + `Asistencia hoy: Alto ${asist.Alto}, Medio ${asist.Medio}, Bajo ${asist.Bajo}.\n`
+    + `Últimos ${DIAS_TENDENCIA} días: ${mejoran} personas mejoraron de cuadrante, ${empeoran} empeoraron; asistencia subió en ${asistSube} y bajó en ${asistBaja}.\n`
+    + 'Orden de mejor a peor: Retener (asiste y cumple todo) > Enfoque (asiste, le falta algo) / Actividad (cumple todo pero asiste poco) > Rescatar.';
+  if (pideNombres) {
+    contexto += '\n' + CUADRANTES.map((c) => `${c}: ${nombresPor[c].slice(0, 15).join('; ') || '—'}${nombresPor[c].length > 15 ? ` (y ${nombresPor[c].length - 15} más)` : ''}`).join('\n');
+    if (movimientos.length) contexto += `\nCambios recientes: ${movimientos.slice(0, 15).join('; ')}`;
+  }
+  // Entrevistas de ministración del reporte trimestral (indicadores 12 y 13).
+  const qs = sortedQuarters(db.quarterlyStats || []);
+  if (qs.length) {
+    const ult = qs[qs.length - 1]; const ant = qs.length > 1 ? qs[qs.length - 2] : null;
+    const lineas = [verH ? 12 : null, verM ? 13 : null].filter(Boolean).map((n) => {
+      const p = pctForIndicator(ult, n); const pa = ant ? pctForIndicator(ant, n) : null;
+      const def = INDICATOR_DEFS.find((d) => d.number === n);
+      return p === null ? null : `${def.label}: ${p}% en ${etiquetaTrimestre(ult)}${pa !== null ? ` (${etiquetaTrimestre(ant)}: ${pa}%)` : ''}`;
+    }).filter(Boolean);
+    if (lineas.length) contexto += '\n' + lineas.join('\n');
+  }
+
+  const personas = (n, sing, plur) => `${n} persona${n === 1 ? '' : 's'} ${n === 1 ? sing : plur}`;
+  const tendencia = mejoran || empeoran
+    ? (mejoran > empeoran ? `📈 **Vamos mejorando:** en los últimos ${DIAS_TENDENCIA} días ${personas(mejoran, 'subió', 'subieron')} de cuadrante y ${empeoran} ${empeoran === 1 ? 'bajó' : 'bajaron'}.`
+      : mejoran < empeoran ? `📉 **Ojo:** en los últimos ${DIAS_TENDENCIA} días ${personas(empeoran, 'bajó', 'bajaron')} de cuadrante y ${mejoran} ${mejoran === 1 ? 'subió' : 'subieron'}.`
+        : `↔️ En los últimos ${DIAS_TENDENCIA} días ${personas(mejoran, 'subió', 'subieron')} de cuadrante y la misma cantidad bajó.`)
+    : `ℹ️ No hay cambios de cuadrante registrados en los últimos ${DIAS_TENDENCIA} días.`;
+  const fallback = `🤝 **Enfoque Ministración** (${quien}, ${evaluados} evaluados):\n`
+    + CUADRANTES.map((c) => `• ${c}: **${conteo[c]}**`).join('\n') + `\n\n${tendencia}`
+    + (pideNombres ? '\n\n' + CUADRANTES.filter((c) => nombresPor[c].length && (!CUADRANTES.some((x) => norm.includes(normalizeSearchText(x))) || norm.includes(normalizeSearchText(c))))
+      .map((c) => `**${c}:** ${nombresPor[c].slice(0, 15).join(' · ')}${nombresPor[c].length > 15 ? ` (y ${nombresPor[c].length - 15} más)` : ''}`).join('\n\n') : '');
+  return { contexto, fallback };
+}
+
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null) {
   try {
     const db = load();
@@ -999,8 +1162,11 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     const temaEntrevistas = /\bentrevistas?\b/.test(norm);
     const temaAseo = /\b(aseo|limpieza|limpiar)\b/.test(norm);
     const temaTemplo = /\b(recomendacion(es)?|templo|porcentaje|estadisticas?|cumpleanos|miembros)\b/.test(norm);
+    const temaMinistracion = /\b(ministracion|ministrar|ministrantes?|enfoque|cuadrantes?|rescatar|retener)\b/.test(norm);
+    const temaCrecimiento = !temaMinistracion && /\b(asist\w*|sacramental|crecimiento|indicador(es)?|trimestres?|mejorando|empeorando|bajando|subiendo|tendencia|vamos|reactivad\w*|bautism\w*|sellad\w*|investid\w*|conversos?|misional)\b/.test(norm)
+      && !/\b(actividad(es)?|calendario|eventos?|entrevistas?)\b/.test(norm);
     const pideActividades = /\b(actividad(es)?|calendario|eventos?|reunion(es)?)\b/.test(norm);
-    const temaActividades = pideActividades || (!temaEntrevistas && !temaAseo && !temaTemplo
+    const temaActividades = pideActividades || (!temaEntrevistas && !temaAseo && !temaTemplo && !temaMinistracion && !temaCrecimiento
       && (!!orgMencionada || /\b(fin de semana|semana|mes|proxim[oa]s?|hoy|manana|que hay|agenda)\b/.test(norm)));
     const rango = rangoConsulta(norm, mensajeMinusculas, hoyObj);
 
@@ -1087,9 +1253,24 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
       }
     }
 
+    if (temaCrecimiento) {
+      if (usuario && VER_CRECIMIENTO.includes(usuario.role)) {
+        const c = contextoCrecimiento(norm, db);
+        contextoDinamico += c.contexto; respuestaLocalFallback = c.fallback;
+      } else {
+        contextoDinamico += '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por los indicadores de Crecimiento del Barrio, que solo pueden ver los líderes, el secretario de barrio y el Administrador. Explícaselo brevemente, sin inventar datos.';
+        respuestaLocalFallback = '📊 Los indicadores de **Crecimiento del Barrio** están disponibles solo para líderes, el secretario de barrio y el Administrador.';
+      }
+    }
+
+    if (temaMinistracion) {
+      const c = contextoMinistracion(norm, usuario, db);
+      contextoDinamico += c.contexto; respuestaLocalFallback = c.fallback;
+    }
+
     if (contextoDinamico === '') {
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '🐝 ¡Hola! Puedo ayudarte a consultar o **agendar** actividades y entrevistas, revisar los turnos de aseo o verificar recomendaciones del templo. ¿Qué te gustaría hacer?';
+      respuestaLocalFallback = '🐝 ¡Hola! Puedo ayudarte a consultar o **agendar** actividades y entrevistas, revisar los turnos de aseo, ver cómo vamos en **asistencia** y demás indicadores, o en el **Enfoque Ministración**. ¿Qué te gustaría hacer?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1101,7 +1282,8 @@ REGLAS DE COMPORTAMIENTO:
 2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
 3. Pon en **negrita** títulos, nombres y fechas. Usa algún emoji amigable (🐝, 📅, 🧹, 🏛️, 🙋).
 4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
-5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.`;
+5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.
+6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.`;
 
     const redactado = await redactarConIA(systemInstruction, historial, mensaje);
     const resultado = redactado
