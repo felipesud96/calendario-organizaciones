@@ -125,21 +125,28 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
   }
 
- // Ruta del Chat con control de usuario autenticado
+ // Ruta del Chat — requiere sesión iniciada (antes no se exigía: cualquiera,
+  // sin loguearse, podía pedirle al chat que creara actividades). Además,
+  // antes se le pasaba el objeto `usuario` a procesarPreguntaChat() en el
+  // lugar donde debía ir el HISTORIAL de la conversación (el frontend sí lo
+  // mandaba, pero acá se descartaba) — por eso el chat nunca tenía memoria
+  // de mensajes anteriores. Ahora se pasan ambos, cada uno en su lugar.
   if (pathname === '/api/chat' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
         const parsed = JSON.parse(body || '{}');
-        
-        // Extraer usuario desde el token JWT si está presente
+
         const authHeader = req.headers.authorization || '';
         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
         const usuario = token ? await getUserFromToken(token) : null;
+        if (!usuario) {
+          return sendJson(res, 401, { error: 'Necesitas iniciar sesión para usar a Deseret' });
+        }
 
-        // Pasamos el mensaje y el objeto usuario
-        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '', usuario);
+        const historial = Array.isArray(parsed.historial) ? parsed.historial.slice(-6) : [];
+        const respuestaIA = await procesarPreguntaChat(parsed.mensaje || '', historial, usuario);
         return sendJson(res, 200, { respuesta: respuestaIA });
       } catch (error) {
         console.error('Error en endpoint chat IA:', error);
