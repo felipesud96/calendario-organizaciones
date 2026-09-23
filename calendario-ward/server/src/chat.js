@@ -1010,8 +1010,8 @@ function contextoCrecimiento(norm, db) {
 
 // ----------------------------------------------------------------------
 // ENFOQUE MINISTRACIÓN (cuadrantes) — "¿cómo vamos en el enfoque?".
-// Mismos permisos que GET /api/pastoral-focus: Administrador, presidencia
-// de Cuórum de Élderes (solo hombres) y de Sociedad de Socorro (solo
+// Mismos permisos que GET /api/pastoral-focus: Administrador y Obispado
+// (todos), Cuórum de Élderes (solo hombres) y Sociedad de Socorro (solo
 // mujeres). Los nombres solo se mandan si se piden explícitamente.
 // ----------------------------------------------------------------------
 const RANGO_CUADRANTE = { Rescatar: 0, Actividad: 1, Enfoque: 1, Retener: 2 };
@@ -1023,8 +1023,8 @@ function contextoMinistracion(norm, usuario, db) {
   const verM = isMinisteringFocusLeaderMujeres(usuario, db);
   if (!verH && !verM) {
     return {
-      contexto: '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por Enfoque Ministración, pero ese módulo está habilitado solo para el Administrador y los líderes de Cuórum de Élderes y Sociedad de Socorro. Explícaselo brevemente, sin inventar datos.',
-      fallback: '🤝 **Enfoque Ministración** está disponible solo para el Administrador y los líderes de Cuórum de Élderes y Sociedad de Socorro.',
+      contexto: '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por Enfoque Ministración, pero ese módulo está habilitado solo para el Administrador, el Obispado y los líderes de Cuórum de Élderes y Sociedad de Socorro. Explícaselo brevemente, sin inventar datos.',
+      fallback: '🤝 **Enfoque Ministración** está disponible solo para el Administrador, el Obispado y los líderes de Cuórum de Élderes y Sociedad de Socorro.',
     };
   }
   const miembros = (db.directoryMembers || []).filter((m) => (verH && isAdultMale(m)) || (verM && isAdultFemale(m)));

@@ -2138,6 +2138,8 @@ const MINISTERING_FOCUS_ORGS = ['Cuórum de Élderes', 'Sociedad de Socorro'];
 function canSeeMinisteringFocusTab() {
   if (!state.user) return false;
   if (state.user.role === 'admin') return true;
+  // El Obispado preside todas las organizaciones: ve a hombres y mujeres.
+  if (isObispadoUser()) return true;
   return state.user.role === 'leader' && !!(state.user.organization && MINISTERING_FOCUS_ORGS.includes(state.user.organization.name));
 }
 

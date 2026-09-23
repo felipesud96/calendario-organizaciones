@@ -45,7 +45,8 @@ export function isMinisteringFocusLeaderHombres(user, data) {
   if (user.role === 'admin') return true;
   if (user.role !== 'leader') return false;
   const org = data.organizations.find((o) => o.id === Number(user.organizationId));
-  return !!org && org.name === 'Cuórum de Élderes';
+  // El Obispado preside todas las organizaciones: ve y edita ambas mitades.
+  return !!org && (org.name === 'Cuórum de Élderes' || org.name === 'Obispado');
 }
 
 export function isMinisteringFocusLeaderMujeres(user, data) {
@@ -53,12 +54,13 @@ export function isMinisteringFocusLeaderMujeres(user, data) {
   if (user.role === 'admin') return true;
   if (user.role !== 'leader') return false;
   const org = data.organizations.find((o) => o.id === Number(user.organizationId));
-  return !!org && org.name === 'Sociedad de Socorro';
+  // El Obispado preside todas las organizaciones: ve y edita ambas mitades.
+  return !!org && (org.name === 'Sociedad de Socorro' || org.name === 'Obispado');
 }
 
 function forbiddenMinisteringFocus(res) {
   return sendJson(res, 403, {
-    error: 'Enfoque Ministración está habilitado solo para los líderes de Cuórum de Élderes (hombres) y Sociedad de Socorro (mujeres)',
+    error: 'Enfoque Ministración está habilitado solo para el Obispado y los líderes de Cuórum de Élderes (hombres) y Sociedad de Socorro (mujeres)',
   });
 }
 
