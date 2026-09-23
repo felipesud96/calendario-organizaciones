@@ -239,7 +239,9 @@ export function initChatWidget() {
           b.type = 'button';
           b.className = `deseret-chip${/confirmar/i.test(o.value) ? ' primario' : ''}`;
           b.textContent = o.label;
-          b.addEventListener('click', () => enviar(o.value, o.label));
+          // Botones especiales: "📇 Ver ficha completa" abre la Ficha 360° de la app.
+          if (o.ficha && typeof window.abrirFichaPersona === 'function') b.addEventListener('click', () => window.abrirFichaPersona(o.ficha));
+          else b.addEventListener('click', () => enviar(o.value, o.label));
           chips.appendChild(b);
         });
         div.appendChild(chips);
@@ -259,6 +261,34 @@ export function initChatWidget() {
           });
         });
         acciones.appendChild(copiar);
+        // Punto 10: 👍/👎 para saber qué respuestas sirven (se guarda sin nombre).
+        if (m.pregunta) {
+          for (const [emoji, valor] of [['👍', 1], ['👎', -1]]) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn-action';
+            b.textContent = emoji;
+            b.title = valor === 1 ? 'Me sirvió' : 'No me sirvió';
+            if (m.valorado) { b.disabled = true; if (m.valorado === valor) b.style.background = 'var(--celeste-light, #e0f2fe)'; }
+            b.addEventListener('click', async () => {
+              m.valorado = valor;
+              guardar();
+              acciones.querySelectorAll('.btn-valor').forEach((x) => { x.disabled = true; });
+              b.style.background = 'var(--celeste-light, #e0f2fe)';
+              try {
+                let token = null;
+                try { token = localStorage.getItem('cow_token'); } catch { token = null; }
+                await fetch('/api/chat/feedback', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                  body: JSON.stringify({ mensaje: m.pregunta, respuesta: m.texto, valor }),
+                });
+              } catch { /* sin conexión: no importa */ }
+            });
+            b.classList.add('btn-valor');
+            acciones.appendChild(b);
+          }
+        }
         div.appendChild(acciones);
       }
     }
@@ -348,7 +378,7 @@ export function initChatWidget() {
       const data = await response.json();
       const { respuesta, error, ...extra } = data || {};
       const texto = respuesta || error || 'No pude procesar la respuesta.';
-      msgBot = { role: 'bot', texto, extra, error: !respuesta };
+      msgBot = { role: 'bot', texto, extra, error: !respuesta, pregunta: text };
       estado.historial.push({ user: text, bot: texto });
     } catch (e) {
       msgBot = { role: 'bot', texto: 'Error de conexión. Revisa tu internet e intenta de nuevo.', error: true };

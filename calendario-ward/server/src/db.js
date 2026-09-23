@@ -309,8 +309,71 @@ export function load() {
     if (!Array.isArray(c.closures)) { c.closures = []; migrated = true; }
     if (!Array.isArray(c.reopenLog)) { c.reopenLog = []; migrated = true; }
   }
+  // Vincular por persona, no por nombre (App 5): varias partes de la app
+  // cruzaban datos comparando texto ("entrevistador = nombre", "miembro =
+  // nombre escrito"), y bastaba una tilde o un espacio distinto para que no
+  // calzara. Cada entrevista y solicitud guarda ahora también el ID de la
+  // persona: `interviewerUserId` (cuenta del líder que entrevista) y
+  // `memberDirectoryId` (persona del Directorio). Se calculan solos a partir
+  // del nombre — al cargar, para lo existente, y para cualquier registro
+  // nuevo o cuyo nombre cambió (por eso se guarda con qué nombre se
+  // vinculó: `…VinculadoA`). Si quien lo creó ya dejó el ID puesto (Deseret,
+  // el enlace público), se respeta.
+  if (vincularPorId(data)) migrated = true;
   if (migrated) save(data);
   return data;
+}
+
+export function normNombre(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Mismo conjunto de palabras en cualquier orden ("Jaime Cuenca" ≠ "Cuenca
+// Rodriguez, Jaime Ariel" a propósito: acá solo se vincula lo inequívoco;
+// las coincidencias parciales las sugiere Deseret / la bandeja y decide
+// una persona).
+const clavePalabras = (s) => normNombre(s).split(' ').filter(Boolean).sort().join(' ');
+
+function vincularPorId(data) {
+  let cambio = false;
+  const usuariosPorClave = new Map();
+  for (const u of data.users || []) {
+    const k = clavePalabras(u.name);
+    if (!k) continue;
+    usuariosPorClave.set(k, usuariosPorClave.has(k) ? null : u); // null = ambiguo
+  }
+  const dirPorClave = new Map();
+  for (const m of data.directoryMembers || []) {
+    const k = clavePalabras(m.name);
+    if (!k) continue;
+    dirPorClave.set(k, dirPorClave.has(k) ? null : m);
+  }
+  const vincular = (item, campoNombre, campoId, campoPara, mapa) => {
+    const nombre = item[campoNombre] || '';
+    if (item[campoPara] === nombre && item[campoId] !== undefined) return;
+    // Un ID puesto a propósito (sin marca de con qué nombre) se respeta y
+    // solo se le agrega la marca.
+    if (item[campoId] && item[campoPara] === undefined) { item[campoPara] = nombre; cambio = true; return; }
+    const encontrado = nombre ? mapa.get(clavePalabras(nombre)) : null;
+    item[campoId] = encontrado ? encontrado.id : null;
+    item[campoPara] = nombre;
+    cambio = true;
+  };
+  for (const iv of data.interviews || []) {
+    vincular(iv, 'interviewerName', 'interviewerUserId', 'interviewerVinculadoA', usuariosPorClave);
+    vincular(iv, 'memberName', 'memberDirectoryId', 'memberDirectorioVinculadoA', dirPorClave);
+  }
+  for (const r of data.interviewRequests || []) {
+    vincular(r, 'memberName', 'memberDirectoryId', 'memberDirectorioVinculadoA', dirPorClave);
+  }
+  for (const t of data.talks || []) {
+    vincular(t, 'speakerName', 'speakerDirectoryId', 'speakerDirectorioVinculadoA', dirPorClave);
+  }
+  for (const c of data.welfareCases || []) {
+    vincular(c, 'memberName', 'memberDirectoryId', 'memberDirectorioVinculadoA', dirPorClave);
+  }
+  return cambio;
 }
 
 // Punto 4 (ampliación) — con quién se puede agendar una entrevista, según el
@@ -454,6 +517,7 @@ export function withDb(fn) {
   const result = queue.then(() => {
     const data = load();
     const out = fn(data);
+    vincularPorId(data); // los registros nuevos quedan vinculados al tiro
     save(data);
     return out;
   });

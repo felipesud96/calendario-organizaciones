@@ -1376,3 +1376,48 @@ tr.wg-cat-row td {
 /* Interruptor ☀️/🌙 de la barra superior. */
 .theme-toggle-btn .icon-svg { transition: transform 0.2s ease; }
 .theme-toggle-btn:hover .icon-svg { transform: rotate(15deg); }
+
+/* ---------- 🏠 Mi semana (App 3) ---------- */
+.home-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.home-kpi {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; cursor: pointer;
+  padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--white); color: var(--ink);
+  font: inherit; box-shadow: var(--shadow);
+}
+.home-kpi:hover { border-color: var(--celeste); }
+.home-kpi[data-empty] { opacity: .65; }
+.home-kpi-n { font-size: 26px; font-weight: 800; line-height: 1.1; color: var(--celeste-dark); }
+.home-kpi-l { font-size: 13px; font-weight: 600; }
+.home-kpi-s { font-size: 11px; color: var(--ink-soft); }
+.home-kpi-warn .home-kpi-n { color: #b45309; }
+.home-kpi-bad { border-color: var(--danger); }
+.home-kpi-bad .home-kpi-n, .home-kpi-bad .home-kpi-s { color: var(--danger); }
+.home-card { padding: 14px; margin-bottom: 14px; }
+.home-card-t { font-weight: 700; margin-bottom: 8px; }
+.home-dia { margin-bottom: 12px; }
+.home-dia-t { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-soft); margin: 6px 0; }
+.home-dia-bad .home-dia-t { color: var(--danger); }
+.home-item {
+  display: flex; align-items: stretch; gap: 10px; width: 100%; text-align: left; cursor: pointer; margin-bottom: 6px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--white); color: var(--ink); font: inherit; padding: 0; overflow: hidden;
+}
+.home-item:hover { border-color: var(--c); }
+.home-item-bar { width: 5px; flex: none; background: var(--c); }
+.home-item-hora { flex: none; width: 46px; padding: 9px 0; font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+.home-item-main { padding: 8px 10px 8px 0; min-width: 0; display: flex; flex-direction: column; }
+.home-item-t { font-weight: 600; font-size: 14px; }
+.home-item-s { font-size: 12px; color: var(--ink-soft); }
+
+/* ---------- 📇 Ficha 360° (App 1) ---------- */
+.ficha-sec { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.ficha-sec-t { font-weight: 700; margin-bottom: 4px; }
+.ficha-sec-r { font-size: 13px; color: var(--ink-soft); margin-bottom: 6px; }
+.ficha-dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; font-size: 13px; }
+.ficha-dl dt { color: var(--ink-soft); }
+.ficha-dl dd { margin: 0; }
+.ficha-items { display: flex; flex-direction: column; gap: 6px; }
+.ficha-item { border-left: 4px solid var(--c); padding: 4px 8px; background: var(--celeste-lighter); border-radius: 6px; font-size: 13px; }
+.ficha-item-f { font-size: 11px; color: var(--ink-soft); }
+.ficha-item-t { font-weight: 600; }
+.ficha-item-e { font-weight: 400; font-size: 12px; }
+.ficha-item-d { font-size: 12px; color: var(--ink-soft); font-style: italic; }

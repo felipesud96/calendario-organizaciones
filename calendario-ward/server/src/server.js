@@ -1,6 +1,8 @@
 import { procesarPreguntaChat } from './chat.js';
 import http from 'http';
 import fs from 'fs';
+import zlib from 'zlib';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { URL } from 'url';
@@ -27,6 +29,8 @@ import { registerSearchRoutes } from './routes/search.js';
 import { registerNotificationsSummaryRoutes } from './routes/notifications-summary.js';
 import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
 import { registerPublicBookingRoutes } from './routes/publicBooking.js';
+import { registerPersonasSemanaRoutes } from './routes/personasSemana.js';
+import { startWeeklySummaryScheduler } from './semana.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
 import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
@@ -87,6 +91,7 @@ registerSearchRoutes(router);
 registerNotificationsSummaryRoutes(router);
 registerInterviewRequestRoutes(router);
 registerPublicBookingRoutes(router);
+registerPersonasSemanaRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
@@ -106,6 +111,63 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
+// ----------------------------------------------------------------------
+// Archivos estáticos, más rápidos en el celular (App 10)
+// ----------------------------------------------------------------------
+// app.js pesa ~700 KB. Antes se enviaba completo y sin comprimir en cada
+// visita. Ahora:
+//   • se comprime con Brotli o gzip (según lo que acepte el navegador):
+//     el JavaScript y el CSS bajan a ~20-25% de su tamaño;
+//   • cada archivo lleva un ETag (huella del contenido): si el navegador ya
+//     tiene esa misma versión, el servidor responde "304 sin cambios" en
+//     vez de volver a mandarla;
+//   • las imágenes quedan en caché del navegador por una semana.
+// La versión comprimida se guarda en memoria y se recalcula sola cuando el
+// archivo cambia (deploy nuevo).
+const COMPRIMIBLES = new Set(['.html', '.js', '.css', '.json', '.svg', '.webmanifest']);
+const cacheEstaticos = new Map(); // ruta -> { mtimeMs, etag, raw, br, gz }
+
+function prepararEstatico(filePath) {
+  const st = fs.statSync(filePath);
+  const prev = cacheEstaticos.get(filePath);
+  if (prev && prev.mtimeMs === st.mtimeMs) return prev;
+  const raw = fs.readFileSync(filePath);
+  const ext = path.extname(filePath);
+  const entry = {
+    mtimeMs: st.mtimeMs,
+    etag: `"${crypto.createHash('sha1').update(raw).digest('base64url').slice(0, 20)}"`,
+    raw,
+    br: COMPRIMIBLES.has(ext) && raw.length > 1024 ? zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } }) : null,
+    gz: COMPRIMIBLES.has(ext) && raw.length > 1024 ? zlib.gzipSync(raw, { level: 9 }) : null,
+  };
+  cacheEstaticos.set(filePath, entry);
+  return entry;
+}
+
+function enviarEstatico(req, res, filePath) {
+  const e = prepararEstatico(filePath);
+  const ext = path.extname(filePath);
+  const headers = {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    ETag: e.etag,
+    // HTML/JS/CSS no llevan versión en el nombre: se revalidan siempre
+    // (barato gracias al ETag). Imágenes e íconos: una semana.
+    'Cache-Control': ['.png', '.ico', '.jpg', '.jpeg', '.webp'].includes(ext) ? 'public, max-age=604800' : 'no-cache',
+    Vary: 'Accept-Encoding',
+  };
+  if (req.headers['if-none-match'] === e.etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  const acepta = String(req.headers['accept-encoding'] || '');
+  let cuerpo = e.raw;
+  if (e.br && /\bbr\b/.test(acepta)) { cuerpo = e.br; headers['Content-Encoding'] = 'br'; }
+  else if (e.gz && /\bgzip\b/.test(acepta)) { cuerpo = e.gz; headers['Content-Encoding'] = 'gzip'; }
+  headers['Content-Length'] = cuerpo.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : cuerpo);
+}
+
 function serveStatic(req, res, pathname) {
   // Página pública para pedir entrevista sin cuenta (ver routes/publicBooking.js):
   // /agendar/<token> y /agendar/estado/<token> sirven la misma página liviana.
@@ -116,24 +178,16 @@ function serveStatic(req, res, pathname) {
     res.writeHead(400);
     return res.end('Ruta inválida');
   }
-  fs.readFile(filePath, (err, content) => {
-    if (err) {
+  try {
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       // SPA fallback: cualquier ruta no encontrada sirve index.html
-      const indexPath = path.join(CLIENT_DIR, 'index.html');
-      fs.readFile(indexPath, (err2, indexContent) => {
-        if (err2) {
-          res.writeHead(404);
-          return res.end('No encontrado');
-        }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(indexContent);
-      });
-      return;
+      filePath = path.join(CLIENT_DIR, 'index.html');
     }
-    const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(content);
-  });
+    enviarEstatico(req, res, filePath);
+  } catch (err) {
+    res.writeHead(404);
+    res.end('No encontrado');
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -236,6 +290,7 @@ server.listen(PORT, () => {
   console.log(`Servidor de OrganizaSion escuchando en http://localhost:${PORT}`);
   console.log(`Sirviendo frontend estático desde: ${CLIENT_DIR}`);
   startReminderScheduler();
+  startWeeklySummaryScheduler();
   startStakeSyncScheduler();
   startAchievementsScheduler();
   startBackupScheduler();

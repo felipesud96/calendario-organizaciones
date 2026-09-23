@@ -74,7 +74,7 @@ function liderPorToken(data, t) {
 }
 
 // Bloques libres del líder en los próximos DIAS_ADELANTE días.
-function bloquesLibres(data, u, org) {
+export function bloquesLibres(data, u, org) {
   const ventanas = u.interviewAvailability || [];
   if (!ventanas.length) return [];
   const { fecha: hoy, minutos: ahora } = ahoraEnChile();
@@ -82,7 +82,8 @@ function bloquesLibres(data, u, org) {
   const ocupados = [
     ...data.interviews
       .filter((iv) => iv.status === 'scheduled' && Number(iv.organizationId) === Number(org.id)
-        && iv.interviewerName === u.name && iv.date >= hoy && iv.date <= hasta)
+        && (iv.interviewerUserId ? Number(iv.interviewerUserId) === Number(u.id) : iv.interviewerName === u.name)
+        && iv.date >= hoy && iv.date <= hasta)
       .map((iv) => ({ date: iv.date, startTime: iv.startTime, endTime: iv.endTime || null })),
     ...(data.interviewRequests || [])
       .filter((r) => r.status === 'pending' && Number(r.targetLeaderUserId) === Number(u.id) && r.date >= hoy && r.date <= hasta)

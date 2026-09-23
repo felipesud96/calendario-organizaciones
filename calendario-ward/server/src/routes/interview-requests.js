@@ -17,11 +17,11 @@ function sugerenciasPara(r, data) {
   const tel = ultimos8(r.memberPhone);
   if (tel.length === 8) {
     for (const u of data.users) {
-      if (u.role !== 'admin' && ultimos8(u.phone) === tel) lista.push({ name: u.name, userId: u.id, porTelefono: true });
+      if (u.role !== 'admin' && ultimos8(u.phone) === tel) lista.push({ name: u.name, userId: u.id, directoryId: null, porTelefono: true });
     }
   }
   for (const c of buscarMiembros(r.nombreEscrito || r.memberName, data)) {
-    if (!lista.some((x) => x.name === c.name)) lista.push({ name: c.name, userId: c.userId || null, porTelefono: false });
+    if (!lista.some((x) => x.name === c.name)) lista.push({ name: c.name, userId: c.userId || null, directoryId: c.directoryId || null, porTelefono: false });
   }
   return lista.slice(0, 5);
 }
@@ -43,17 +43,20 @@ function isoDatePlusDays(days) {
 // libre, no hay un interviewerUserId) — funciona bien mientras el nombre se
 // escriba igual que el del líder, que es lo que hace el flujo normal de la
 // app (se precompleta solo).
-function busyRangesFor(data, organizationId, leaderName) {
+function busyRangesFor(data, organizationId, leaderName, leaderId = null) {
   if (!leaderName) return [];
   const todayIso = isoDatePlusDays(0);
   const limitIso = isoDatePlusDays(AVAILABILITY_WINDOW_DAYS);
   return data.interviews
     .filter((iv) => iv.status === 'scheduled' && Number(iv.organizationId) === Number(organizationId)
-      && iv.interviewerName === leaderName && iv.date >= todayIso && iv.date <= limitIso)
+      // Por ID cuando la entrevista ya está vinculada al líder (App 5); por
+      // nombre solo para las que todavía no se pudieron vincular.
+      && (iv.interviewerUserId ? Number(iv.interviewerUserId) === Number(leaderId) : iv.interviewerName === leaderName)
+      && iv.date >= todayIso && iv.date <= limitIso)
     .map((iv) => ({ date: iv.date, startTime: iv.startTime, endTime: iv.endTime || null }));
 }
-function hasSchedulingConflict(data, organizationId, leaderName, date, startTime, endTime) {
-  return busyRangesFor(data, organizationId, leaderName)
+function hasSchedulingConflict(data, organizationId, leaderName, date, startTime, endTime, leaderId = null) {
+  return busyRangesFor(data, organizationId, leaderName, leaderId)
     .some((b) => b.date === date && timesOverlap(startTime, endTime, b.startTime, b.endTime));
 }
 
@@ -156,7 +159,7 @@ export function registerInterviewRequestRoutes(router) {
             calling: u.calling || null,
             callingLabel: callingLabel(o.name, u.calling),
             availability: u.interviewAvailability || [],
-            busy: busyRangesFor(data, o.id, u.name),
+            busy: busyRangesFor(data, o.id, u.name, u.id),
           })),
         };
       });
@@ -195,7 +198,7 @@ export function registerInterviewRequestRoutes(router) {
         && !interviewAvailabilityMatches(targetLeader.interviewAvailability, date, startTime)) {
         return sendJson(res, 400, { error: `${targetLeader.name} no atiende entrevistas ese día/horario — elige uno de sus horarios disponibles` });
       }
-      if (hasSchedulingConflict(data0, organizationId, targetLeader.name, date, startTime, endTime)) {
+      if (hasSchedulingConflict(data0, organizationId, targetLeader.name, date, startTime, endTime, targetLeader.id)) {
         return sendJson(res, 400, { error: `${targetLeader.name} ya tiene una entrevista agendada ese horario — elige otro` });
       }
     }
@@ -298,6 +301,10 @@ export function registerInterviewRequestRoutes(router) {
         location,
         sala,
         interviewerName: body?.interviewerName || r.targetLeaderName || '',
+        // Si queda con el mismo líder al que se pidió, se vincula por ID.
+        ...((!body?.interviewerName || body.interviewerName === r.targetLeaderName) && r.targetLeaderUserId
+          ? { interviewerUserId: r.targetLeaderUserId } : {}),
+        ...(r.memberDirectoryId ? { memberDirectoryId: r.memberDirectoryId } : {}),
         interviewerEmail: body?.interviewerEmail || '',
         interviewerPhone: body?.interviewerPhone || '',
         date,
@@ -354,6 +361,7 @@ export function registerInterviewRequestRoutes(router) {
       if (!r.nombreEscrito) r.nombreEscrito = r.memberName;
       r.memberName = elegido.name;
       r.memberUserId = elegido.userId || null;
+      if (elegido.directoryId) { r.memberDirectoryId = elegido.directoryId; r.memberDirectorioVinculadoA = elegido.name; }
       r.vinculadoDirectorio = true;
     });
     const data = load();

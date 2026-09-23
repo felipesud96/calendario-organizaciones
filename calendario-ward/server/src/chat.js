@@ -7,6 +7,8 @@ import { isObispadoLeader } from './routes/stake.js';
 import { INDICATOR_DEFS, sortedQuarters, pctForIndicator } from './wardGrowth.js';
 import { computeCuadrante, isAdultMale, isAdultFemale, CUADRANTES } from './pastoralFocus.js';
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
+import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES } from './deseretAcciones.js';
+import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
 
 // Cache local en memoria para respuestas ultrarrápidas (<10 ms) — solo para
 // preguntas de SOLO LECTURA (ver MÓDULO 2 más abajo). Nunca se usa para
@@ -331,7 +333,7 @@ export function buscarMiembros(nombre, data) {
     const yaEsta = vistos.has(norm) || resultado.some((r) => r.userId && palabrasDe(m.name).every((w) => palabrasDe(r.name).includes(w)));
     if (yaEsta) continue;
     vistos.add(norm);
-    resultado.push({ name: m.name, userId: null });
+    resultado.push({ name: m.name, userId: null, directoryId: m.id });
   }
   return resultado;
 }
@@ -539,7 +541,7 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
     const primeraPalabra = normalizeSearchText(mensajeMin).split(/\s+/)[0];
     if (num && d.opciones[Number(num[1]) - 1]) {
       const elegido = d.opciones[Number(num[1]) - 1];
-      d.memberName = elegido.name; d.memberUserId = elegido.userId; d.miembroResuelto = true;
+      d.memberName = elegido.name; d.memberUserId = elegido.userId; d.memberDirectoryId = elegido.directoryId || null; d.miembroResuelto = true;
     } else if (/^(ninguno|ninguna|ningun)$/.test(primeraPalabra)) {
       d.miembroResuelto = true; // se deja el nombre tal como lo escribió
     } else if (nombreDesdeRespuesta(mensaje)) {
@@ -583,9 +585,10 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
     if (encontrados.length === 1) {
       d.memberName = encontrados[0].name;
       d.memberUserId = encontrados[0].userId;
+      d.memberDirectoryId = encontrados[0].directoryId || null;
       d.miembroResuelto = true;
     } else if (encontrados.length > 1) {
-      d.opciones = encontrados.slice(0, 8).map(({ name, userId }) => ({ name, userId }));
+      d.opciones = encontrados.slice(0, 8).map(({ name, userId, directoryId }) => ({ name, userId, directoryId }));
       const extra = encontrados.length > 8 ? `\n_(y ${encontrados.length - 8} más — si no está, escribe el nombre más completo)_` : '';
       return preguntar('elegirMiembro', `🔎 Encontré varias personas que coinciden con **${d.memberName}**:\n\n${listaOpciones(d.opciones)}${extra}\n\nElige una, o "ninguno" para dejarlo como lo escribiste.`, {
         opciones: opcionesMiembros(d.opciones),
@@ -647,6 +650,8 @@ async function guardarEntrevista(d, usuario, data) {
       location: '',
       sala: '',
       interviewerName: usuario.name || '',
+      interviewerUserId: usuario.id,
+      ...(d.memberDirectoryId ? { memberDirectoryId: d.memberDirectoryId } : {}),
       interviewerEmail: '',
       interviewerPhone: '',
       date: d.fecha,
@@ -765,7 +770,13 @@ const HERRAMIENTAS_AGENDAR = [
   },
 ];
 
-const PARECE_AGENDAR = /\b(agend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\w*|crea\w*|agreg\w*|a[nñ]ad\w*|ponme|pon|coordin\w*|organiz\w*|calendariz\w*)\b/;
+const PARECE_AGENDAR = /\b(agend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\w*|crea\w*|agreg\w*|a[nñ]ad\w*|ponme|pon|coordin\w*|organiz\w*|calendariz\w*|compromiso\w*|solicitud\w*|cancel\w*|posterg\w*|dej\w*|muev\w*|mov\w*|pasa\w*|cambi\w*|marc\w*|confirm\w*|rechaz\w*|complet\w*|reprogram\w*)\b/;
+
+function tipoDeHerramienta(nombre) {
+  if (nombre === 'agendar_entrevista') return 'entrevista';
+  if (nombre === 'agendar_actividad') return 'actividad';
+  return 'accion';
+}
 
 async function extraerIntencionConIA(mensaje, hoyObj, data) {
   const provs = proveedoresIA();
@@ -775,7 +786,7 @@ async function extraerIntencionConIA(mensaje, hoyObj, data) {
 Hoy es ${DIAS_NOMBRE[hoyObj.getDay()]} ${toISO(hoyObj)}. "El viernes" = el próximo viernes a partir de hoy (o hoy si hoy es viernes).
 "8 de la noche" = 20:00; "después de la sacramental" no es una hora exacta: omite la hora.
 Organizaciones: ${(data.organizations || []).map((o) => o.name).join(', ')}.
-Si el usuario quiere AGENDAR algo, llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
+Si el usuario quiere AGENDAR algo, o modificar algo que ya existe (reprogramar, cancelar o marcar una entrevista, confirmar o rechazar una solicitud, completar o crear un compromiso), llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
 Si solo pregunta o conversa, no llames ninguna función.`;
 
   if (gemini) {
@@ -787,7 +798,7 @@ Si solo pregunta o conversa, no llames ninguna función.`;
           systemInstruction: sistema,
           temperature: 0,
           tools: [{
-            functionDeclarations: HERRAMIENTAS_AGENDAR.map((h) => ({
+            functionDeclarations: [...HERRAMIENTAS_AGENDAR, ...HERRAMIENTAS_ACCIONES].map((h) => ({
               name: h.function.name,
               description: h.function.description,
               parametersJsonSchema: h.function.parameters,
@@ -797,7 +808,7 @@ Si solo pregunta o conversa, no llames ninguna función.`;
       });
       const call = r?.functionCalls?.[0];
       if (!call) return { tipo: null };
-      return { tipo: call.name === 'agendar_entrevista' ? 'entrevista' : 'actividad', args: call.args || {} };
+      return { tipo: tipoDeHerramienta(call.name), herramienta: call.name, args: call.args || {} };
     } catch (err) {
       console.warn('⚠️ Gemini no pudo interpretar el pedido (paso a Groq/Cerebras):', err.message);
     }
@@ -807,7 +818,7 @@ Si solo pregunta o conversa, no llames ninguna función.`;
     try {
       const r = await llamarOpenAICompatible(prov, {
         messages: [{ role: 'system', content: sistema }, { role: 'user', content: mensaje }],
-        tools: HERRAMIENTAS_AGENDAR,
+        tools: [...HERRAMIENTAS_AGENDAR, ...HERRAMIENTAS_ACCIONES],
         tool_choice: 'auto',
         temperature: 0,
         max_tokens: 300,
@@ -816,7 +827,7 @@ Si solo pregunta o conversa, no llames ninguna función.`;
       if (!call) return { tipo: null };
       let args = {};
       try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
-      return { tipo: call.function.name === 'agendar_entrevista' ? 'entrevista' : 'actividad', args };
+      return { tipo: tipoDeHerramienta(call.function.name), herramienta: call.function.name, args };
     } catch (err) {
       console.warn(`⚠️ ${prov.nombre} no pudo interpretar el pedido:`, err.message);
     }
@@ -1179,13 +1190,17 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
     // Un pedido nuevo ("organiza un asado…") reemplaza al borrador en curso.
     const pedidoNuevo = /^(?:(?:quiero|necesito|puedes|podrias|me|por favor)\s+)*(agend|anot|organiz|program|crea|reserv|agreg|anad)\w*/.test(norm);
-    if (borrador && !matchAgendar && !pedidoNuevo) {
+    const consultaExtra = detectarConsultaExtra(norm);
+    if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra) {
       if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
         borrarBorrador(usuario);
         return resp('👌 Listo, cancelé ese agendamiento. No se guardó nada.');
       }
       const esPreguntaNueva = /^\s*(¿|qu[ée]\s|cu[aá]l|cu[aá]nt|cu[aá]ndo|d[oó]nde|qui[ée]n(es)?\s+(tiene|hay|son)|mu[ée]strame|hay\s)/i.test(mensajeMinusculas);
       if (!esPreguntaNueva) {
+        if (borrador.tipo === 'accion') {
+          return await manejarAccion({ mensaje, mensajeMin: mensajeMinusculas, usuario, hoyObj, borrador });
+        }
         if (borrador.tipo === 'entrevista') {
           return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
         }
@@ -1194,10 +1209,27 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
       borrarBorrador(usuario);
     }
 
+    // 1a-bis. Consultas especiales: ficha de persona, horarios libres,
+    // preparar una reunión, "mi semana", valoraciones (ver deseretExtra.js).
+    if (consultaExtra) {
+      borrarBorrador(usuario);
+      const r = await manejarConsultaExtra(consultaExtra, { mensaje, norm, usuario, hoyObj, historial });
+      if (r) return r;
+    }
+
     // 1b. Pedido nuevo: primero la IA (entiende frases libres), y si no hay
     // IA configurada o no respondió, las reglas de siempre.
-    if (usuario && (matchAgendar || PARECE_AGENDAR.test(norm))) {
+    const accionRegla = usuario ? detectarAccion(norm) : null;
+    if (usuario && (matchAgendar || accionRegla || PARECE_AGENDAR.test(norm))) {
       const intencion = await extraerIntencionConIA(mensaje, hoyObj, db);
+      if (intencion && intencion.tipo === 'accion') {
+        borrarBorrador(usuario);
+        return await manejarAccion({ accion: intencion.herramienta, args: intencion.args, mensaje, mensajeMin: mensajeMinusculas, usuario, hoyObj });
+      }
+      if (accionRegla) {
+        borrarBorrador(usuario);
+        return await manejarAccion({ accion: accionRegla, mensaje, mensajeMin: mensajeMinusculas, usuario, hoyObj });
+      }
       if (intencion && intencion.tipo) {
         borrarBorrador(usuario);
         const previo = borradorDesdeIA(intencion, db, hoyObj);
@@ -1339,8 +1371,9 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     }
 
     if (contextoDinamico === '') {
+      registrarSinRespuesta(mensaje).catch(() => {});
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '🐝 ¡Hola! Puedo ayudarte a consultar o **agendar** actividades y entrevistas, revisar los turnos de aseo, ver cómo vamos en **asistencia** y demás indicadores, o en el **Enfoque Ministración**. ¿Qué te gustaría hacer?';
+      respuestaLocalFallback = '🐝 ¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos, decirte qué tienes **esta semana**, sugerirte **horarios libres**, mostrarte la **ficha** de una persona, **prepararte una reunión** y contarte cómo vamos en **asistencia** y en el **Enfoque Ministración**. ¿Qué necesitas?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1369,3 +1402,12 @@ REGLAS DE COMPORTAMIENTO:
     return resp('🐝 Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.');
   }
 }
+
+
+// Utilidades compartidas con deseretAcciones.js / deseretExtra.js.
+export {
+  resp, fechaLegible, parseFecha, parseHora, normalizeSearchText, palabrasDe,
+  guardarBorrador, borrarBorrador, leerBorrador, OPCIONES_CONFIRMAR, ES_AFIRMATIVO, vaciarCache,
+  toISO, opcionesFecha, OPCIONES_HORA, orgPorId, sumarDias, hoyEnChile, DIAS_NOMBRE,
+  redactarConIA, filtrarAlucinacion, contextoCrecimiento, contextoMinistracion,
+};

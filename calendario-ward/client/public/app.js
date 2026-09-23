@@ -22,7 +22,9 @@ const state = {
   token: localStorage.getItem('cow_token') || null,
   user: null,
   organizations: [],
-  view: 'calendar',
+  // App 3: la pantalla de inicio es "Mi semana". ?vista=<pestaña> (ej.
+  // desde la notificación del resumen semanal) abre directo esa pestaña.
+  view: (() => { try { return new URLSearchParams(location.search).get('vista') || 'home'; } catch (e) { return 'home'; } })(),
   calMonth: startOfMonth(new Date()),
   activeOrgIds: null, // null = todas
   events: [],
@@ -2154,6 +2156,7 @@ function canSeeMinisteringFocusTab() {
 // `label` de siempre ya trae su propio emoji al principio (Bienestar), para
 // no repetirlo junto al ícono de la barra.
 const TAB_DEFS = {
+  home: { label: 'Mi semana', icon: '🏠', navLabel: 'Inicio', visible: () => !!state.user },
   calendar: { label: 'Calendario', icon: '📅', visible: () => true },
   myActivities: { label: 'Mis Actividades', icon: '📌', visible: canSeeMyActivitiesTab },
   interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
@@ -2183,7 +2186,7 @@ function tabOrderFor() {
     // Panel de Obispado ya no está acá (ver ícono junto a la lupa/campana) —
     // para este perfil, Reuniones y Consejos + Asignaciones (cadencia
     // semanal) van primero, Estadísticas al final por ser lo más ocasional.
-    return ['calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
+    return ['home', 'calendar', 'meetings', 'welfare', 'cleaning', 'interviews', 'myActivities', 'budget', 'stats', 'wardGrowth', 'admin'];
   }
   if (canSeeInterviewsTab()) {
     // Líder de una organización que agenda entrevistas (Cuórum de Élderes,
@@ -2191,11 +2194,11 @@ function tabOrderFor() {
     // las más accionables día a día. Bienestar (Punto 51) va justo después
     // de Reuniones — solo la presidencia (isPresident) de estas mismas dos
     // organizaciones llega a verlo de verdad (canSeeWelfareTab lo filtra).
-    return ['calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats', 'wardGrowth'];
+    return ['home', 'calendar', 'myActivities', 'interviews', 'meetings', 'welfare', 'budget', 'stats', 'wardGrowth'];
   }
   // Líder de una organización sin entrevistas, o Miembro (a este último le
   // queda filtrado solo Calendario + Mis Actividades de todas formas).
-  return ['calendar', 'myActivities', 'meetings', 'budget', 'stats', 'wardGrowth'];
+  return ['home', 'calendar', 'myActivities', 'meetings', 'budget', 'stats', 'wardGrowth'];
 }
 // "Reuniones y Asignaciones" y "Estadísticas": visibles para Líder y
 // Administrador — los Miembros no las ven en absoluto.
@@ -2513,6 +2516,161 @@ function wireMobileFab() {
   fab.onclick = () => openQuickCreateMenu(eligible);
 }
 
+// ======================================================================
+// 🏠 MI SEMANA (App 3) — pantalla de inicio según el rol
+// ======================================================================
+// Resume lo que a esta persona le toca hoy y los próximos 7 días, sacado
+// de GET /api/mi-semana (server/src/semana.js), con los mismos permisos de
+// cada módulo. Cada elemento lleva a la pestaña donde se gestiona.
+const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹' };
+
+function puedeVerFichasCliente() {
+  return !!state.user && ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(state.user.role);
+}
+
+async function renderHomeView() {
+  const container = document.getElementById('view-root');
+  container.innerHTML = skeletonViewHtml('Mi semana', { cards: 4, stats: 4 });
+  let r;
+  try { r = await api('/mi-semana'); } catch (e) { container.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`; return; }
+  if (state.view !== 'home') return;
+  const nombre = (state.user.name || '').split(' ')[0];
+  const t = r.totales;
+  const kpi = (icono, n, label, vista, extraClass = '', sub = '', subtab = '') => `
+    <button type="button" class="home-kpi ${extraClass}" data-view="${vista}" ${subtab ? `data-sub="${subtab}"` : ''} ${n ? '' : 'data-empty="1"'}>
+      <span class="home-kpi-n">${n}</span><span class="home-kpi-l">${icono} ${esc(label)}</span>${sub ? `<span class="home-kpi-s">${esc(sub)}</span>` : ''}
+    </button>`;
+  const lider = ['admin', 'leader', 'executive_secretary'].includes(state.user.role);
+  const kpis = [
+    kpi('🙋', t.entrevistas, t.entrevistas === 1 ? 'entrevista' : 'entrevistas', 'interviews'),
+    lider ? kpi('📥', t.solicitudes, 'por confirmar', 'interviews', t.solicitudes ? 'home-kpi-warn' : '', '', 'requests') : '',
+    kpi('✅', t.compromisos, t.compromisos === 1 ? 'compromiso' : 'compromisos', 'meetings', t.atrasados ? 'home-kpi-bad' : '', t.atrasados ? `${t.atrasados} atrasado${t.atrasados === 1 ? '' : 's'}` : ''),
+    kpi('📅', t.actividades, t.actividades === 1 ? 'actividad' : 'actividades', 'calendar'),
+    lider && t.sinMarcar ? kpi('⏳', t.sinMarcar, 'sin marcar', 'interviews', 'home-kpi-warn', 'entrevistas pasadas') : '',
+  ].join('');
+
+  // Línea de tiempo: todo junto, agrupado por día.
+  const todo = [...r.compromisos.filter((c) => c.atrasado).map((c) => ({ ...c, fechaGrupo: 'atrasado' })),
+    ...r.entrevistas, ...r.compromisos.filter((c) => !c.atrasado), ...r.actividades, ...(r.aseo || [])]
+    .map((x) => ({ ...x, fechaGrupo: x.fechaGrupo || (x.atrasado ? 'atrasado' : x.fecha) }));
+  const grupos = new Map();
+  for (const x of todo) { if (!grupos.has(x.fechaGrupo)) grupos.set(x.fechaGrupo, []); grupos.get(x.fechaGrupo).push(x); }
+  const orden = [...grupos.keys()].sort((a, b) => (a === 'atrasado' ? -1 : b === 'atrasado' ? 1 : a.localeCompare(b)));
+  const etiquetaDia = (k) => (k === 'atrasado' ? '⚠️ Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : fmtDateHuman(k));
+  const itemHtml = (x) => `
+    <button type="button" class="home-item" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} style="--c:${/^#[0-9a-f]{3,6}$/i.test(x.color || '') ? x.color : 'var(--celeste)'}">
+      <span class="home-item-bar"></span>
+      <span class="home-item-hora">${esc(x.hora || '')}</span>
+      <span class="home-item-main"><span class="home-item-t">${TIPO_ICONO[x.tipo] || ''} ${esc(x.titulo)}</span><span class="home-item-s">${esc(x.org || '')}</span></span>
+    </button>`;
+  const timeline = orden.length
+    ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
+    : emptyStateHtml('No tienes nada agendado para esta semana', null, '🌤️');
+
+  container.innerHTML = `
+    <div class="view-header">
+      <div><h2>Hola, ${esc(nombre)} 👋</h2><p>Tu semana: ${esc(fmtDateHuman(r.desde))} al ${esc(fmtDateHuman(r.hasta))}</p></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${puedeVerFichasCliente() ? '<button class="btn btn-secondary" id="home-buscar-persona">🔎 Buscar persona</button>' : ''}
+        <button class="btn btn-primary" id="home-deseret">🐝 Preguntarle a Deseret</button>
+      </div>
+    </div>
+    <div class="home-kpis">${kpis}</div>
+    ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">📥 Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
+    <div class="card home-card"><div class="home-card-t">🗓️ Tu semana</div>${timeline}</div>`;
+
+  container.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => {
+    state.view = el.dataset.view;
+    if (state.view === 'interviews') state.interviewsSubtab = el.dataset.sub || 'pending';
+    renderCurrentView();
+  }));
+  const b1 = document.getElementById('home-buscar-persona');
+  if (b1) b1.addEventListener('click', () => abrirBuscadorPersonas());
+  document.getElementById('home-deseret').addEventListener('click', () => {
+    const logo = document.querySelector('.topbar-logo');
+    if (logo) logo.click();
+  });
+}
+
+// ======================================================================
+// 📇 FICHA 360° (App 1) — todo lo de una persona en un solo lugar
+// ======================================================================
+// GET /api/personas/ficha (server/src/persona.js) ya devuelve SOLO las
+// secciones que quien consulta puede ver en sus propios módulos.
+function abrirBuscadorPersonas() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="bp-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>🔎 Buscar persona</h3><button class="modal-close" id="bp-close">×</button></div>
+        <div class="modal-body">
+          <input type="text" id="bp-q" placeholder="Nombre o apellido…" autocomplete="off" />
+          <div class="card-list" id="bp-res" style="margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>`;
+  const q = document.getElementById('bp-q');
+  const resBox = document.getElementById('bp-res');
+  document.getElementById('bp-close').addEventListener('click', closeModal);
+  document.getElementById('bp-backdrop').addEventListener('click', (e) => { if (e.target.id === 'bp-backdrop') closeModal(); });
+  let timer = null;
+  q.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (q.value.trim().length < 2) { resBox.innerHTML = ''; return; }
+      let res = [];
+      try { res = await api(`/personas/buscar?q=${encodeURIComponent(q.value.trim())}`); } catch (e) { resBox.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`; return; }
+      resBox.innerHTML = res.length ? res.map((p, i) => `
+        <button type="button" class="list-card bp-item" data-i="${i}" style="width:100%; text-align:left; cursor:pointer;">
+          <div class="lc-main"><div class="lc-title">${esc(p.nombre)}${p.tieneCuenta ? ' <span class="status-pill status-blue">🔗 cuenta</span>' : ''}</div></div>
+        </button>`).join('') : '<div class="hint-box">Sin resultados.</div>';
+      resBox.querySelectorAll('.bp-item').forEach((b) => b.addEventListener('click', () => {
+        const p = res[Number(b.dataset.i)];
+        abrirFichaPersona({ directoryId: p.directoryId, userId: p.userId });
+      }));
+    }, 250);
+  });
+  q.focus();
+}
+
+async function abrirFichaPersona(ref) {
+  const params = new URLSearchParams();
+  if (ref?.directoryId) params.set('d', ref.directoryId);
+  if (ref?.userId) params.set('u', ref.userId);
+  if (!ref?.directoryId && !ref?.userId && ref?.nombre) params.set('n', ref.nombre);
+  let f;
+  try { f = await api(`/personas/ficha?${params.toString()}`); } catch (e) { toast(e.message, 'error'); return; }
+  const modalRoot = document.getElementById('modal-root');
+  const seccion = (s) => `
+    <div class="ficha-sec">
+      <div class="ficha-sec-t">${esc(s.titulo)}</div>
+      ${s.resumen ? `<div class="ficha-sec-r">${esc(s.resumen)}</div>` : ''}
+      ${(s.filas || []).length ? `<dl class="ficha-dl">${s.filas.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${(s.items || []).length ? `<div class="ficha-items">${s.items.map((it) => `
+        <div class="ficha-item" style="--c:${/^#[0-9a-f]{3,6}$/i.test(it.color || '') ? it.color : 'var(--border)'}">
+          <div class="ficha-item-f">${esc(fmtDateHuman(it.fecha))}${it.hora ? ` · ${esc(it.hora)}` : ''}</div>
+          <div class="ficha-item-t">${esc(it.titulo)} <span class="ficha-item-e">${esc(it.estado || '')}</span></div>
+          ${it.detalle ? `<div class="ficha-item-d">${esc(it.detalle)}</div>` : ''}
+        </div>`).join('')}</div>` : ''}
+    </div>`;
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" id="fp-backdrop">
+      <div class="modal">
+        <div class="modal-header"><h3>📇 ${esc(f.nombre)}</h3><button class="modal-close" id="fp-close">×</button></div>
+        <div class="modal-body">
+          <p class="hint-box" style="margin-top:0;">Ficha 360°: solo ves las secciones de los módulos a los que tienes acceso.</p>
+          ${f.secciones.map(seccion).join('')}
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost btn-sm" id="fp-buscar">🔎 Buscar otra persona</button><button class="btn btn-secondary" id="fp-ok">Cerrar</button></div>
+      </div>
+    </div>`;
+  document.getElementById('fp-close').addEventListener('click', closeModal);
+  document.getElementById('fp-ok').addEventListener('click', closeModal);
+  document.getElementById('fp-buscar').addEventListener('click', () => abrirBuscadorPersonas());
+  document.getElementById('fp-backdrop').addEventListener('click', (e) => { if (e.target.id === 'fp-backdrop') closeModal(); });
+}
+window.abrirFichaPersona = abrirFichaPersona;
+
 function renderCurrentView() {
   if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
@@ -2546,7 +2704,9 @@ function renderCurrentView() {
     void viewRoot.offsetWidth;
     viewRoot.classList.add('view-fade-in');
   }
-  if (state.view === 'calendar') renderCalendarView();
+  if (!TAB_DEFS[state.view] && state.view !== 'bishopricPanel') state.view = 'home';
+  if (state.view === 'home') renderHomeView();
+  else if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'bishopricPanel') renderBishopricPanelView();
   else if (state.view === 'myActivities') renderMyActivitiesView();
   else if (state.view === 'interviews') renderInterviewsView();
@@ -4626,9 +4786,11 @@ function openInterviewMemberDetailModal(memberName, memberUserId, allHistory) {
               </div>`).join('')}
           </div>
         </div>
-        <div class="modal-footer"><div></div><div><button class="btn btn-secondary" id="ivmd-close">Cerrar</button></div></div>
+        <div class="modal-footer"><div>${puedeVerFichasCliente() ? '<button class="btn btn-secondary" id="ivmd-ficha">📇 Ficha 360°</button>' : ''}</div><div><button class="btn btn-secondary" id="ivmd-close">Cerrar</button></div></div>
       </div>
     </div>`;
+  const fichaBtn = document.getElementById('ivmd-ficha');
+  if (fichaBtn) fichaBtn.addEventListener('click', () => abrirFichaPersona({ userId: memberUserId || null, nombre: memberName }));
   document.getElementById('ivmd-modal-close').addEventListener('click', closeModal);
   document.getElementById('ivmd-close').addEventListener('click', closeModal);
   document.getElementById('ivmd-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ivmd-modal-backdrop') closeModal(); });
