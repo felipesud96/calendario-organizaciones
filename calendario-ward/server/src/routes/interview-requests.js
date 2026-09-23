@@ -2,6 +2,29 @@ import { sendJson } from '../router.js';
 import { load, withDb, nextId, interviewEligibility, interviewAvailabilityMatches, timesOverlap, callingLabel } from '../db.js';
 import { requireAuth, requireRole } from '../guard.js';
 import { sendInterviewScheduledWhatsApp } from '../notifications.js';
+import { buscarMiembros } from '../chat.js';
+
+// Solicitudes que llegan por el enlace público (sin cuenta): el nombre viene
+// escrito a mano. Para que el líder las enlace con la persona real, se le
+// sugieren coincidencias del Directorio y de los usuarios registrados (mismo
+// buscador que usa Deseret), más cualquier cuenta con el MISMO teléfono.
+// Nunca se vincula sola: el líder elige con un clic (así nadie puede, desde
+// el enlace público, hacerse pasar por otra persona con cuenta en la app).
+const ultimos8 = (t) => String(t || '').replace(/\D/g, '').slice(-8);
+function sugerenciasPara(r, data) {
+  if (r.memberUserId || r.vinculadoDirectorio) return [];
+  const lista = [];
+  const tel = ultimos8(r.memberPhone);
+  if (tel.length === 8) {
+    for (const u of data.users) {
+      if (u.role !== 'admin' && ultimos8(u.phone) === tel) lista.push({ name: u.name, userId: u.id, porTelefono: true });
+    }
+  }
+  for (const c of buscarMiembros(r.nombreEscrito || r.memberName, data)) {
+    if (!lista.some((x) => x.name === c.name)) lista.push({ name: c.name, userId: c.userId || null, porTelefono: false });
+  }
+  return lista.slice(0, 5);
+}
 
 // Punto 4 (ampliación) — ventana de 6 semanas hacia adelante en la que se
 // ofrecen fechas disponibles y se buscan choques de horario con entrevistas
@@ -224,7 +247,9 @@ export function registerInterviewRequestRoutes(router) {
       ? data.interviewRequests
       : data.interviewRequests.filter((r) => Number(r.organizationId) === Number(req.user.organizationId));
     if (req.query.status) items = items.filter((r) => r.status === req.query.status);
-    items = items.map((r) => withRequestInfo(r, data)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    items = items
+      .map((r) => ({ ...withRequestInfo(r, data), sugerencias: r.status === 'pending' ? sugerenciasPara(r, data) : [] }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     sendJson(res, 200, items);
   }));
 
@@ -302,6 +327,37 @@ export function registerInterviewRequestRoutes(router) {
       interview: withInterviewOrgInfo(interview, data),
       request: withRequestInfo(data.interviewRequests.find((r) => r.id === id), data),
     });
+  }));
+
+  // Enlaza una solicitud (típicamente del enlace público) con una persona del
+  // Directorio o una cuenta registrada — solo con una de las sugerencias
+  // calculadas por el servidor, nunca con un nombre/ID arbitrario.
+  router.put('/api/interview-requests/:id/member', requireRole(['admin', 'leader', 'executive_secretary'], async (req, res, params, body) => {
+    const id = Number(params.id);
+    const data0 = load();
+    const reqItem = data0.interviewRequests.find((r) => r.id === id);
+    if (!reqItem) return sendJson(res, 404, { error: 'Solicitud no encontrada' });
+    if (!canDecideFor(req.user, data0, reqItem.organizationId)) return sendJson(res, 403, { error: 'No tienes permiso sobre esta solicitud' });
+    if (reqItem.status !== 'pending') return sendJson(res, 400, { error: 'Esta solicitud ya fue decidida' });
+    const elegido = sugerenciasPara(reqItem, data0).find((s) => s.name === body?.name && Number(s.userId || 0) === Number(body?.userId || 0));
+    if (!elegido) return sendJson(res, 400, { error: 'Esa persona no está entre las sugerencias para esta solicitud' });
+    if (elegido.userId) {
+      const org = data0.organizations.find((o) => o.id === Number(reqItem.organizationId));
+      const cuenta = data0.users.find((u) => u.id === Number(elegido.userId));
+      if (org && cuenta && interviewEligibility(org.name, cuenta) === false) {
+        return sendJson(res, 400, { error: `Según su perfil, ${cuenta.name} no corresponde a ${org.name} — agéndala con el Obispado en su lugar.` });
+      }
+    }
+    await withDb((d) => {
+      const r = d.interviewRequests.find((x) => x.id === id);
+      if (!r || r.status !== 'pending') return;
+      if (!r.nombreEscrito) r.nombreEscrito = r.memberName;
+      r.memberName = elegido.name;
+      r.memberUserId = elegido.userId || null;
+      r.vinculadoDirectorio = true;
+    });
+    const data = load();
+    sendJson(res, 200, withRequestInfo(data.interviewRequests.find((r) => r.id === id), data));
   }));
 
   router.put('/api/interview-requests/:id/reject', requireRole(['admin', 'leader', 'executive_secretary'], async (req, res, params, body) => {

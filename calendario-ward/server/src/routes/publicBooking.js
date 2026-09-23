@@ -211,7 +211,9 @@ export function registerPublicBookingRoutes(router) {
     const iv = r.resultingInterviewId ? data.interviews.find((x) => x.id === Number(r.resultingInterviewId)) : null;
     sendJson(res, 200, {
       estado: r.status,
-      nombre: r.memberName,
+      // Se muestra el nombre tal como lo escribió quien pidió (no el del
+      // Directorio con el que el líder lo haya enlazado).
+      nombre: r.nombreEscrito || r.memberName,
       lider: r.targetLeaderName,
       organizacion: org?.name || '',
       color: org?.color || '#0ea5e9',

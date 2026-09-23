@@ -310,7 +310,7 @@ function palabrasDe(nombre) {
   return normalizeSearchText(nombre).replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean);
 }
 
-function buscarMiembros(nombre, data) {
+export function buscarMiembros(nombre, data) {
   const buscadas = palabrasDe(nombre).filter((w) => w.length > 1 && !['de', 'del', 'la', 'las', 'los', 'hermano', 'hermana', 'hno', 'hna'].includes(w));
   if (!buscadas.length) return [];
   const coincide = (candidato) => {

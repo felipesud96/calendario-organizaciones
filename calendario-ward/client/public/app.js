@@ -4404,6 +4404,15 @@ async function renderInterviewsView() {
       const r = pendingRequests.find((x) => x.id === Number(b.dataset.id));
       if (r) openRejectRequestModal(r);
     }));
+    // Enlazar una solicitud del enlace público con el Directorio / una cuenta.
+    container.querySelectorAll('.ivreq-link-btn').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await api(`/interview-requests/${b.dataset.id}/member`, { method: 'PUT', body: { name: b.dataset.name, userId: b.dataset.user ? Number(b.dataset.user) : null } });
+        toast('Solicitud enlazada');
+        renderInterviewsView();
+      } catch (e) { toast(e.message, 'error'); b.disabled = false; }
+    }));
     return;
   }
 
@@ -4521,6 +4530,10 @@ function interviewRequestRowHtml(r) {
       <span class="org-dot" style="background:${esc(r.organizationColor)}"></span>
       <div class="lc-main">
         <div class="lc-title">${esc(r.memberName)} ${statusPill}${r.source === 'enlace' ? ' <span class="status-pill status-blue" title="Pedida desde tu enlace público / QR, sin cuenta en la app">🔗 vía enlace</span>' : ''}</div>
+        ${r.vinculadoDirectorio ? `<div class="lc-sub">📇 Enlazado${r.memberUserId ? ' a su cuenta' : ' al Directorio'}${r.nombreEscrito && r.nombreEscrito !== r.memberName ? ` · escribió "${esc(r.nombreEscrito)}"` : ''}</div>` : ''}
+        ${r.status === 'pending' && (r.sugerencias || []).length ? `<div class="lc-sub" style="margin-top:4px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;">📇 ¿Es…?
+          ${r.sugerencias.map((sg) => `<button type="button" class="btn btn-secondary btn-sm ivreq-link-btn" data-id="${r.id}" data-name="${esc(sg.name)}" data-user="${sg.userId || ''}" title="Enlazar esta solicitud con esta persona">${esc(sg.name)}${sg.userId ? ' 🔗' : ''}${sg.porTelefono ? ' · 📞 mismo teléfono' : ''}</button>`).join('')}
+        </div>` : ''}
         ${r.memberPhone ? `<div class="lc-sub">📞 <a href="https://wa.me/${esc(String(r.memberPhone).replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(r.memberPhone)}</a></div>` : ''}
         <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
         ${r.status === 'rejected' && r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
