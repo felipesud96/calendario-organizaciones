@@ -265,7 +265,9 @@ export function registerInterviewRequestRoutes(router) {
         groupId: newId,
         memberName: r.memberName,
         memberUserId: r.memberUserId,
-        memberPhone: '',
+        // Las solicitudes que llegan por el enlace público (sin cuenta)
+        // traen el teléfono de quien la pidió.
+        memberPhone: r.memberPhone || '',
         memberEmail: '',
         description: r.note || '',
         location,

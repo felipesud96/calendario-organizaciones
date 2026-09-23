@@ -26,6 +26,7 @@ import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerSearchRoutes } from './routes/search.js';
 import { registerNotificationsSummaryRoutes } from './routes/notifications-summary.js';
 import { registerInterviewRequestRoutes } from './routes/interview-requests.js';
+import { registerPublicBookingRoutes } from './routes/publicBooking.js';
 import { registerWelfareRoutes } from './routes/welfare.js';
 import { registerNamesRoutes } from './routes/names.js';
 import { registerWardGrowthRoutes } from './routes/wardGrowth.js';
@@ -85,6 +86,7 @@ registerDashboardRoutes(router);
 registerSearchRoutes(router);
 registerNotificationsSummaryRoutes(router);
 registerInterviewRequestRoutes(router);
+registerPublicBookingRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
@@ -105,6 +107,9 @@ const MIME = {
 };
 
 function serveStatic(req, res, pathname) {
+  // Página pública para pedir entrevista sin cuenta (ver routes/publicBooking.js):
+  // /agendar/<token> y /agendar/estado/<token> sirven la misma página liviana.
+  if (/^\/agendar\/[a-z0-9/]+$/i.test(pathname)) pathname = '/agendar.html';
   let filePath = path.join(CLIENT_DIR, pathname === '/' ? 'index.html' : pathname);
   // evita path traversal
   if (!filePath.startsWith(CLIENT_DIR)) {

@@ -71,6 +71,8 @@ export function publicUser(user) {
   // etc.), visible para cualquier Administrador mientras alguien tuviera
   // una recuperación en curso. Se quita del objeto público igual que ya se
   // hace con `passwordHash`.
-  const { passwordHash, passwordReset, ...rest } = user;
+  // `publicBookingToken` (enlace público para pedir entrevista) solo lo
+  // entrega GET /api/public-booking/my-link a su dueño.
+  const { passwordHash, passwordReset, publicBookingToken, ...rest } = user;
   return rest;
 }

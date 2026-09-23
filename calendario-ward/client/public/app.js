@@ -3480,6 +3480,102 @@ async function openInterviewRequestModal(onDone) {
 // guía para lo que un miembro puede proponer al pedir una entrevista con
 // él/ella; no reserva nada ni le impide agendar manualmente ("+ Agendar
 // entrevista") un día fuera de lo declarado, para los casos extraordinarios.
+// Enlace público + QR para pedir entrevista SIN cuenta en la app (ver
+// server/src/routes/publicBooking.js y client/public/agendar.html). Quien lo
+// abre ve solo los bloques libres de "Mi disponibilidad" y su solicitud cae
+// en la bandeja de Solicitudes, marcada "🔗 vía enlace", para confirmar o
+// rechazar igual que siempre. El QR se genera en el navegador con
+// /vendor/qrcode.js (MIT, sin depender de ningún servicio externo).
+function cargarLibQR() {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  return new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = '/vendor/qrcode.js';
+    sc.onload = () => resolve(window.qrcode);
+    sc.onerror = () => reject(new Error('No se pudo cargar el generador de QR'));
+    document.head.appendChild(sc);
+  });
+}
+
+async function openPublicBookingLinkModal() {
+  const modalRoot = document.getElementById('modal-root');
+  let info;
+  try { info = await api('/public-booking/my-link'); } catch (e) { toast(e.message, 'error'); return; }
+  const render = () => {
+    const url = `${location.origin}${info.path}`;
+    const nombre = state.user.name || '';
+    modalRoot.innerHTML = `
+      <div class="modal-backdrop" id="pbl-backdrop">
+        <div class="modal">
+          <div class="modal-header"><h3>🔗 Enlace para pedir entrevista</h3><button class="modal-close" id="pbl-close">×</button></div>
+          <div class="modal-body">
+            <p class="hint-box" style="margin-top:0;">Compártelo por WhatsApp o imprime el QR. Cualquier persona, <b>sin cuenta en la app</b>, verá tus horarios libres, elegirá uno y te llegará como solicitud en <b>Entrevistas → Solicitudes</b> para que la confirmes.</p>
+            ${info.tieneDisponibilidad ? '' : `<div class="error-msg" style="margin-bottom:10px;">Todavía no declaraste tu disponibilidad: quien abra el enlace no verá horarios. <button type="button" class="btn btn-secondary btn-sm" id="pbl-avail" style="margin-left:6px;">🗓️ Declarar disponibilidad</button></div>`}
+            <div class="field">
+              <label>Tu enlace</label>
+              <div style="display:flex; gap:8px;">
+                <input type="text" readonly value="${esc(url)}" id="pbl-url" style="flex:1; min-width:0;" />
+                <button type="button" class="btn btn-secondary btn-sm" id="pbl-copy">📋 Copiar</button>
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0;">
+              <a class="btn btn-primary btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Hola 👋 Para pedir una entrevista conmigo, elige un horario aquí: ${url}`)}">💬 Compartir por WhatsApp</a>
+              <a class="btn btn-secondary btn-sm" target="_blank" rel="noopener" href="${esc(url)}">👀 Ver como lo verán</a>
+            </div>
+            <div style="text-align:center; margin-top:10px;">
+              <canvas id="pbl-qr" width="520" height="640" style="width:260px; height:320px; border:1px solid var(--border); border-radius:12px; background:#fff;"></canvas>
+              <div><button type="button" class="btn btn-secondary btn-sm" id="pbl-download" style="margin-top:8px;">⬇️ Descargar QR para imprimir</button></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-ghost btn-sm" id="pbl-regen" title="El enlace anterior deja de funcionar">🔄 Generar enlace nuevo</button>
+            <button class="btn btn-secondary" id="pbl-done">Cerrar</button>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('pbl-close').addEventListener('click', closeModal);
+    document.getElementById('pbl-done').addEventListener('click', closeModal);
+    document.getElementById('pbl-backdrop').addEventListener('click', (e) => { if (e.target.id === 'pbl-backdrop') closeModal(); });
+    const availBtn = document.getElementById('pbl-avail');
+    if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
+    document.getElementById('pbl-copy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } catch (e) { document.getElementById('pbl-url').select(); }
+    });
+    document.getElementById('pbl-regen').addEventListener('click', async () => {
+      if (!(await confirmModal('Se generará un enlace nuevo y el anterior (y su QR) dejará de funcionar. ¿Continuar?', { title: 'Generar enlace nuevo', confirmText: 'Generar' }))) { render(); return; }
+      try { const r = await api('/public-booking/my-link/regenerate', { method: 'POST', body: {} }); info = { ...info, ...r }; toast('Enlace nuevo generado'); } catch (e) { toast(e.message, 'error'); }
+      render();
+    });
+    // Tarjeta imprimible: título + QR + enlace, dibujada en un canvas.
+    const canvas = document.getElementById('pbl-qr');
+    cargarLibQR().then((qrcode) => {
+      const qr = qrcode(0, 'M');
+      qr.addData(url);
+      qr.make();
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#0ea5e9'; ctx.fillRect(0, 0, canvas.width, 14);
+      ctx.fillStyle = '#0f172a'; ctx.textAlign = 'center';
+      ctx.font = 'bold 30px system-ui, sans-serif'; ctx.fillText('Pide tu entrevista', canvas.width / 2, 64);
+      ctx.font = '24px system-ui, sans-serif'; ctx.fillText(nombre.length > 34 ? nombre.slice(0, 33) + '…' : nombre, canvas.width / 2, 100);
+      const n = qr.getModuleCount(); const lado = 400; const cel = Math.floor(lado / n); const tam = cel * n;
+      const x0 = Math.round((canvas.width - tam) / 2); const y0 = 128;
+      ctx.fillStyle = '#000000';
+      for (let r = 0; r < n; r += 1) for (let c = 0; c < n; c += 1) if (qr.isDark(r, c)) ctx.fillRect(x0 + c * cel, y0 + r * cel, cel, cel);
+      ctx.fillStyle = '#475569'; ctx.font = '18px system-ui, sans-serif';
+      ctx.fillText('Escanea con la cámara de tu celular', canvas.width / 2, y0 + tam + 40);
+      ctx.fillText('OrganizaSion 🐝', canvas.width / 2, y0 + tam + 70);
+    }).catch((e) => toast(e.message, 'error'));
+    document.getElementById('pbl-download').addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = 'qr-pedir-entrevista.png';
+      a.click();
+    });
+  };
+  render();
+}
+
 function openLeaderAvailabilityModal() {
   let rows = (state.user.interviewAvailability || []).map((w, i) => ({ key: i, ...w }));
   let nextKey = rows.length;
@@ -4272,6 +4368,7 @@ async function renderInterviewsView() {
         </div>
         <div style="display:flex; gap:8px;">
           ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-avail">🗓️ Mi disponibilidad</button>` : ''}
+          ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-public-link" title="Enlace y QR para que cualquiera pida entrevista contigo, sin cuenta">🔗 Enlace / QR</button>` : ''}
           <button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>
         </div>
       </div>
@@ -4294,6 +4391,8 @@ async function renderInterviewsView() {
     if (newBtn) newBtn.addEventListener('click', () => openInterviewModal());
     const availBtn = document.getElementById('iv-avail');
     if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
+  const publicLinkBtn = document.getElementById('iv-public-link');
+  if (publicLinkBtn) publicLinkBtn.addEventListener('click', () => openPublicBookingLinkModal());
     container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
     const historyToggle = document.getElementById('ivreq-history-toggle');
     if (historyToggle) historyToggle.addEventListener('click', () => { state.interviewRequestsHistoryOpen = !state.interviewRequestsHistoryOpen; renderInterviewsView(); });
@@ -4360,6 +4459,7 @@ async function renderInterviewsView() {
       </div>
       <div style="display:flex; gap:8px;">
         ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-avail">🗓️ Mi disponibilidad</button>` : ''}
+          ${state.user.role === 'leader' ? `<button class="btn btn-secondary" id="iv-public-link" title="Enlace y QR para que cualquiera pida entrevista contigo, sin cuenta">🔗 Enlace / QR</button>` : ''}
         ${canManage ? `<button class="btn btn-primary" id="iv-new">+ Agendar entrevista</button>` : ''}
       </div>
     </div>
@@ -4390,6 +4490,8 @@ async function renderInterviewsView() {
   if (newBtn) newBtn.addEventListener('click', () => openInterviewModal());
   const availBtn = document.getElementById('iv-avail');
   if (availBtn) availBtn.addEventListener('click', () => openLeaderAvailabilityModal());
+  const publicLinkBtn = document.getElementById('iv-public-link');
+  if (publicLinkBtn) publicLinkBtn.addEventListener('click', () => openPublicBookingLinkModal());
   wireEmptyStateCta('iv-empty-new', () => openInterviewModal());
   container.querySelectorAll('.subtabs .subtab-btn[data-tab]').forEach((b) => b.addEventListener('click', () => { state.interviewsSubtab = b.dataset.tab; renderInterviewsView(); }));
   container.querySelectorAll('.iv-org-tab[data-org-id]').forEach((b) => b.addEventListener('click', () => { state.interviewsOrgTab = Number(b.dataset.orgId); renderInterviewsView(); }));
@@ -4418,7 +4520,8 @@ function interviewRequestRowHtml(r) {
     <div class="list-card">
       <span class="org-dot" style="background:${esc(r.organizationColor)}"></span>
       <div class="lc-main">
-        <div class="lc-title">${esc(r.memberName)} ${statusPill}</div>
+        <div class="lc-title">${esc(r.memberName)} ${statusPill}${r.source === 'enlace' ? ' <span class="status-pill status-blue" title="Pedida desde tu enlace público / QR, sin cuenta en la app">🔗 vía enlace</span>' : ''}</div>
+        ${r.memberPhone ? `<div class="lc-sub">📞 <a href="https://wa.me/${esc(String(r.memberPhone).replace(/\D/g, ''))}" target="_blank" rel="noopener">${esc(r.memberPhone)}</a></div>` : ''}
         <div class="lc-sub">${esc(r.organizationName)}${r.targetLeaderName ? ' · con ' + esc(r.targetLeaderName) : ''} · propone ${esc(fmtDateHuman(r.date))} · ${esc(fmtTime(r.startTime))}${r.endTime ? ' - ' + esc(fmtTime(r.endTime)) : ''}${r.note ? ' · ' + esc(r.note) : ''}</div>
         ${r.status === 'rejected' && r.decisionComment ? `<div class="lc-sub" style="margin-top:2px; font-style:italic;">💬 ${esc(r.decisionComment)}</div>` : ''}
         ${r.status !== 'pending' && r.decidedByName ? `<div class="lc-sub" style="margin-top:2px;">Decidida por ${esc(r.decidedByName)}</div>` : ''}
