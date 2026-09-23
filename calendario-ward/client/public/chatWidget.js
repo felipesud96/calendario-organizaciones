@@ -98,7 +98,8 @@ const ESTILOS = `
   #deseret-fab:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(3,105,161,.4); }
   #deseret-fab img { width: 40px; height: 40px; flex: none; }
   #deseret-fab .escuchando { position: absolute; left: 36px; top: 6px; width: 11px; height: 11px; border-radius: 50%; background: #4ade80; border: 2px solid #fff; display: none; animation: deseret-latido 1.6s infinite; }
-  #deseret-fab.hey .escuchando { display: block; }
+  #deseret-fab.hey .escuchando { display: block; background: #94a3b8; animation: none; }
+  #deseret-fab.hey.escuchando-ahora .escuchando { background: #4ade80; animation: deseret-latido 1.6s infinite; }
   @keyframes deseret-latido { 0%,100% { box-shadow: 0 0 0 0 rgba(74,222,128,.7); } 50% { box-shadow: 0 0 0 6px rgba(74,222,128,0); } }
   body:has(.add-event-fab) #deseret-fab { bottom: 90px; }
   body:has(.modal-backdrop) #deseret-fab, body:has(.modal-backdrop) #deseret-intro { display: none !important; }
@@ -769,48 +770,99 @@ export function initChatWidget() {
   const heySoportado = !!SR;
   const heyBtn = document.getElementById('chat-hey-btn');
   const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  // Al inicio de la frase, o justo después de un saludo ("hey", "oye"...).
-  const RE_HEY = /(?:^\s*|\b(?:hey|hei|ey|ei|oye|hola|ok|okey|okay)\s*)(?:de\s?s[ae]r[ae]t+h?|desert|dese\s?red|di\s?seret|deceret)\b[\s,.!?¿¡]*(.*)$/;
+  // ¿Dijo "Hey Deseret"? El reconocimiento de voz escribe el nombre de mil
+  // formas ("deseret", "desert", "de seret", "desiré", "the seret"...), así
+  // que se compara "parecido" (distancia de edición), no exacto: una palabra
+  // (o dos juntas) que se parezca a "deseret", al inicio de la frase o justo
+  // después de un saludo. Devuelve lo que se dijo DESPUÉS (la pregunta), o
+  // null si no lo llamaron.
+  const SALUDOS = new Set(['hey', 'hei', 'ey', 'ei', 'e', 'oye', 'oiga', 'hola', 'ok', 'okey', 'okay', 'ay', 'hay', 'a']);
+  function distancia(a, b) {
+    const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+    for (let j = 1; j <= b.length; j++) d[0][j] = j;
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    return d[a.length][b.length];
+  }
+  const pareceDeseret = (w) => w.length >= 5 && w.length <= 9 && /^[dt]/.test(w) && distancia(w.replace(/^th/, 'd'), 'deseret') <= 2;
+  function buscarLlamado(original) {
+    const orig = String(original || '').trim().split(/\s+/).filter(Boolean);
+    const pal = orig.map((w) => norm(w).replace(/[^a-z0-9ñ]/g, ''));
+    for (let k = 0; k < pal.length; k++) {
+      const antes = pal[k - 1];
+      const alInicio = k === 0 || (k === 1 && SALUDOS.has(antes)) || SALUDOS.has(antes);
+      if (!alInicio) continue;
+      let largo = 0;
+      if (pareceDeseret(pal[k])) largo = 1;
+      else if (pal[k + 1] && pareceDeseret(pal[k] + pal[k + 1])) largo = 2; // "de seret", "the seret"
+      if (largo) return orig.slice(k + largo).join(' ').replace(/^[,.\s!¡?¿]+/, '');
+    }
+    return null;
+  }
   const hey = (() => {
     let activo = heySoportado && store.get('localStorage', CLAVE_HEY) === true;
-    let rec = null; let corriendo = false; let pausado = false; let reintentos = 0;
+    let rec = null; let corriendo = false; let pausado = false; let fallosSeguidos = 0;
+    let inicioSesion = 0; let pendiente = null; let timerPendiente = null; let errorAvisado = false;
     const puedeCorrer = () => activo && !pausado && hayApp && !document.hidden;
+    const marcarEscuchando = (on) => fab.classList.toggle('escuchando-ahora', on);
     function arrancar() {
       if (corriendo || !puedeCorrer()) return;
       rec = new SR();
-      rec.lang = 'es-CL'; rec.continuous = true; rec.interimResults = false;
+      // Resultados parciales: en Android la escucha "continua" se corta sola
+      // cada pocos segundos, y con los parciales se alcanza a detectar el
+      // llamado antes del corte.
+      rec.lang = 'es-CL'; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 3;
+      rec.onstart = () => { marcarEscuchando(true); };
       rec.onresult = (ev) => {
+        // Se revisa lo escuchado en esta sesión (todas las alternativas).
+        let final = false; let resto = null;
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          if (!ev.results[i].isFinal) continue;
-          const original = ev.results[i][0].transcript;
-          const m = norm(original).match(RE_HEY);
-          if (m) {
-            // La pregunta se toma del texto ORIGINAL (con tildes): las
-            // últimas N palabras, N = las que venían después de "Deseret".
-            const n = m[1].trim().split(/\s+/).filter(Boolean).length;
-            reintentos = 0;
-            despertar(n ? original.trim().split(/\s+/).slice(-n).join(' ') : '');
-            return;
-          }
+          const r = ev.results[i];
+          for (let a = 0; a < r.length && resto === null; a++) resto = buscarLlamado(r[a].transcript);
+          if (r.isFinal) final = true;
+          if (resto !== null) break;
         }
+        if (resto === null && pendiente === null) return;
+        if (resto !== null) pendiente = resto;
+        clearTimeout(timerPendiente);
+        // Si la frase terminó, se actúa ya; si no, se espera un momento por si
+        // viene la pregunta completa ("Hey Deseret, ¿qué tengo hoy?").
+        if (final) disparar(); else timerPendiente = setTimeout(disparar, 1300);
       };
       rec.onerror = (ev) => {
         if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
           activo = false; store.set('localStorage', CLAVE_HEY, false); pintar();
-          estado.msgs.push({ role: 'bot', texto: 'No tengo permiso para usar el micrófono, así que desactivé **“Hey Deseret”**. Puedes darle permiso en el candado de la barra de direcciones y volver a activarlo.', error: true });
+          estado.msgs.push({ role: 'bot', texto: 'No tengo permiso para usar el micrófono, así que desactivé **“Hey Deseret”**. Puedes darle permiso en el candado de la barra de direcciones (o en los permisos de la app) y volver a activarlo.', error: true });
+          guardar(); repintarTodo();
+        } else if ((ev.error === 'audio-capture' || ev.error === 'network') && !errorAvisado && fallosSeguidos >= 3) {
+          errorAvisado = true;
+          estado.msgs.push({ role: 'bot', texto: ev.error === 'network'
+            ? '⚠️ “Hey Deseret” no puede escuchar: el reconocimiento de voz del teléfono necesita internet y no responde. Mientras tanto, toca la abeja para hablarme.'
+            : '⚠️ “Hey Deseret” no puede usar el micrófono (quizás otra app lo está usando). Toca la abeja para hablarme.', error: true });
           guardar(); repintarTodo();
         }
       };
       rec.onend = () => {
-        corriendo = false;
-        // Chrome corta la escucha continua cada tanto: se vuelve a encender
-        // (con una pausa creciente si se corta muy seguido).
-        if (puedeCorrer()) setTimeout(arrancar, Math.min(500 * 2 ** reintentos++, 15000));
+        corriendo = false; marcarEscuchando(false);
+        // El navegador corta la escucha cada tanto (en Android, cada pocos
+        // segundos de silencio): se vuelve a encender al tiro. Solo si se
+        // corta al instante una y otra vez (error), se espera un poco más.
+        const duro = Date.now() - inicioSesion;
+        fallosSeguidos = duro < 1500 ? fallosSeguidos + 1 : 0;
+        const espera = fallosSeguidos ? Math.min(1000 * 2 ** (fallosSeguidos - 1), 8000) : 250;
+        if (puedeCorrer()) setTimeout(arrancar, espera);
       };
-      try { rec.start(); corriendo = true; } catch { corriendo = false; }
-      setTimeout(() => { if (corriendo) reintentos = 0; }, 10000);
+      inicioSesion = Date.now();
+      try { rec.start(); corriendo = true; } catch { corriendo = false; setTimeout(arrancar, 1000); }
     }
-    function detener() { if (rec && corriendo) { try { rec.abort(); } catch { /* ya estaba detenido */ } } corriendo = false; }
+    function disparar() {
+      clearTimeout(timerPendiente);
+      if (pendiente === null) return;
+      const resto = pendiente; pendiente = null;
+      despertar(resto);
+    }
+    function detener() { clearTimeout(timerPendiente); pendiente = null; if (rec && corriendo) { try { rec.abort(); } catch { /* ya estaba detenido */ } } corriendo = false; marcarEscuchando(false); }
     function despertar(resto) {
       detener();
       if (chatWindow.style.display === 'none') toggleChat();
@@ -835,12 +887,13 @@ export function initChatWidget() {
       activo: () => activo,
       pintar,
       pausar() { pausado = true; detener(); },
-      reanudar() { pausado = false; reintentos = 0; arrancar(); },
+      reanudar() { pausado = false; fallosSeguidos = 0; arrancar(); },
       alternar() {
         activo = !activo;
         store.set('localStorage', CLAVE_HEY, activo);
         pintar();
         if (!activo) detener();
+        errorAvisado = false; fallosSeguidos = 0;
         return activo;
       },
     };
