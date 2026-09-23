@@ -670,13 +670,19 @@ async function guardarEntrevista(d, usuario, data) {
 }
 
 // ----------------------------------------------------------------------
-// MODELOS DE IA (gratuitos) — Groq primero, Cerebras de respaldo, Gemini
-// al final. Groq y Cerebras no usan lo que se les manda para entrenar sus
-// modelos; el plan gratis de Gemini sí (fuera de la UE), y acá viajan
-// nombres de miembros y entrevistas — por eso queda como último recurso.
-// Los dos primeros usan la API compatible con OpenAI, así que se llaman
-// con fetch directo (sin depender de la versión del SDK).
+// MODELOS DE IA (gratuitos) — Gemini primero (decisión del administrador),
+// Groq y Cerebras de respaldo si Gemini falla o se queda sin cuota.
+// Ojo: el plan gratis de Gemini puede usar lo que se le manda para mejorar
+// sus modelos (fuera de la UE); Groq y Cerebras no.
+// Groq y Cerebras usan la API compatible con OpenAI, así que se llaman con
+// fetch directo (sin depender de la versión del SDK).
 // ----------------------------------------------------------------------
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+function clienteGemini() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GoogleGenAI({ apiKey, ...(process.env.GEMINI_BASE_URL ? { httpOptions: { baseUrl: process.env.GEMINI_BASE_URL } } : {}) });
+}
 function proveedoresIA() {
   const lista = [];
   if (process.env.GROQ_API_KEY) {
@@ -760,13 +766,40 @@ const PARECE_AGENDAR = /\b(agend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\
 
 async function extraerIntencionConIA(mensaje, hoyObj, data) {
   const provs = proveedoresIA();
-  if (!provs.length) return null;
+  const gemini = clienteGemini();
+  if (!provs.length && !gemini) return null;
   const sistema = `Extraes datos para agendar en la app de un barrio de La Iglesia (Chile).
 Hoy es ${DIAS_NOMBRE[hoyObj.getDay()]} ${toISO(hoyObj)}. "El viernes" = el próximo viernes a partir de hoy (o hoy si hoy es viernes).
 "8 de la noche" = 20:00; "después de la sacramental" no es una hora exacta: omite la hora.
 Organizaciones: ${(data.organizations || []).map((o) => o.name).join(', ')}.
 Si el usuario quiere AGENDAR algo, llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
 Si solo pregunta o conversa, no llames ninguna función.`;
+
+  if (gemini) {
+    try {
+      const r = await gemini.models.generateContent({
+        model: GEMINI_MODEL(),
+        contents: [{ role: 'user', parts: [{ text: mensaje }] }],
+        config: {
+          systemInstruction: sistema,
+          temperature: 0,
+          tools: [{
+            functionDeclarations: HERRAMIENTAS_AGENDAR.map((h) => ({
+              name: h.function.name,
+              description: h.function.description,
+              parametersJsonSchema: h.function.parameters,
+            })),
+          }],
+        },
+      });
+      const call = r?.functionCalls?.[0];
+      if (!call) return { tipo: null };
+      return { tipo: call.name === 'agendar_entrevista' ? 'entrevista' : 'actividad', args: call.args || {} };
+    } catch (err) {
+      console.warn('⚠️ Gemini no pudo interpretar el pedido (paso a Groq/Cerebras):', err.message);
+    }
+  }
+
   for (const prov of provs) {
     try {
       const r = await llamarOpenAICompatible(prov, {
@@ -810,6 +843,23 @@ function borradorDesdeIA(intencion, data, hoyObj) {
 }
 
 async function redactarConIA(systemInstruction, historial, mensaje) {
+  const gemini = clienteGemini();
+  if (gemini) {
+    try {
+      const historyTurns = (historial || []).flatMap((h) => ([
+        { role: 'user', parts: [{ text: h.user || '' }] },
+        { role: 'model', parts: [{ text: h.bot || '' }] },
+      ]));
+      const response = await gemini.models.generateContent({
+        model: GEMINI_MODEL(),
+        contents: [...historyTurns, { role: 'user', parts: [{ text: mensaje }] }],
+        config: { systemInstruction },
+      });
+      if (response && response.text) return response.text;
+    } catch (errGemini) {
+      console.warn('⚠️ Gemini falló (saturación/cuota). Paso a Groq/Cerebras...', errGemini.message);
+    }
+  }
   for (const prov of proveedoresIA()) {
     try {
       const r = await llamarOpenAICompatible(prov, {
@@ -828,24 +878,6 @@ async function redactarConIA(systemInstruction, historial, mensaje) {
       if (texto) return texto;
     } catch (err) {
       console.warn(`⚠️ ${prov.nombre} falló redactando la respuesta:`, err.message);
-    }
-  }
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (geminiKey) {
-    try {
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const historyTurns = (historial || []).flatMap((h) => ([
-        { role: 'user', parts: [{ text: h.user || '' }] },
-        { role: 'model', parts: [{ text: h.bot || '' }] },
-      ]));
-      const response = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
-        contents: [...historyTurns, { role: 'user', parts: [{ text: mensaje }] }],
-        config: { systemInstruction },
-      });
-      if (response && response.text) return response.text;
-    } catch (errGemini) {
-      console.warn('⚠️ Gemini falló (saturación/cuota).', errGemini.message);
     }
   }
   return null;
