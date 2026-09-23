@@ -1409,7 +1409,7 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     if (contextoDinamico === '') {
       registrarSinRespuesta(mensaje).catch(() => {});
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '🐝 ¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos, decirte qué tienes **esta semana**, sugerirte **horarios libres**, mostrarte la **ficha** de una persona, **prepararte una reunión** y contarte cómo vamos en **asistencia** y en el **Enfoque Ministración**. ¿Qué necesitas?';
+      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos, decirte qué tienes **esta semana**, sugerirte **horarios libres**, mostrarte la **ficha** de una persona, **prepararte una reunión** y contarte cómo vamos en **asistencia** y en el **Enfoque Ministración**. ¿Qué necesitas?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1419,7 +1419,7 @@ ${contextoDinamico}
 REGLAS DE COMPORTAMIENTO:
 1. Responde SOLO con los datos de arriba. NUNCA inventes datos que no estén ahí.
 2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
-3. Pon en **negrita** títulos, nombres y fechas. Usa algún emoji amigable (🐝, 📅, 🧹, 🏛️, 🙋).
+3. Pon en **negrita** títulos, nombres y fechas. Tono profesional y cálido: usa pocos emojis y solo funcionales (📅, 🧹, 🏛️, 🙋); nunca 🐝.
 4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
 5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.
 6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.
@@ -1435,7 +1435,7 @@ REGLAS DE COMPORTAMIENTO:
     return resultado;
   } catch (error) {
     console.error('DETALLE DEL ERROR GENERAL:', error);
-    return resp('🐝 Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.');
+    return resp('Ocurrió un inconveniente al procesar la solicitud. Intenta de nuevo.');
   }
 }
 

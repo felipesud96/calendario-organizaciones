@@ -122,7 +122,7 @@ async function enviarResumenesSemanales() {
   for (const u of destinatarios) {
     const r = resumenSemana(u, data, { desde: lunes, dias: 7 });
     try {
-      await sendUserPush(u, { title: '🐝 Tu semana en OrganizaSion', body: `Esta semana: ${fraseResumen(r)}.`, url: '/?vista=home' });
+      await sendUserPush(u, { title: 'Tu semana en OrganizaSion', body: `Esta semana: ${fraseResumen(r)}.`, url: '/?vista=home' });
     } catch (e) { /* sin suscripción push: no pasa nada */ }
   }
   await withDb((d) => {

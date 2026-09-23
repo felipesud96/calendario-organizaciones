@@ -195,7 +195,7 @@ function consultaSemana(norm, usuario, data, hoyObj) {
   const periodo = soloHoy ? 'hoy' : manana ? 'mañana' : 'esta semana';
   const items = [...r.entrevistas, ...r.compromisos, ...r.actividades].sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)).slice(0, 15)
     .map((x) => ({ tipo: x.tipo === 'compromiso' ? 'compromiso' : x.tipo, titulo: x.titulo, fecha: x.fecha, hora: x.hora, org: x.org, color: x.color }));
-  return resp(`🐝 Para **${periodo}** tienes: ${fraseResumen(r)}.${r.totales.solicitudes ? '\n\n📥 Revisa las solicitudes en **Entrevistas → Solicitudes**.' : ''}`, items.length ? { items } : {});
+  return resp(`Para **${periodo}** tienes: ${fraseResumen(r)}.${r.totales.solicitudes ? '\n\n📥 Revisa las solicitudes en **Entrevistas → Solicitudes**.' : ''}`, items.length ? { items } : {});
 }
 
 // ---------------- 10. Aprender del uso ----------------

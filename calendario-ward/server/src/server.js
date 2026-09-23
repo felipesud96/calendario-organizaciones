@@ -228,7 +228,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (chatRateLimited(usuario.id)) {
-          return sendJson(res, 429, { error: '🐝 Estás mandándome mensajes muy rápido. Espera un momento e intenta de nuevo.' });
+          return sendJson(res, 429, { error: 'Estás mandándome mensajes muy rápido. Espera un momento e intenta de nuevo.' });
         }
 
         const historial = Array.isArray(parsed.historial) ? parsed.historial.slice(-6) : [];
@@ -239,7 +239,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { respuesta: texto, ...extra });
       } catch (error) {
         console.error('Error en endpoint chat IA:', error);
-        const mensajeError = "🐝 Ocurrió un inconveniente al validar la consulta. Por favor, intenta de nuevo.";
+        const mensajeError = "Ocurrió un inconveniente al validar la consulta. Por favor, intenta de nuevo.";
         return sendJson(res, 200, { respuesta: mensajeError });
       }
     });

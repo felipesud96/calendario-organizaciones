@@ -1,4 +1,4 @@
-// Deseret 🐝 — widget del asistente de IA de OrganizaSion.
+// Deseret — widget del asistente de IA de OrganizaSion.
 //
 // Se abre tocando el logo de la abeja de la barra superior. Habla con
 // POST /api/chat, que responde { respuesta, opciones?, tarjeta?, items? }:
@@ -48,6 +48,24 @@ const store = {
 const CLAVE_CHAT = 'deseret_chat_v2';   // sessionStorage: conversación de esta pestaña
 const CLAVE_VOZ = 'deseret_voz';        // localStorage: ¿leer respuestas en voz alta?
 
+// Imagen de Deseret (abeja en un panal) y los íconos de línea de la ventana.
+const AVATAR = '/deseret.svg';
+const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${d}</svg>`;
+const ICONOS = {
+  vozOn: svg('<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'),
+  vozOff: svg('<path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>'),
+  reiniciar: svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>'),
+  cerrar: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  mic: svg('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>'),
+  enviar: svg('<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>'),
+  copiar: svg('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>', ' width="14" height="14"'),
+  ok: svg('<path d="M20 6 9 17l-5-5"/>', ' width="14" height="14"'),
+  arriba: svg('<path d="M7 10v12"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18.4 22H7V10l4.3-8a3 3 0 0 1 3.7 3.9z"/>', ' width="14" height="14"'),
+  abajo: svg('<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 5.6 2H17v12l-4.3 8a3 3 0 0 1-3.7-3.9z"/>', ' width="14" height="14"'),
+};
+// Sugerencias de la pantalla de bienvenida.
+const SUGERENCIAS = ['¿Qué tengo esta semana?', 'Agendar una entrevista', '¿Cómo vamos en ministración?'];
+
 const ESTILOS = `
   #organiza-chat-widget button, .chat-btn { outline: none; -webkit-tap-highlight-color: transparent; }
 
@@ -75,20 +93,43 @@ const ESTILOS = `
     overflow: hidden;
   }
   #chat-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 12px; font-weight: 700;
-    background: var(--celeste, #0ea5e9); color: #fff;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 10px 10px 14px;
+    background: linear-gradient(135deg, var(--celeste-dark, #0369a1), var(--celeste, #0ea5e9)); color: #fff;
   }
-  #chat-header button { background: transparent; border: 0; color: #fff; font-size: 16px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+  .deseret-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .deseret-id img { width: 38px; height: 38px; flex: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)); }
+  .deseret-id .nombre { font-weight: 700; font-size: 15px; line-height: 1.2; }
+  .deseret-id .estado { font-size: 12px; opacity: .9; display: flex; align-items: center; gap: 5px; }
+  .deseret-id .estado::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+  .deseret-botones { display: flex; gap: 2px; flex: none; }
+  #chat-header button { background: transparent; border: 0; color: #fff; cursor: pointer; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
   #chat-header button:hover { background: rgba(255,255,255,.18); }
-  #chat-header button[aria-pressed="false"] { opacity: .6; }
+  #chat-header button[aria-pressed="false"] { opacity: .7; }
   #chat-messages {
     flex: 1; overflow-y: auto; padding: 12px;
     display: flex; flex-direction: column; gap: 8px;
     background: var(--celeste-lighter, #f0f9ff);
   }
   #chat-messages .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 14px; line-height: 1.45; word-wrap: break-word; }
-  #chat-messages .msg.bot { align-self: flex-start; background: var(--white, #fff); border: 1px solid var(--border, #dbeafe); }
+  #chat-messages .msg.bot {
+    align-self: flex-start; position: relative; margin-left: 34px; max-width: calc(88% - 34px);
+    background: var(--white, #fff); border: 1px solid var(--border, #dbeafe); border-top-left-radius: 4px;
+    box-shadow: 0 1px 2px rgba(15,23,42,.05);
+  }
+  #chat-messages .msg.bot::before {
+    content: ''; position: absolute; left: -34px; top: 0; width: 26px; height: 26px;
+    background: url('/deseret.svg') center / contain no-repeat;
+  }
+  #chat-messages .msg.bot + .msg.bot::before { display: none; }
+  #chat-messages .msg.user { border-top-right-radius: 4px; }
+
+  /* Bienvenida */
+  .deseret-bienvenida { text-align: center; padding: 14px 8px 4px; color: var(--ink-soft, #475569); }
+  .deseret-bienvenida img { width: 72px; height: 72px; filter: drop-shadow(0 4px 10px rgba(240,165,0,.35)); }
+  .deseret-bienvenida .t { font-weight: 700; font-size: 17px; color: var(--ink, #0f172a); margin-top: 6px; }
+  .deseret-bienvenida .s { font-size: 13px; margin-top: 2px; }
+  .deseret-bienvenida .deseret-chips { justify-content: center; margin-top: 12px; }
   #chat-messages .msg.user { align-self: flex-end; background: var(--celeste, #0ea5e9); color: #fff; }
   #chat-messages .msg.error { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
 
@@ -124,16 +165,21 @@ const ESTILOS = `
   .deseret-item .que .org { font-size: 11px; color: var(--c); font-weight: 600; }
 
   .msg-actions { display: flex; gap: 8px; margin-top: 6px; font-size: 11px; }
-  .btn-action { background: var(--celeste-lighter, #eef2f5); border: 1px solid var(--border, #cbd5e1); border-radius: 4px; padding: 3px 8px; cursor: pointer; color: var(--ink-soft, #334155); }
+  .btn-action { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; cursor: pointer; color: var(--ink-soft, #64748b); font-size: 11px; }
+  .btn-action:hover:not(:disabled) { background: var(--celeste-lighter, #f0f9ff); border-color: var(--border, #dbeafe); color: var(--ink, #0f172a); }
+  .btn-action.activo { color: var(--celeste-dark, #0369a1); background: var(--celeste-light, #e0f2fe); }
+  .btn-action:disabled:not(.activo) { opacity: .45; cursor: default; }
 
-  #chat-input-area { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border, #dbeafe); background: var(--white, #fff); }
+  #chat-input-area { display: flex; gap: 6px; align-items: center; padding: 10px; border-top: 1px solid var(--border, #dbeafe); background: var(--white, #fff); }
   #chat-input {
-    flex: 1; min-width: 0; padding: 8px 10px; font-size: 16px;
-    border: 1px solid var(--border, #dbeafe); border-radius: 8px;
-    background: var(--white, #fff); color: var(--ink, #0f172a);
+    flex: 1; min-width: 0; height: 40px; padding: 0 14px; font-size: 16px;
+    border: 1px solid var(--border, #dbeafe); border-radius: 999px;
+    background: var(--celeste-lighter, #f8fafc); color: var(--ink, #0f172a);
   }
-  #chat-send-btn, #chat-mic-btn { border: 1px solid var(--border, #dbeafe); border-radius: 8px; padding: 0 10px; cursor: pointer; background: var(--celeste-lighter, #f0f9ff); color: var(--ink, #0f172a); }
-  #chat-send-btn { background: var(--celeste, #0ea5e9); color: #fff; border-color: var(--celeste, #0ea5e9); font-weight: 600; }
+  #chat-input:focus { outline: none; border-color: var(--celeste, #0ea5e9); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
+  #chat-send-btn, #chat-mic-btn { flex: none; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border, #dbeafe); border-radius: 50%; cursor: pointer; background: var(--white, #fff); color: var(--ink-soft, #475569); }
+  #chat-mic-btn:hover { color: var(--ink, #0f172a); background: var(--celeste-lighter, #f0f9ff); }
+  #chat-send-btn { background: var(--celeste, #0ea5e9); color: #fff; border-color: var(--celeste, #0ea5e9); }
   #chat-send-btn:disabled { opacity: .6; cursor: default; }
   @keyframes pulse-wave {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
@@ -148,7 +194,7 @@ const ESTILOS = `
   }
 `;
 
-const SALUDO = '¡Hola! Soy Deseret, la abeja asistente de OrganizaSion. ¿En qué te puedo ayudar hoy?';
+const SALUDO = '¡Hola! Soy **Deseret**, la asistente de OrganizaSion. Puedo agendar, reprogramar, buscar a alguien o contarte cómo va el barrio. ¿En qué te ayudo?';
 
 export function initChatWidget() {
   if (!document.getElementById('deseret-styles')) {
@@ -163,18 +209,21 @@ export function initChatWidget() {
       <div id="organiza-chat-widget">
         <div id="chat-window" style="display: none;" role="dialog" aria-label="Deseret, asistente de IA">
           <div id="chat-header">
-            <span>🐝 Deseret (IA)</span>
-            <div>
-              <button id="chat-voice-btn" title="Leer respuestas en voz alta" aria-pressed="false">🔈</button>
-              <button id="chat-reset-btn" title="Reiniciar conversación">🔄</button>
-              <button id="chat-close-btn" title="Cerrar">✕</button>
+            <div class="deseret-id">
+              <img src="${AVATAR}" alt="" />
+              <div><div class="nombre">Deseret</div><div class="estado">Asistente IA</div></div>
+            </div>
+            <div class="deseret-botones">
+              <button id="chat-voice-btn" title="Leer respuestas en voz alta" aria-label="Leer respuestas en voz alta" aria-pressed="false">${ICONOS.vozOff}</button>
+              <button id="chat-reset-btn" title="Reiniciar conversación" aria-label="Reiniciar conversación">${ICONOS.reiniciar}</button>
+              <button id="chat-close-btn" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
             </div>
           </div>
           <div id="chat-messages" aria-live="polite"></div>
           <div id="chat-input-area">
-            <button id="chat-mic-btn" title="Dictar por voz">🎙️</button>
+            <button id="chat-mic-btn" title="Dictar por voz" aria-label="Dictar por voz">${ICONOS.mic}</button>
             <input type="text" id="chat-input" placeholder="Pregunta o pide agendar algo..." enterkeyhint="send" />
-            <button id="chat-send-btn">Enviar</button>
+            <button id="chat-send-btn" title="Enviar" aria-label="Enviar">${ICONOS.enviar}</button>
           </div>
         </div>
       </div>`);
@@ -262,29 +311,31 @@ export function initChatWidget() {
         const copiar = document.createElement('button');
         copiar.type = 'button';
         copiar.className = 'btn-action';
-        copiar.textContent = '📋 Copiar';
+        copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`;
+        copiar.title = 'Copiar respuesta';
         copiar.addEventListener('click', () => {
           const texto = div.querySelector('.cuerpo')?.innerText || '';
           navigator.clipboard?.writeText(texto).then(() => {
-            copiar.textContent = '✅ Copiado';
-            setTimeout(() => { copiar.textContent = '📋 Copiar'; }, 1500);
+            copiar.innerHTML = `${ICONOS.ok}<span>Copiado</span>`;
+            setTimeout(() => { copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`; }, 1500);
           });
         });
         acciones.appendChild(copiar);
         // Punto 10: 👍/👎 para saber qué respuestas sirven (se guarda sin nombre).
         if (m.pregunta) {
-          for (const [emoji, valor] of [['👍', 1], ['👎', -1]]) {
+          for (const [icono, valor] of [[ICONOS.arriba, 1], [ICONOS.abajo, -1]]) {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'btn-action';
-            b.textContent = emoji;
+            b.innerHTML = icono;
+            b.setAttribute('aria-label', valor === 1 ? 'Me sirvió' : 'No me sirvió');
             b.title = valor === 1 ? 'Me sirvió' : 'No me sirvió';
-            if (m.valorado) { b.disabled = true; if (m.valorado === valor) b.style.background = 'var(--celeste-light, #e0f2fe)'; }
+            if (m.valorado) { b.disabled = true; if (m.valorado === valor) b.classList.add('activo'); }
             b.addEventListener('click', async () => {
               m.valorado = valor;
               guardar();
               acciones.querySelectorAll('.btn-valor').forEach((x) => { x.disabled = true; });
-              b.style.background = 'var(--celeste-light, #e0f2fe)';
+              b.classList.add('activo');
               try {
                 let token = null;
                 try { token = localStorage.getItem('cow_token'); } catch { token = null; }
@@ -306,9 +357,29 @@ export function initChatWidget() {
     scrollAbajo();
   }
 
+  // Bienvenida: la abeja en grande + sugerencias, mientras no se haya escrito nada.
+  function pintarBienvenida() {
+    const w = document.createElement('div');
+    w.className = 'deseret-bienvenida';
+    w.innerHTML = `<img src="${AVATAR}" alt="" /><div class="t">Deseret</div><div class="s">Tu asistente para organizar el barrio</div>`;
+    const chips = document.createElement('div');
+    chips.className = 'deseret-chips';
+    SUGERENCIAS.forEach((q) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'deseret-chip';
+      b.textContent = q;
+      b.addEventListener('click', () => { w.remove(); enviar(q); });
+      chips.appendChild(b);
+    });
+    w.appendChild(chips);
+    messagesDiv.appendChild(w);
+  }
+
   function repintarTodo() {
     messagesDiv.innerHTML = '';
     if (!estado.msgs.length) estado.msgs.push({ role: 'bot', texto: SALUDO });
+    if (!estado.msgs.some((m) => m.role === 'user')) pintarBienvenida();
     estado.msgs.forEach(pintarMensaje);
   }
   repintarTodo();
@@ -318,7 +389,7 @@ export function initChatWidget() {
   let ultimaFueDictada = false;
   const puedeHablar = 'speechSynthesis' in window;
   const pintarBotonVoz = () => {
-    voiceBtn.textContent = vozActiva ? '🔊' : '🔈';
+    voiceBtn.innerHTML = vozActiva ? ICONOS.vozOn : ICONOS.vozOff;
     voiceBtn.setAttribute('aria-pressed', String(vozActiva));
     voiceBtn.title = vozActiva ? 'Leer respuestas en voz alta: activado' : 'Leer respuestas en voz alta: desactivado';
   };
@@ -364,6 +435,7 @@ export function initChatWidget() {
     const dictada = ultimaFueDictada;
     ultimaFueDictada = false;
     quitarChipsViejos();
+    messagesDiv.querySelector('.deseret-bienvenida')?.remove();
     const msgUser = { role: 'user', texto: textoVisible || text };
     estado.msgs.push(msgUser);
     pintarMensaje(msgUser);
@@ -496,7 +568,7 @@ export function initChatWidget() {
       isListening = true;
       micBtn.classList.add('mic-listening');
       micBtn.title = 'Escuchando tu voz...';
-      chatInput.placeholder = 'Escuchando tu voz... 🎙️';
+      chatInput.placeholder = 'Escuchando…';
     };
     recognition.onresult = (event) => {
       chatInput.value = event.results[0][0].transcript;

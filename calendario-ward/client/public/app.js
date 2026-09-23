@@ -2572,7 +2572,7 @@ async function renderHomeView() {
       <div><h2>Hola, ${esc(nombre)} 👋</h2><p>Tu semana: ${esc(fmtDateHuman(r.desde))} al ${esc(fmtDateHuman(r.hasta))}</p></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         ${puedeVerFichasCliente() ? '<button class="btn btn-secondary" id="home-buscar-persona">🔎 Buscar persona</button>' : ''}
-        <button class="btn btn-primary" id="home-deseret">🐝 Preguntarle a Deseret</button>
+        <button class="btn btn-primary btn-deseret" id="home-deseret"><img src="/deseret.svg" alt="" width="22" height="22" /> Preguntarle a Deseret</button>
       </div>
     </div>
     <div class="home-kpis">${kpis}</div>
@@ -3724,7 +3724,7 @@ async function openPublicBookingLinkModal() {
       for (let r = 0; r < n; r += 1) for (let c = 0; c < n; c += 1) if (qr.isDark(r, c)) ctx.fillRect(x0 + c * cel, y0 + r * cel, cel, cel);
       ctx.fillStyle = '#475569'; ctx.font = '18px system-ui, sans-serif';
       ctx.fillText('Escanea con la cámara de tu celular', canvas.width / 2, y0 + tam + 40);
-      ctx.fillText('OrganizaSion 🐝', canvas.width / 2, y0 + tam + 70);
+      ctx.fillText('OrganizaSion', canvas.width / 2, y0 + tam + 70);
     }).catch((e) => toast(e.message, 'error'));
     document.getElementById('pbl-download').addEventListener('click', () => {
       const a = document.createElement('a');

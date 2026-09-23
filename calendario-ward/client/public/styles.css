@@ -1421,3 +1421,7 @@ tr.wg-cat-row td {
 .ficha-item-t { font-weight: 600; }
 .ficha-item-e { font-weight: 400; font-size: 12px; }
 .ficha-item-d { font-size: 12px; color: var(--ink-soft); font-style: italic; }
+
+/* Botón "Preguntarle a Deseret" con la imagen de la abeja */
+.btn-deseret { display: inline-flex; align-items: center; gap: 8px; }
+.btn-deseret img { flex: none; margin: -3px 0; filter: drop-shadow(0 1px 1px rgba(0,0,0,.2)); }
