@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import Groq from 'groq-sdk';
 import { load, withDb, nextId } from './db.js';
 import { canEditOrg, PURPOSE_OPTIONS, orgRequiresSupervisingAdults } from './routes/events.js';
-import { canScheduleOrg, orgAllowsInterviews } from './routes/interviews.js';
+import { canScheduleOrg, orgAllowsInterviews, orgSeesAllInterviews } from './routes/interviews.js';
 import { findStakeConflicts } from './stakeCalendar.js';
 import { isObispadoLeader } from './routes/stake.js';
 
@@ -10,7 +10,51 @@ import { isObispadoLeader } from './routes/stake.js';
 // preguntas de SOLO LECTURA (ver MÓDULO 2 más abajo). Nunca se usa para
 // agendar, así que no hay riesgo de "responder de caché" una acción que en
 // realidad no se ejecutó.
+//
+// Dos problemas que tenía la versión anterior, ya corregidos acá:
+//   1. La llave era solo el texto del mensaje en minúsculas, sin importar
+//      QUIÉN preguntaba — así que si un líder de Obispado preguntaba "¿qué
+//      porcentaje tiene recomendación del templo?" (dato restringido a
+//      Obispado/Administrador, ver isObispadoLeader más abajo) y después un
+//      Miembro cualquiera escribía exactamente lo mismo, el Miembro recibía
+//      la respuesta CACHEADA con el dato real, saltándose el permiso.
+//      Ahora la llave incluye el alcance (rol + organización) de quien
+//      pregunta, calculado igual que en el resto de la app.
+//   2. El Map nunca se vaciaba ni expiraba — crecía para siempre mientras el
+//      servidor estuviera corriendo. Ahora cada entrada expira sola
+//      (CACHE_TTL_MS) y el total de entradas está acotado (CACHE_MAX_ENTRIES,
+//      con desalojo FIFO simple aprovechando que un Map recorre sus llaves
+//      en orden de inserción).
 const cacheRespuestas = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const CACHE_MAX_ENTRIES = 500;
+
+function scopeCacheParaUsuario(usuario) {
+  if (!usuario) return 'anon';
+  return `${usuario.role || ''}:${usuario.organizationId ?? ''}`;
+}
+
+function claveCache(usuario, mensajeMinusculas) {
+  return `${scopeCacheParaUsuario(usuario)}::${mensajeMinusculas}`;
+}
+
+function leerCache(clave) {
+  const entry = cacheRespuestas.get(clave);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    cacheRespuestas.delete(clave);
+    return null;
+  }
+  return entry.value;
+}
+
+function guardarCache(clave, value) {
+  if (!cacheRespuestas.has(clave) && cacheRespuestas.size >= CACHE_MAX_ENTRIES) {
+    const masAntigua = cacheRespuestas.keys().next().value;
+    cacheRespuestas.delete(masAntigua);
+  }
+  cacheRespuestas.set(clave, { value, ts: Date.now() });
+}
 
 function normalizeSearchText(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -325,9 +369,9 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     // MÓDULO 2: VERIFICAR CACHÉ DE LECTURA (<10 ms) — solo consultas, nunca
     // acciones (el bloque de arriba ya retornó si era agendamiento).
     // ------------------------------------------------------------------------
-    if (cacheRespuestas.has(mensajeMinusculas)) {
-      return cacheRespuestas.get(mensajeMinusculas);
-    }
+    const clave = claveCache(usuario, mensajeMinusculas);
+    const cacheada = leerCache(clave);
+    if (cacheada) return cacheada;
 
     let contextoDinamico = '';
     let respuestaLocalFallback = '';
@@ -354,39 +398,71 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     }
 
     if (mensajeMinusculas.match(/(entrevista|entrevistas)/)) {
-      const entrevistas = (db.interviews || [])
-        .filter((iv) => iv.date >= hoy && (iv.status || 'scheduled') === 'scheduled')
-        .map((iv) => {
-          const org = (db.organizations || []).find((o) => Number(o.id) === Number(iv.organizationId));
-          return { nombre: iv.memberName, fecha: iv.date, hora: iv.startTime, organizacion: org ? org.name : '' };
-        });
-      contextoDinamico += '\n--- ENTREVISTAS AGENDADAS (pendientes) ---\n' + JSON.stringify(entrevistas);
+      // Mismo criterio de privacidad que GET /api/interviews (ver
+      // orgSeesAllInterviews en interviews.js): las entrevistas son
+      // información privada de los miembros. Antes este bloque traía TODAS
+      // las entrevistas de TODO el barrio sin importar quién preguntara —
+      // acá se acota exactamente igual que el endpoint REST equivalente.
+      let entrevistasVisibles = (db.interviews || [])
+        .filter((iv) => iv.date >= hoy && (iv.status || 'scheduled') === 'scheduled');
+      if (!usuario) {
+        entrevistasVisibles = [];
+      } else if (['member', 'ward_clerk', 'financial_clerk'].includes(usuario.role)) {
+        entrevistasVisibles = entrevistasVisibles.filter((iv) => Number(iv.memberUserId) === Number(usuario.id));
+      } else if (!orgSeesAllInterviews(usuario, db)) {
+        entrevistasVisibles = entrevistasVisibles.filter((iv) => Number(iv.organizationId) === Number(usuario.organizationId) || Number(iv.memberUserId) === Number(usuario.id));
+      }
+      const entrevistas = entrevistasVisibles.map((iv) => {
+        const org = (db.organizations || []).find((o) => Number(o.id) === Number(iv.organizationId));
+        return { nombre: iv.memberName, fecha: iv.date, hora: iv.startTime, organizacion: org ? org.name : '' };
+      });
+      contextoDinamico += '\n--- ENTREVISTAS AGENDADAS (pendientes, ya acotadas a lo que este usuario puede ver) ---\n' + JSON.stringify(entrevistas);
       respuestaLocalFallback = entrevistas.length
         ? '🙋 **Próximas entrevistas agendadas:**\n\n' + entrevistas.map((e) => `• **${e.nombre}** (${e.organizacion}) - ${e.fecha} ${e.hora}`).join('\n')
-        : '🙋 No hay entrevistas pendientes agendadas.';
+        : '🙋 No hay entrevistas pendientes agendadas para ti.';
     }
 
     if (mensajeMinusculas.match(/(aseo|limpieza|limpiar|edificio|capilla|turno|familia)/)) {
-      const turnosAseo = (db.cleaningShifts || [])
-        .filter((t) => t.date >= hoy)
-        .map((t) => {
-          const fam = (db.families || []).find((f) => Number(f.id) === Number(t.familyId));
-          return { fecha: t.date, familia: fam ? fam.name : 'Sin asignar' };
-        });
-      contextoDinamico += '\n--- TURNOS DE ASEO ---\n' + JSON.stringify(turnosAseo);
-      if (turnosAseo.length > 0) {
-        respuestaLocalFallback = '🧹 **Próximos turnos de aseo del edificio:**\n\n' + turnosAseo.map((t) => `• Fecha: **${t.fecha}** - Familia: **${t.familia}**`).join('\n');
+      // El módulo de Aseo del Edificio es exclusivo de Obispado/Administrador
+      // (ver cleaning.js, isObispadoLeader) — antes este bloque le mostraba
+      // los turnos y las familias asignadas a cualquier usuario logueado que
+      // preguntara, sin verificar el permiso.
+      if (isObispadoLeader(usuario, db)) {
+        const turnosAseo = (db.cleaningShifts || [])
+          .filter((t) => t.date >= hoy)
+          .map((t) => {
+            const fam = (db.families || []).find((f) => Number(f.id) === Number(t.familyId));
+            return { fecha: t.date, familia: fam ? fam.name : 'Sin asignar' };
+          });
+        contextoDinamico += '\n--- TURNOS DE ASEO ---\n' + JSON.stringify(turnosAseo);
+        if (turnosAseo.length > 0) {
+          respuestaLocalFallback = '🧹 **Próximos turnos de aseo del edificio:**\n\n' + turnosAseo.map((t) => `• Fecha: **${t.fecha}** - Familia: **${t.familia}**`).join('\n');
+        }
+      } else {
+        contextoDinamico += '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por el Aseo del Edificio, pero ese módulo es exclusivo del Administrador o el líder de Obispado. Explícaselo brevemente, sin inventar ni mostrar ningún dato de turnos o familias.';
+        respuestaLocalFallback = '🧹 El módulo de Aseo del Edificio es visible solo para el Administrador o el líder de Obispado.';
       }
     }
 
     if (mensajeMinusculas.match(/(recomendación|recomendacion|templo|porcentaje|cuántos|cuantos|jóvenes|jovenes|adultos|cumpleaños|miembros)/)) {
-      const miembros = db.directoryMembers || [];
-      const totalMiembros = miembros.length;
-      const conRecomendacion = miembros.filter((m) => m.templeRecommend).length;
-      const porcentajeVigente = totalMiembros > 0 ? Math.round((conRecomendacion / totalMiembros) * 100) : 0;
-      contextoDinamico += '\n--- ESTADÍSTICAS DE RECOMENDACIÓN DEL TEMPLO ---\n' + JSON.stringify({ totalMiembros, conRecomendacion, porcentajeVigente });
-      if (mensajeMinusculas.includes('porcentaje') || mensajeMinusculas.includes('cuántos') || mensajeMinusculas.includes('cuantos')) {
-        respuestaLocalFallback = `🏛️ **Estadísticas de Recomendación del Templo:**\n\n• Un **${porcentajeVigente}%** de los miembros registrados tiene su recomendación del templo vigente (${conRecomendacion} de ${totalMiembros}).`;
+      // El Directorio y "Enfoque Ministración" (de donde sale este dato) son
+      // exclusivos de Obispado/Administrador (ver directory.js,
+      // isObispadoLeader) — antes cualquier usuario logueado podía pedirle
+      // esto a Deseret sin tener acceso al módulo real.
+      if (isObispadoLeader(usuario, db)) {
+        const miembros = db.directoryMembers || [];
+        const totalMiembros = miembros.length;
+        const conRecomendacion = miembros.filter((m) => m.templeRecommend).length;
+        const porcentajeVigente = totalMiembros > 0 ? Math.round((conRecomendacion / totalMiembros) * 100) : 0;
+        contextoDinamico += '\n--- ESTADÍSTICAS DE RECOMENDACIÓN DEL TEMPLO ---\n' + JSON.stringify({ totalMiembros, conRecomendacion, porcentajeVigente });
+        if (mensajeMinusculas.includes('porcentaje') || mensajeMinusculas.includes('cuántos') || mensajeMinusculas.includes('cuantos')) {
+          respuestaLocalFallback = `🏛️ **Estadísticas de Recomendación del Templo:**\n\n• Un **${porcentajeVigente}%** de los miembros registrados tiene su recomendación del templo vigente (${conRecomendacion} de ${totalMiembros}).`;
+        }
+      } else {
+        contextoDinamico += '\n--- AVISO DE PERMISOS ---\nEl usuario preguntó por estadísticas del Directorio/recomendación del templo, pero esa información es exclusiva del Administrador o el líder de Obispado. Explícaselo brevemente, sin inventar ni mostrar ningún dato.';
+        if (mensajeMinusculas.includes('porcentaje') || mensajeMinusculas.includes('cuántos') || mensajeMinusculas.includes('cuantos')) {
+          respuestaLocalFallback = '🏛️ Las estadísticas de recomendación del templo son visibles solo para el Administrador o el líder de Obispado.';
+        }
       }
     }
 
@@ -400,11 +476,12 @@ Aquí tienes la información extraída de la base de datos:
 ${contextoDinamico}
 
 REGLAS DE COMPORTAMIENTO:
-1. Responde preguntas de CONSULTA E INFORMACIÓN directamente. NUNCA menciones restricciones de permisos.
+1. Responde preguntas de CONSULTA E INFORMACIÓN directamente, usando SOLO los datos de la sección de arriba. NUNCA inventes datos que no estén ahí.
 2. NUNCA respondas en un solo párrafo gigante. Usa listas ordenadas con viñetas.
 3. Pon en **negrita** los títulos de actividades, nombres de familias, personas y fechas.
 4. Usa emojis amigables (🐝, 📅, 🧹, 🏛️, 🙋).
-5. Esta conversación es de SOLO CONSULTA — tú no agendas nada acá directamente. Si el usuario quiere agendar algo, dile que lo pida así de claro: "agenda una actividad/entrevista para…" — eso sí crea el registro de verdad. Nunca digas que ya agendaste algo si no te lo confirmó el sistema.`;
+5. Esta conversación es de SOLO CONSULTA — tú no agendas nada acá directamente. Si el usuario quiere agendar algo, dile que lo pida así de claro: "agenda una actividad/entrevista para…" — eso sí crea el registro de verdad. Nunca digas que ya agendaste algo si no te lo confirmó el sistema.
+6. Si ves un "AVISO DE PERMISOS" en la información de arriba, es una EXCEPCIÓN a la regla 1: en ese caso SÍ debes decirle al usuario, en una frase breve y amable, que esa información no está disponible para su perfil — nunca inventes ni te acerques a dar el dato de todas formas.`;
 
     // Historial reciente (últimas interacciones) para que la IA tenga contexto
     // de lo que se habló antes — antes se armaba en el frontend pero nunca
@@ -424,7 +501,7 @@ REGLAS DE COMPORTAMIENTO:
           config: { systemInstruction },
         });
         if (response && response.text) {
-          cacheRespuestas.set(mensajeMinusculas, response.text);
+          guardarCache(clave, response.text);
           return response.text;
         }
       } catch (errGemini) {
@@ -451,7 +528,7 @@ REGLAS DE COMPORTAMIENTO:
         });
         const respuestaGroq = completion.choices[0]?.message?.content;
         if (respuestaGroq) {
-          cacheRespuestas.set(mensajeMinusculas, respuestaGroq);
+          guardarCache(clave, respuestaGroq);
           return respuestaGroq;
         }
       } catch (errGroq) {

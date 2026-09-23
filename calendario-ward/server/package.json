@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "web-push": "^3.6.7",
-    "@google/genai": "latest",
+    "@google/genai": "^2.24.0",
     "groq-sdk": "^0.7.0"
   },
   "engines": {

@@ -1,3 +1,16 @@
+// Escapa HTML antes de insertarlo con innerHTML — sin esto, tanto lo que
+// escribe el usuario como lo que responde la IA (que puede citar texto
+// libre de la base de datos, ej. el título de una actividad) se insertaban
+// tal cual en el DOM, permitiendo XSS almacenado (ej. un título de
+// actividad "<img src=x onerror=alert(1)>" se habría ejecutado para
+// cualquiera que viera esa respuesta). Se usa textContent -> innerHTML, el
+// truco estándar del navegador para escapar sin depender de una librería.
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = String(str ?? '');
+  return div.innerHTML;
+}
+
 export function initChatWidget() {
   // 1. Estilos CSS (Eliminación de contorno azul, pulso de micrófono y tarjetas)
   const style = document.createElement('style');
@@ -179,7 +192,7 @@ export function initChatWidget() {
     const text = chatInput.value.trim();
     if (!text) return;
 
-    messagesDiv.innerHTML += `<div class="msg user">${text}</div>`;
+    messagesDiv.innerHTML += `<div class="msg user">${escapeHtml(text)}</div>`;
     chatInput.value = '';
 
     const loadingId = 'loading-' + Date.now();
@@ -187,12 +200,21 @@ export function initChatWidget() {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
     try {
-      const response = await fetch('/api/chat', { 
+      // Mismo storage/clave que usa app.js ('cow_token') para guardar la
+      // sesión — antes este fetch no mandaba el header Authorization (un
+      // commit lo había agregado pero quedó pisado por una actualización
+      // posterior del widget), así que /api/chat rechazaba todo con 401
+      // apenas se exigió login para usar a Deseret.
+      const token = localStorage.getItem('cow_token');
+      const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
           mensaje: text,
-          historial: historialSesion 
+          historial: historialSesion
         })
       });
       const data = await response.json();
@@ -206,7 +228,11 @@ export function initChatWidget() {
       historialSesion.push({ user: text, bot: respuestaTexto });
       if (historialSesion.length > 3) historialSesion.shift(); // Conservar últimas 3 interacciones
 
-      const respuestaFormatted = respuestaTexto
+      // Se escapa PRIMERO y recién después se aplican los reemplazos de
+      // negrita/salto de línea — así "**" y "\n" se siguen viendo bien, pero
+      // cualquier HTML que venga en la respuesta (de la IA o de datos de la
+      // base de datos) queda como texto plano, no como markup ejecutable.
+      const respuestaFormatted = escapeHtml(respuestaTexto)
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\n/g, '<br>');
 

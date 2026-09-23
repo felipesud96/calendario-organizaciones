@@ -42,6 +42,29 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
 const CLIENT_DIR = process.env.CLIENT_DIR || path.join(__dirname, '../../client/public');
 
+// Límite simple para /api/chat: cada mensaje puede terminar llamando a una
+// API externa DE PAGO (Gemini/Groq), así que sin esto cualquiera logueado
+// podía generar costos mandando mensajes en bucle (o por accidente, con el
+// auto-envío por voz). No es un rate limiter robusto de producción (Map en
+// memoria: se resetea si el proceso se reinicia, y no se comparte entre
+// instancias) pero para esta app de un solo proceso alcanza para frenar el
+// abuso más obvio.
+const CHAT_RATE_LIMIT_MAX = 15;
+const CHAT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const chatRateLimitState = new Map(); // userId -> timestamps recientes
+
+function chatRateLimited(userId) {
+  const now = Date.now();
+  const timestamps = (chatRateLimitState.get(userId) || []).filter((t) => now - t < CHAT_RATE_LIMIT_WINDOW_MS);
+  if (timestamps.length >= CHAT_RATE_LIMIT_MAX) {
+    chatRateLimitState.set(userId, timestamps);
+    return true;
+  }
+  timestamps.push(now);
+  chatRateLimitState.set(userId, timestamps);
+  return false;
+}
+
 const router = new Router();
 registerAuthRoutes(router);
 registerOrganizationRoutes(router);
@@ -143,6 +166,10 @@ const server = http.createServer(async (req, res) => {
         const usuario = token ? await getUserFromToken(token) : null;
         if (!usuario) {
           return sendJson(res, 401, { error: 'Necesitas iniciar sesión para usar a Deseret' });
+        }
+
+        if (chatRateLimited(usuario.id)) {
+          return sendJson(res, 429, { error: '🐝 Estás mandándome mensajes muy rápido. Espera un momento e intenta de nuevo.' });
         }
 
         const historial = Array.isArray(parsed.historial) ? parsed.historial.slice(-6) : [];

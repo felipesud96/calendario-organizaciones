@@ -99,6 +99,26 @@ Esto crea las 8 organizaciones y las cuentas de ejemplo (admin, un líder por or
 
 ---
 
+## Habilitar a Deseret (el asistente de IA que agenda y responde consultas)
+
+La app incluye a **Deseret** 🐝, el asistente de chat que aparece con el ícono de abeja: puede agendar actividades/entrevistas por ti y responder consultas (próximas actividades, entrevistas, aseo, estadísticas del templo — cada una respetando los mismos permisos que el resto de la app).
+
+**Esto es opcional.** Si no configuras nada, Deseret sigue funcionando: sigue pudiendo agendar (esa parte no depende de ninguna IA externa) y responde las consultas con una versión más simple, armada directamente con los datos del calendario, sin redactar con lenguaje natural.
+
+Para que redacte las respuestas de forma más natural, necesita al menos una de estas dos claves (si configuras las dos, usa primero Gemini y solo si falla pasa a Groq):
+
+1. **Gemini (Google AI Studio)** — entra a [aistudio.google.com](https://aistudio.google.com), crea una API key gratuita, y cópiala.
+2. **Groq** — entra a [console.groq.com](https://console.groq.com), crea una cuenta y una API key gratuita, y cópiala.
+
+Para activarlas en Render, ve a tu servicio → pestaña **Environment** y agrega (igual que agregaste `DB_PATH` en el Paso 3):
+
+- **Key**: `GEMINI_API_KEY` — **Value**: la clave que copiaste de Google AI Studio.
+- **Key**: `GROQ_API_KEY` — **Value**: la clave que copiaste de Groq.
+
+Guarda los cambios — Render reinicia el servicio solo y las nuevas variables quedan disponibles de inmediato. No hace falta tocar nada más del código.
+
+---
+
 ## Habilitar la lectura automática de PDF (Crecimiento del Barrio)
 
 La sección "Crecimiento del Barrio" te deja subir el PDF del informe trimestral y precargar el formulario automáticamente (igual siempre tienes que revisar y apretar Guardar — nunca se guarda solo). Para que esa lectura automática funcione, el servidor necesita dos programas instalados que **el servicio de Render que armaste en el Paso 2 no trae** (es un servicio "Node nativo", y esos dos programas no son de Node, son del sistema operativo). Si no haces este paso, la app sigue funcionando igual en todo lo demás — el botón de subir PDF va a aparecer, pero va a caer siempre al aviso de "completar manualmente".
