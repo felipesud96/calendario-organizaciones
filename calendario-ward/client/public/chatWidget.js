@@ -99,6 +99,7 @@ const ESTILOS = `
   #deseret-fab img { width: 40px; height: 40px; flex: none; }
   #deseret-fab .escuchando { position: absolute; left: 36px; top: 6px; width: 11px; height: 11px; border-radius: 50%; background: #4ade80; border: 2px solid #fff; display: none; animation: deseret-latido 1.6s infinite; }
   #deseret-fab.hey .escuchando { display: block; background: #94a3b8; animation: none; }
+  #deseret-fab.hey.vigilando .escuchando { background: #4ade80; animation: none; }
   #deseret-fab.hey.escuchando-ahora .escuchando { background: #4ade80; animation: deseret-latido 1.6s infinite; }
   @keyframes deseret-latido { 0%,100% { box-shadow: 0 0 0 0 rgba(74,222,128,.7); } 50% { box-shadow: 0 0 0 6px rgba(74,222,128,0); } }
   body:has(.add-event-fab) #deseret-fab { bottom: 90px; }
@@ -191,6 +192,19 @@ const ESTILOS = `
   .deseret-typing span:nth-child(2) { animation-delay: .15s; }
   .deseret-typing span:nth-child(3) { animation-delay: .3s; }
   @keyframes deseret-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .4; } 40% { transform: translateY(-5px); opacity: 1; } }
+
+  /* Cuadros comparativos */
+  #chat-messages .msg.con-tabla { max-width: 100%; width: 100%; box-sizing: border-box; }
+  .deseret-tabla-wrap { overflow-x: auto; margin-top: 8px; border: 1px solid var(--border, #e2e8f0); border-radius: 10px; -webkit-overflow-scrolling: touch; }
+  .deseret-tabla { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+  .deseret-tabla th, .deseret-tabla td { padding: 6px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border, #e2e8f0); }
+  .deseret-tabla thead th { background: #075985; color: #fff; font-weight: 600; white-space: nowrap; position: sticky; top: 0; }
+  .deseret-tabla tbody tr:last-child td, .deseret-tabla tbody tr:last-child th { border-bottom: 0; }
+  .deseret-tabla tbody th { font-weight: 600; min-width: 96px; color: var(--text-muted, #475569); }
+  .deseret-tabla.lista td:first-child { min-width: 120px; font-weight: 600; }
+  .deseret-tabla.lista td:last-child { min-width: 190px; }
+  .deseret-tabla td.distinto { background: rgba(250, 204, 21, .18); }
+  .deseret-tabla td { min-width: 90px; }
 
   /* Punto 7: botones de respuesta rápida */
   .deseret-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -317,6 +331,22 @@ export function initChatWidget() {
     return `<div class="deseret-confirm" style="--c:${colorSeguro(t.color)}"><div class="t">${escapeHtml(t.titulo || '')}</div>${filas}</div>`;
   }
 
+  // Cuadro: en los comparativos (voz 'columnas') la primera columna es la
+  // etiqueta de cada fila y se destacan las filas donde las personas difieren.
+  function htmlTabla(t) {
+    const cols = t.columnas || [];
+    const comparativo = t.voz === 'columnas';
+    const cabeza = `<thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>`;
+    const cuerpo = (t.filas || []).map((f) => {
+      const distinto = comparativo && !t.sinResaltar?.includes(f[0]) && new Set(f.slice(1)).size > 1;
+      return `<tr>${f.map((v, i) => (i === 0 && comparativo
+        ? `<th scope="row">${escapeHtml(v)}</th>`
+        : `<td${distinto && i > 0 ? ' class="distinto"' : ''}>${escapeHtml(v)}</td>`)).join('')}</tr>`;
+    }).join('');
+    return `<div class="deseret-tabla-wrap"><table class="deseret-tabla${comparativo ? '' : ' lista'}">${cabeza}<tbody>${cuerpo}</tbody></table></div>`;
+  }
+  const tablaComoTexto = (t) => [t.columnas || [], ...(t.filas || [])].map((f) => f.join('\t')).join('\n');
+
   function htmlItems(items) {
     return `<div class="deseret-items">${items.map((it) => {
       const icono = { entrevista: '🙋 ', aseo: '🧹 ', recordatorio: '⏰ ', acta: '📋 ', compromiso: '🎯 ' }[it.tipo] || '';
@@ -337,7 +367,9 @@ export function initChatWidget() {
       const extra = m.extra || {};
       div.innerHTML = `<div class="cuerpo">${formatear(m.texto)}</div>`
         + (extra.tarjeta ? htmlTarjeta(extra.tarjeta) : '')
-        + (Array.isArray(extra.items) && extra.items.length ? htmlItems(extra.items) : '');
+        + (Array.isArray(extra.items) && extra.items.length ? htmlItems(extra.items) : '')
+        + (extra.tabla?.filas?.length ? htmlTabla(extra.tabla) : '');
+      if (extra.tabla?.filas?.length) div.classList.add('con-tabla');
       if (Array.isArray(extra.opciones) && extra.opciones.length) {
         const chips = document.createElement('div');
         chips.className = 'deseret-chips';
@@ -372,7 +404,9 @@ export function initChatWidget() {
         copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`;
         copiar.title = 'Copiar respuesta';
         copiar.addEventListener('click', () => {
-          const texto = div.querySelector('.cuerpo')?.innerText || '';
+          // Con cuadro, se copia también (separado por tabulaciones: se pega
+          // directo como tabla en Excel, Google Sheets o Word).
+          const texto = (div.querySelector('.cuerpo')?.innerText || '') + (m.extra?.tabla?.filas?.length ? `\n\n${tablaComoTexto(m.extra.tabla)}` : '');
           navigator.clipboard?.writeText(texto).then(() => {
             copiar.innerHTML = `${ICONOS.ok}<span>Copiado</span>`;
             setTimeout(() => { copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`; }, 1500);
@@ -595,6 +629,20 @@ export function initChatWidget() {
       const que = { entrevista: 'Entrevista con', actividad: '', compromiso: 'Compromiso:', recordatorio: 'Recordatorio:', aseo: 'Aseo:', solicitud: 'Solicitud de' };
       partes.push(items.slice(0, max).map((it) => `${unDia ? '' : `${diaHablado(it.fecha)}, `}${it.hora ? `a las ${it.hora}, ` : ''}${que[it.tipo] ?? ''} ${it.titulo}`.replace(/\s+/g, ' ').trim()).join('\n') + (items.length > max ? `\nY ${items.length - max} más.` : ''));
     }
+    // Cuadros: comparativo = fila por fila ("Asistencia: Gabriel, alto; Jaime,
+    // bajo"), solo donde difieren; lista = una persona por línea.
+    const tb = m.extra?.tabla;
+    if (tb?.filas?.length) {
+      const max = conduccion ? 3 : 6;
+      if (tb.voz === 'columnas') {
+        const nombres = tb.columnas.slice(1).map((c) => String(c).split(/\s+/)[0]);
+        const difieren = tb.filas.filter((f) => new Set(f.slice(1)).size > 1);
+        const leer = (difieren.length ? difieren : tb.filas).slice(0, max);
+        partes.push(leer.map((f) => `${f[0]}: ${nombres.map((n, i) => `${n}, ${f[i + 1]}`).join('; ')}.`).join('\n'));
+      } else {
+        partes.push(tb.filas.slice(0, max).map((f) => `${f[0]}: ${f.slice(1).join(', ')}.`).join('\n') + (tb.filas.length > max ? `\nY ${tb.filas.length - max} más.` : ''));
+      }
+    }
     const ops = m.extra?.opciones || [];
     if (ops.length && !/\*\*1\.\*\*/.test(m.texto)) {
       const esConfirmar = ops.some((o) => /confirmar/i.test(o.value));
@@ -768,6 +816,7 @@ export function initChatWidget() {
   // pregunta ("Hey Deseret, ¿qué tengo esta semana?") la envía de una.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const heySoportado = !!SR;
+  const modoSilenciosoGlobal = /Android/i.test(navigator.userAgent);
   const heyBtn = document.getElementById('chat-hey-btn');
   const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   // ¿Dijo "Hey Deseret"? El reconocimiento de voz escribe el nombre de mil
@@ -806,8 +855,73 @@ export function initChatWidget() {
     let inicioSesion = 0; let pendiente = null; let timerPendiente = null; let errorAvisado = false;
     const puedeCorrer = () => activo && !pausado && hayApp && !document.hidden;
     const marcarEscuchando = (on) => fab.classList.toggle('escuchando-ahora', on);
+    // ANDROID: cada vez que se enciende el reconocimiento de voz, Android hace
+    // un "bip" que una página web no puede silenciar, y como corta la escucha
+    // cada pocos segundos, el bip sonaba todo el rato. Por eso en Android el
+    // micrófono queda abierto en SILENCIO midiendo solo el volumen (esto no
+    // suena ni envía audio a nadie) y el reconocimiento, con su bip, se
+    // enciende solo cuando detecta que alguien habla.
+    const modoSilencioso = /Android/i.test(navigator.userAgent) && !!navigator.mediaDevices?.getUserMedia;
+    let despierto = false; let vig = null; let ctxAudio = null; let sesionesVacias = 0; let llamadoEnSesion = false;
+    if (modoSilencioso) {
+      // Android crea el audio "suspendido" hasta que la persona toca la pantalla.
+      document.addEventListener('pointerdown', () => { if (ctxAudio && ctxAudio.state === 'suspended') ctxAudio.resume().catch(() => {}); }, { capture: true, passive: true });
+    }
+    function soltarVigilancia() {
+      if (!vig) return;
+      vig.parado = true;
+      clearInterval(vig.timer);
+      try { vig.src?.disconnect(); } catch { /* ya estaba desconectado */ }
+      vig.stream?.getTracks().forEach((t) => t.stop());
+      vig = null;
+      fab.classList.remove('vigilando');
+    }
+    function vigilar() {
+      if (vig || !puedeCorrer()) return;
+      const v = { parado: false };
+      vig = v;
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then((stream) => {
+        if (v.parado || vig !== v) { stream.getTracks().forEach((t) => t.stop()); return; }
+        v.stream = stream;
+        ctxAudio = ctxAudio || new (window.AudioContext || window.webkitAudioContext)();
+        if (ctxAudio.state === 'suspended') ctxAudio.resume().catch(() => {});
+        v.src = ctxAudio.createMediaStreamSource(stream);
+        const an = ctxAudio.createAnalyser();
+        an.fftSize = 1024;
+        v.src.connect(an);
+        const buf = new Float32Array(an.fftSize);
+        let piso = 0.008; let seguidos = 0;
+        fab.classList.add('vigilando');
+        v.timer = setInterval(() => {
+          if (ctxAudio.state !== 'running') return;
+          an.getFloatTimeDomainData(buf);
+          let suma = 0;
+          for (let i = 0; i < buf.length; i++) suma += buf[i] * buf[i];
+          const rms = Math.sqrt(suma / buf.length);
+          // Voz = bastante más fuerte que el ruido de fondo (que se va
+          // aprendiendo), sostenida por ~1/4 de segundo.
+          if (rms > Math.max(piso * 3, 0.015)) {
+            if (++seguidos >= 3) { soltarVigilancia(); despierto = true; arrancar(); }
+          } else {
+            seguidos = 0;
+            piso = piso * 0.95 + rms * 0.05;
+          }
+        }, 80);
+      }).catch((err) => {
+        if (vig === v) vig = null;
+        if (err && err.name === 'NotAllowedError') { sinPermiso(); return; }
+        if (puedeCorrer()) setTimeout(arrancar, 3000);
+      });
+    }
+    function sinPermiso() {
+      activo = false; store.set('localStorage', CLAVE_HEY, false); pintar();
+      estado.msgs.push({ role: 'bot', texto: 'No tengo permiso para usar el micrófono, así que desactivé **“Hey Deseret”**. Puedes darle permiso en el candado de la barra de direcciones (o en los permisos de la app) y volver a activarlo.', error: true });
+      guardar(); repintarTodo();
+    }
     function arrancar() {
       if (corriendo || !puedeCorrer()) return;
+      if (modoSilencioso && !despierto) { vigilar(); return; }
+      llamadoEnSesion = false;
       rec = new SR();
       // Resultados parciales: en Android la escucha "continua" se corta sola
       // cada pocos segundos, y con los parciales se alcanza a detectar el
@@ -832,9 +946,7 @@ export function initChatWidget() {
       };
       rec.onerror = (ev) => {
         if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-          activo = false; store.set('localStorage', CLAVE_HEY, false); pintar();
-          estado.msgs.push({ role: 'bot', texto: 'No tengo permiso para usar el micrófono, así que desactivé **“Hey Deseret”**. Puedes darle permiso en el candado de la barra de direcciones (o en los permisos de la app) y volver a activarlo.', error: true });
-          guardar(); repintarTodo();
+          sinPermiso();
         } else if ((ev.error === 'audio-capture' || ev.error === 'network') && !errorAvisado && fallosSeguidos >= 3) {
           errorAvisado = true;
           estado.msgs.push({ role: 'bot', texto: ev.error === 'network'
@@ -850,7 +962,15 @@ export function initChatWidget() {
         // corta al instante una y otra vez (error), se espera un poco más.
         const duro = Date.now() - inicioSesion;
         fallosSeguidos = duro < 1500 ? fallosSeguidos + 1 : 0;
-        const espera = fallosSeguidos ? Math.min(1000 * 2 ** (fallosSeguidos - 1), 8000) : 250;
+        let espera = fallosSeguidos ? Math.min(1000 * 2 ** (fallosSeguidos - 1), 8000) : 250;
+        if (modoSilencioso) {
+          // Vuelve a la escucha silenciosa. Si se despertó varias veces seguidas
+          // sin que nadie dijera "Deseret" (una conversación, la tele), descansa
+          // unos segundos para no pitar a cada rato.
+          despierto = false;
+          sesionesVacias = llamadoEnSesion ? 0 : sesionesVacias + 1;
+          if (sesionesVacias >= 3) { sesionesVacias = 0; espera = Math.max(espera, 12000); } else espera = Math.max(espera, 600);
+        }
         if (puedeCorrer()) setTimeout(arrancar, espera);
       };
       inicioSesion = Date.now();
@@ -860,9 +980,10 @@ export function initChatWidget() {
       clearTimeout(timerPendiente);
       if (pendiente === null) return;
       const resto = pendiente; pendiente = null;
+      llamadoEnSesion = true;
       despertar(resto);
     }
-    function detener() { clearTimeout(timerPendiente); pendiente = null; if (rec && corriendo) { try { rec.abort(); } catch { /* ya estaba detenido */ } } corriendo = false; marcarEscuchando(false); }
+    function detener() { soltarVigilancia(); despierto = false; clearTimeout(timerPendiente); pendiente = null; if (rec && corriendo) { try { rec.abort(); } catch { /* ya estaba detenido */ } } corriendo = false; marcarEscuchando(false); }
     function despertar(resto) {
       detener();
       if (chatWindow.style.display === 'none') toggleChat();
@@ -904,7 +1025,7 @@ export function initChatWidget() {
     heyBtn.addEventListener('click', () => {
       const on = hey.alternar();
       estado.msgs.push({ role: 'bot', texto: on
-        ? '🎙️ **“Hey Deseret” activado** en este dispositivo. Cuando cierres el chat quedaré escuchando mientras la app esté abierta en pantalla: di **“Hey Deseret”** y me abro (o di de una vez tu pregunta, por ejemplo: “Hey Deseret, ¿qué tengo esta semana?”).\n\nEl navegador te pedirá permiso para el micrófono. Ojo: mientras escucho, el reconocimiento de voz del navegador procesa el audio (en Chrome, en los servidores de Google). Funciona mejor en computador con Chrome o Edge. Puedes apagarlo cuando quieras con este mismo botón.'
+        ? '🎙️ **“Hey Deseret” activado** en este dispositivo. Cuando cierres el chat quedaré escuchando mientras la app esté abierta en pantalla: di **“Hey Deseret”** y me abro (o di de una vez tu pregunta, por ejemplo: “Hey Deseret, ¿qué tengo esta semana?”).\n\nEl navegador te pedirá permiso para el micrófono. Ojo: mientras escucho, el reconocimiento de voz del navegador procesa el audio (en Chrome, en los servidores de Google). Funciona mejor en computador con Chrome o Edge.' + (modoSilenciosoGlobal ? '\n\n📱 **En el teléfono:** para que no suene el “bip” todo el rato, espero en silencio y enciendo el reconocimiento solo cuando escucho a alguien hablar. Di **“Deseret”**, espera el bip y di tu pregunta (“Deseret, ¿qué tengo hoy?”).' : '') + '\n\nPuedes apagarlo cuando quieras con este mismo botón.'
         : '“Hey Deseret” desactivado. Ya no estoy escuchando.' });
       guardar(); repintarTodo();
       if (on) {

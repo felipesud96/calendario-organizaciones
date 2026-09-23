@@ -70,7 +70,7 @@ async function consultaFicha(mensaje, norm, usuario, data, historial) {
   if (!f) return resp('No pude armar la ficha de esa persona.');
   const texto = fichaComoTexto(f);
   const sistema = `Eres Deseret, asistente de OrganizaSion. Te paso la ficha de una persona del barrio, ya filtrada según los permisos de quien pregunta.
-Haz un resumen pastoral y breve (3 a 5 viñetas): su situación, lo último que pasó con ella y 1 sugerencia práctica si corresponde. Usa SOLO estos datos, no inventes. Tono respetuoso, nunca de juicio.
+Haz un resumen breve y cercano (3 a 5 viñetas): su situación, lo último que pasó con ella y 1 sugerencia práctica si corresponde. Usa SOLO estos datos, no inventes. Tono respetuoso, nunca de juicio.
 ${texto}`;
   const redactado = await redactarConIA(sistema, historial, mensaje);
   const respaldo = `📇 **${f.nombre}**\n\n` + f.secciones.map((s) => `**${s.titulo}:** ${s.resumen || (s.filas || []).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}`).join('\n');
@@ -171,7 +171,7 @@ Formato:
 1. Oración y bienvenida
 2..N. Temas numerados, cada uno con: el tema en negrita, por qué (1 línea con el dato concreto) y quién podría presentarlo.
 Al final: **Seguimiento de compromisos** (los atrasados primero) y **Para decidir hoy** (2-3 preguntas concretas para el consejo).
-Tono pastoral, centrado en las personas (Manual General 4.2: ministrar, no administrar). Máximo ~20 líneas. No inventes datos ni nombres que no estén arriba.`;
+Tono cercano, de ministración, centrado en las personas (Manual General 4.2: ministrar, no administrar). Máximo ~20 líneas. No inventes datos ni nombres que no estén arriba.`;
   const redactado = await redactarConIA(sistema, historial, mensaje);
   if (redactado) return resp(filtrarAlucinacion(redactado));
   // Respaldo sin IA.

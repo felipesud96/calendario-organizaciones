@@ -399,7 +399,7 @@ async function resumenOrganizacion(mensaje, norm, usuario, data, hoyObj, histori
     if (c?.contexto) extra = c.contexto;
   }
   const contexto = `ORGANIZACIÓN: ${org.name} — ${mes}\n${lineas.join('\n')}${extra ? `\n${extra}` : ''}`;
-  const sistema = `Eres Deseret. Con SOLO estos datos, resume cómo va ${org.name} este mes.\n${contexto}\n\n${breve ? 'Máximo 2 frases, sin listas.' : 'Estructura: una conclusión en 1 frase, luego 3-4 viñetas con los números más importantes y, si algo está atrasado, una sugerencia práctica.'} No inventes datos. Tono pastoral y constructivo.`;
+  const sistema = `Eres Deseret. Con SOLO estos datos, resume cómo va ${org.name} este mes.\n${contexto}\n\n${breve ? 'Máximo 2 frases, sin listas.' : 'Estructura: una conclusión en 1 frase, luego 3-4 viñetas con los números más importantes y, si algo está atrasado, una sugerencia práctica.'} No inventes datos. Tono cercano y constructivo.`;
   const r = await redactarConIA(sistema, historial, mensaje);
   return resp(r ? filtrarAlucinacion(r) : `📊 **${org.name} — ${mes}**\n\n${lineas.map((l) => `• ${l}`).join('\n')}`);
 }

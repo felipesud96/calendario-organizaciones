@@ -11,6 +11,8 @@ import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES } from './deseretA
 import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
 import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
 import { detectarPlus, manejarPlus } from './deseretPlus.js';
+import { detectarComparar, manejarComparar } from './deseretComparar.js';
+import { consultaLibre, pareceConsultaDeDatos } from './deseretConsulta.js';
 
 // Cache local en memoria para respuestas ultrarrápidas (<10 ms) — solo para
 // preguntas de SOLO LECTURA (ver MÓDULO 2 más abajo). Nunca se usa para
@@ -1305,7 +1307,25 @@ async function confirmarLote(borrador, mensajeMin, usuario) {
   return resp(textos.map((t, i) => `**${i + 1}.** ${t}`).join('\n\n'));
 }
 
+// La palabra "pastoral" (entrevista pastoral, registro pastoral...) no es
+// parte del vocabulario de la Iglesia: se habla de "entrevista", "ministrar",
+// "ministración". Por si la IA la usa igual, se corrige antes de responder.
+export function sinPastoral(texto) {
+  if (typeof texto !== 'string' || !/pastoral/i.test(texto)) return texto;
+  return texto
+    .replace(/\benfoque\s+pastoral\b/gi, (m) => (m[0] === 'E' ? 'Enfoque de Ministración' : 'enfoque de ministración'))
+    .replace(/\b(entrevistas?|registros?|seguimientos?|visitas?|cuidados?|resumen|res[uú]menes|notas?|labor|trabajo|consejo|consejer[ií]a|mirada|perspectiva)\s+pastoral(es)?\b/gi, '$1')
+    .replace(/(^|[.!?¡¿\n]\s*)pastoralmente,?\s*(\S)/gi, (m, a, c) => a + c.toUpperCase())
+    .replace(/,?\s*\bpastoralmente\b/gi, '')
+    .replace(/\bpastoral(es)?\b/gi, 'de ministración');
+}
+
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null, opciones = {}) {
+  const r0 = await procesarPreguntaChatSinFiltro(mensaje, historial, usuario, opciones);
+  return r0 && typeof r0.texto === 'string' ? { ...r0, texto: sinPastoral(r0.texto) } : r0;
+}
+
+async function procesarPreguntaChatSinFiltro(mensaje, historial = [], usuario = null, opciones = {}) {
   const r = await procesarInterno(mensaje, historial, usuario, opciones);
   // Acciones en cola (pedidas en la misma frase): cuando termina una, sigue la próxima.
   const cola = usuario ? colas.get(usuario.id) : null;
@@ -1345,13 +1365,15 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     const consultaExtra = usuario && detectarAccion(norm) ? null : detectarConsultaExtra(norm);
     // Segunda tanda (deseretPlus.js): deshacer, recordatorios, dictar acta,
     // sugerencias, búsqueda en actas, resumen por organización, Manual.
-    const plus = usuario ? detectarPlus(norm, db) : null;
+    // Cuadros comparativos y sugerencias de llamamiento (deseretComparar.js).
+    const comparar = usuario && !detectarAccion(norm) && !matchAgendar ? detectarComparar(norm) : null;
+    const plus = usuario && !comparar ? detectarPlus(norm, db) : null;
     if (plus === 'deshacer') { borrarBorrador(usuario); colas.delete(usuario.id); return await manejarPlus('deshacer', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, breve }); }
     // Mientras se dicta un acta, todo lo que llegue es parte del dictado.
     if (borrador?.tipo === 'plus' && borrador.datos.plus === 'dictar' && borrador.falta === 'dictado' && !/^\s*(cancela|cancelar)\b/i.test(mensajeMinusculas)) {
       return await manejarPlus('dictar', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, borrador, breve });
     }
-    if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra && !plus) {
+    if (borrador && !matchAgendar && !pedidoNuevo && !consultaExtra && !plus && !comparar) {
       if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
         borrarBorrador(usuario);
         colas.delete(usuario.id);
@@ -1370,6 +1392,12 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
         return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
       }
       borrarBorrador(usuario);
+    }
+
+    if (comparar) {
+      borrarBorrador(usuario);
+      const r = await manejarComparar(comparar, { mensaje, norm, usuario, data: db, historial });
+      if (r) return r;
     }
 
     if (plus) {
@@ -1441,6 +1469,20 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     const temaCrecimiento = !temaMinistracion && /\b(asist\w*|sacramental|crecimiento|indicador(es)?|trimestres?|mejorando|empeorando|bajando|subiendo|tendencia|vamos|reactivad\w*|bautism\w*|sellad\w*|investid\w*|conversos?|misional)\b/.test(norm)
       && !/\b(actividad(es)?|calendario|eventos?|entrevistas?)\b/.test(norm);
     const pideActividades = /\b(actividad(es)?|calendario|eventos?|reunion(es)?)\b/.test(norm);
+
+    // Consulta libre (deseretConsulta.js): cualquier pregunta sobre los datos
+    // de la app (bienestar, compromisos, presupuesto, discursos...). La IA
+    // arma la consulta y el servidor calcula los números con los permisos
+    // de quien pregunta. Los análisis de crecimiento y ministración siguen
+    // por su camino propio (más completo). Si no aplica, devuelve null.
+    let consultaLibreIntentada = false;
+    if (usuario && !temaCrecimiento && !temaMinistracion && pareceConsultaDeDatos(norm)) {
+      consultaLibreIntentada = true;
+      try {
+        const r = await consultaLibre({ mensaje, usuario, data: db, historial, hoyISO: toISO(hoyObj), breve });
+        if (r) return r;
+      } catch (e) { console.warn('⚠️ Consulta libre falló:', e.message); }
+    }
     const temaActividades = pideActividades || (!temaEntrevistas && !temaAseo && !temaTemplo && !temaMinistracion && !temaCrecimiento
       && (!!orgMencionada || /\b(fin de semana|semana|mes|proxim[oa]s?|hoy|manana|que hay|agenda)\b/.test(norm)));
     const rango = rangoConsulta(norm, mensajeMinusculas, hoyObj);
@@ -1543,10 +1585,16 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
       contextoDinamico += c.contexto; respuestaLocalFallback = c.fallback;
     }
 
+    if (contextoDinamico === '' && usuario && !consultaLibreIntentada) {
+      try {
+        const r = await consultaLibre({ mensaje, usuario, data: db, historial, hoyISO: toISO(hoyObj), breve });
+        if (r) return r;
+      } catch (e) { console.warn('⚠️ Consulta libre falló:', e.message); }
+    }
     if (contextoDinamico === '') {
       registrarSinRespuesta(mensaje).catch(() => {});
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos (también para una presidencia completa), **dictar un acta**, ponerte **recordatorios**, decirte qué tienes **hoy** o **esta semana**, sugerirte **a quién entrevistar** y **horarios libres**, buscar **qué se acordó** en actas antiguas, resumir **cómo va una organización**, responder dudas del **Manual General** y contarte cómo vamos en **asistencia** y **ministración**. Si me equivoco, dime **"deshaz lo último"**. ¿Qué necesitas?';
+      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos (también para una presidencia completa), **dictar un acta**, ponerte **recordatorios**, decirte qué tienes **hoy** o **esta semana**, sugerirte **a quién entrevistar** y **horarios libres**, buscar **qué se acordó** en actas antiguas, resumir **cómo va una organización**, responder dudas del **Manual General**, contarte cómo vamos en **asistencia** y **ministración**, hacer **cuadros comparativos** y responder preguntas sobre los datos de la app (bienestar, compromisos, presupuesto, discursos, actividades…). Si me equivoco, dime **"deshaz lo último"**. ¿Qué necesitas?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1555,6 +1603,7 @@ ${contextoDinamico}
 
 REGLAS DE COMPORTAMIENTO:
 1. Responde SOLO con los datos de arriba. NUNCA inventes datos que no estén ahí.
+- Vocabulario SUD: NUNCA uses la palabra "pastoral" (ni "entrevista pastoral", "registro pastoral", "cuidado pastoral"). Di "entrevista", "ministrar", "ministración" o "seguimiento".
 2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
 ${breve ? '0. MODO CONDUCCIÓN: la respuesta se escuchará mientras la persona maneja. Máximo 2 frases cortas, sin listas ni viñetas.\n' : ''}3. Pon en **negrita** títulos, nombres y fechas. Tono profesional y cálido: usa pocos emojis y solo funcionales (📅, 🧹, 🏛️, 🙋); nunca 🐝.
 4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
@@ -1562,7 +1611,7 @@ ${breve ? '0. MODO CONDUCCIÓN: la respuesta se escuchará mientras la persona m
 6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.
 7. Si pide un ANÁLISIS o COMPARACIÓN (ej. Cuórum vs Sociedad de Socorro, "grandes diferencias", "en qué puede mejorar"), puedes extenderte más y usar esta estructura con subtítulos en negrita:
    **Panorama** (1-2 frases con la conclusión principal) · **Grandes diferencias** (2-3 viñetas, siempre con los números de ambos) · **En qué puede mejorar cada uno** (2-3 acciones concretas por organización, basadas en los datos y en las "sugerencias calculadas"; prioriza a las personas que están a un solo paso de Retener).
-   Usa porcentajes para comparar grupos de distinto tamaño. Si a un grupo le faltan evaluaciones, dilo en vez de sacar conclusiones. Tono pastoral y constructivo, nunca de juicio sobre las personas.`;
+   Usa porcentajes para comparar grupos de distinto tamaño. Si a un grupo le faltan evaluaciones, dilo en vez de sacar conclusiones. Tono cercano y constructivo, nunca de juicio sobre las personas.`;
 
     const redactado = await redactarConIA(systemInstruction, historial, mensaje);
     const resultado = redactado
