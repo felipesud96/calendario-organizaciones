@@ -875,7 +875,7 @@ async function redactarConIA(systemInstruction, historial, mensaje) {
           { role: 'user', content: mensaje },
         ],
         temperature: 0.4,
-        max_tokens: 700,
+        max_tokens: 1200, // alcanza para un análisis comparativo completo
       });
       const texto = r?.choices?.[0]?.message?.content;
       if (texto) return texto;
@@ -1018,6 +1018,84 @@ const RANGO_CUADRANTE = { Rescatar: 0, Actividad: 1, Enfoque: 1, Retener: 2 };
 const RANGO_ASISTENCIA = { Bajo: 0, Medio: 1, Alto: 2 };
 const DIAS_TENDENCIA = 90;
 
+// Resumen de UN grupo (hombres del Cuórum o mujeres de la Sociedad de
+// Socorro): cuadrantes, asistencia, qué les falta y tendencia. Lo usa el
+// análisis comparativo — "¿cuáles son las grandes diferencias entre el
+// Cuórum y la Sociedad de Socorro? ¿en qué puede mejorar cada uno?".
+function resumenGrupo(nombreGrupo, miembros, db, desde) {
+  const porId = new Map(miembros.map((m) => [m.id, m]));
+  const g = {
+    grupo: nombreGrupo, adultos: miembros.length, evaluados: 0,
+    cuadrantes: Object.fromEntries(CUADRANTES.map((c) => [c, 0])),
+    asistencia: { Alto: 0, Medio: 0, Bajo: 0 },
+    sinLlamamiento: 0, sinRecomendacion: 0, faltaConvenio: 0,
+    convenios: { investidura: 0, sellamiento: 0, ordenacion: 0 },
+    // Personas en "Enfoque" (asisten) a las que les falta UNA sola cosa
+    // para pasar a "Retener": el avance más rápido posible.
+    enfoqueLesFaltaSolo: { llamamiento: 0, recomendacion: 0, convenio: 0 },
+    mejoran: 0, empeoran: 0, asistSube: 0, asistBaja: 0,
+    nombres: Object.fromEntries(CUADRANTES.map((c) => [c, []])),
+    enfoqueCasiListos: [],
+  };
+  for (const f of db.pastoralFocus || []) {
+    const m = porId.get(f.memberId);
+    if (!m || !f.asistencia) continue;
+    g.evaluados += 1;
+    const actual = computeCuadrante(f);
+    g.cuadrantes[actual] += 1;
+    g.asistencia[f.asistencia] = (g.asistencia[f.asistencia] || 0) + 1;
+    g.nombres[actual].push(m.name);
+    if (!f.tieneLlamamiento) g.sinLlamamiento += 1;
+    if (!f.recomendacionVigente) g.sinRecomendacion += 1;
+    if (f.faltaConvenio) g.faltaConvenio += 1;
+    for (const k of Object.keys(g.convenios)) if (f.convenios?.[k] === 'no') g.convenios[k] += 1;
+    if (actual === 'Enfoque') {
+      const faltas = [!f.tieneLlamamiento && 'llamamiento', !f.recomendacionVigente && 'recomendacion', f.faltaConvenio && 'convenio'].filter(Boolean);
+      if (faltas.length === 1) { g.enfoqueLesFaltaSolo[faltas[0]] += 1; g.enfoqueCasiListos.push(`${m.name} (${faltas[0]})`); }
+    }
+    const cambios = (f.history || []).filter((h) => h.changedAt >= desde).sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+    if (cambios.length) {
+      const antes = cambios[0];
+      const dc = RANGO_CUADRANTE[actual] - RANGO_CUADRANTE[antes.cuadrante];
+      if (dc > 0) g.mejoran += 1; else if (dc < 0) g.empeoran += 1;
+      const da = (RANGO_ASISTENCIA[f.asistencia] ?? 0) - (RANGO_ASISTENCIA[antes.asistencia] ?? 0);
+      if (da > 0) g.asistSube += 1; else if (da < 0) g.asistBaja += 1;
+    }
+  }
+  return g;
+}
+
+const pctDe = (n, total) => (total ? Math.round((n / total) * 100) : 0);
+
+function lineaGrupo(g) {
+  const e = g.evaluados;
+  return `${g.grupo}: ${e} evaluados de ${g.adultos} adultos en el Directorio (${pctDe(e, g.adultos)}% de cobertura).\n`
+    + `  Cuadrantes: ${CUADRANTES.map((c) => `${c} ${g.cuadrantes[c]} (${pctDe(g.cuadrantes[c], e)}%)`).join(', ')}.\n`
+    + `  Asistencia: Alto ${pctDe(g.asistencia.Alto, e)}%, Medio ${pctDe(g.asistencia.Medio, e)}%, Bajo ${pctDe(g.asistencia.Bajo, e)}%.\n`
+    + `  Les falta: llamamiento ${g.sinLlamamiento} (${pctDe(g.sinLlamamiento, e)}%), recomendación del templo ${g.sinRecomendacion} (${pctDe(g.sinRecomendacion, e)}%), algún convenio ${g.faltaConvenio} (${pctDe(g.faltaConvenio, e)}%) — investidura ${g.convenios.investidura}, sellamiento ${g.convenios.sellamiento}${g.grupo.startsWith('Cuórum') ? `, ordenación ${g.convenios.ordenacion}` : ''}.\n`
+    + `  En "Enfoque" a un solo paso de "Retener": ${g.enfoqueLesFaltaSolo.llamamiento} solo necesitan llamamiento, ${g.enfoqueLesFaltaSolo.recomendacion} solo recomendación, ${g.enfoqueLesFaltaSolo.convenio} solo un convenio.\n`
+    + `  Últimos ${DIAS_TENDENCIA} días: ${g.mejoran} mejoraron de cuadrante, ${g.empeoran} empeoraron; asistencia subió en ${g.asistSube}, bajó en ${g.asistBaja}.`;
+}
+
+// Sugerencias concretas calculadas con los mismos datos (se usan tal cual
+// si no hay IA, y la IA las recibe como base para su análisis).
+function sugerenciasGrupo(g) {
+  const s = [];
+  const e = g.evaluados || 1;
+  const palancas = Object.entries(g.enfoqueLesFaltaSolo).sort((a, b) => b[1] - a[1]);
+  const [clave, n] = palancas[0];
+  if (n > 0) {
+    const que = { llamamiento: 'extenderles un llamamiento', recomendacion: 'acompañarlos a renovar su recomendación del templo', convenio: 'prepararlos para el convenio que les falta' }[clave];
+    s.push(`${n} persona${n === 1 ? '' : 's'} en Enfoque pasaría${n === 1 ? '' : 'n'} a Retener con un solo paso: ${que}.`);
+  }
+  if (pctDe(g.cuadrantes.Rescatar, e) >= 30) s.push(`${pctDe(g.cuadrantes.Rescatar, e)}% está en Rescatar: priorizar visitas de ministración y una invitación personal a la reunión sacramental.`);
+  if (pctDe(g.sinRecomendacion, e) >= 50) s.push(`${pctDe(g.sinRecomendacion, e)}% no tiene recomendación vigente: una clase o actividad de preparación para el templo ayudaría a varios a la vez.`);
+  if (pctDe(g.sinLlamamiento, e) >= 30) s.push(`${pctDe(g.sinLlamamiento, e)}% no tiene llamamiento: revisar con el Obispado dónde pueden servir.`);
+  if (g.adultos && pctDe(g.evaluados, g.adultos) < 70) s.push(`Solo ${pctDe(g.evaluados, g.adultos)}% de los adultos está evaluado: completar la evaluación del resto para tener el cuadro real.`);
+  if (g.empeoran > g.mejoran) s.push(`En los últimos ${DIAS_TENDENCIA} días bajaron más personas de cuadrante (${g.empeoran}) de las que subieron (${g.mejoran}).`);
+  return s.slice(0, 3);
+}
+
 function contextoMinistracion(norm, usuario, db) {
   const verH = isMinisteringFocusLeaderHombres(usuario, db);
   const verM = isMinisteringFocusLeaderMujeres(usuario, db);
@@ -1027,68 +1105,60 @@ function contextoMinistracion(norm, usuario, db) {
       fallback: '🤝 **Enfoque Ministración** está disponible solo para el Administrador, el Obispado y los líderes de Cuórum de Élderes y Sociedad de Socorro.',
     };
   }
-  const miembros = (db.directoryMembers || []).filter((m) => (verH && isAdultMale(m)) || (verM && isAdultFemale(m)));
-  const porId = new Map(miembros.map((m) => [m.id, m]));
   const desde = new Date(Date.now() - DIAS_TENDENCIA * 86400000).toISOString();
+  const grupos = [];
+  if (verH) grupos.push(resumenGrupo('Cuórum de Élderes (hombres adultos)', (db.directoryMembers || []).filter(isAdultMale), db, desde));
+  if (verM) grupos.push(resumenGrupo('Sociedad de Socorro (mujeres adultas)', (db.directoryMembers || []).filter(isAdultFemale), db, desde));
+  const pideNombres = /\b(quien(es)?|nombres?|lista|cuales personas|personas)\b/.test(norm);
 
-  const conteo = Object.fromEntries(CUADRANTES.map((c) => [c, 0]));
-  const asist = { Alto: 0, Medio: 0, Bajo: 0 };
-  let evaluados = 0; let mejoran = 0; let empeoran = 0; let asistSube = 0; let asistBaja = 0;
-  const nombresPor = Object.fromEntries(CUADRANTES.map((c) => [c, []]));
-  const movimientos = [];
-  for (const f of db.pastoralFocus || []) {
-    const m = porId.get(f.memberId);
-    if (!m || !f.asistencia) continue;
-    evaluados += 1;
-    const actual = computeCuadrante(f);
-    conteo[actual] += 1;
-    asist[f.asistencia] = (asist[f.asistencia] || 0) + 1;
-    nombresPor[actual].push(m.name);
-    // Estado de hace ~90 días: el registro de historial MÁS ANTIGUO dentro
-    // del período guarda cómo estaba la persona antes de esos cambios.
-    const cambios = (f.history || []).filter((h) => h.changedAt >= desde).sort((a, b) => a.changedAt.localeCompare(b.changedAt));
-    if (!cambios.length) continue;
-    const antes = cambios[0];
-    const dc = RANGO_CUADRANTE[actual] - RANGO_CUADRANTE[antes.cuadrante];
-    if (dc > 0) mejoran += 1; else if (dc < 0) empeoran += 1;
-    const da = (RANGO_ASISTENCIA[f.asistencia] ?? 0) - (RANGO_ASISTENCIA[antes.asistencia] ?? 0);
-    if (da > 0) asistSube += 1; else if (da < 0) asistBaja += 1;
-    if (antes.cuadrante !== actual) movimientos.push(`${m.name}: ${antes.cuadrante} → ${actual}`);
-  }
-  const quien = verH && verM ? 'hombres y mujeres adultos' : verH ? 'hombres adultos (Cuórum de Élderes)' : 'mujeres adultas (Sociedad de Socorro)';
-  const pideNombres = /\b(quien(es)?|nombres?|lista|cuales|personas)\b/.test(norm);
+  let contexto = `\n--- ENFOQUE MINISTRACIÓN ---\n`
+    + 'Cuadrantes, de mejor a peor: Retener (asiste y cumple todo: llamamiento, recomendación vigente y convenios al día) > Enfoque (asiste pero le falta algo) / Actividad (cumple todo pero asiste poco) > Rescatar (asiste poco y le falta algo).\n'
+    + grupos.map(lineaGrupo).join('\n');
 
-  let contexto = `\n--- ENFOQUE MINISTRACIÓN (${quien}; ${evaluados} evaluados) ---\n`
-    + `Cuadrantes hoy: ${CUADRANTES.map((c) => `${c} ${conteo[c]}`).join(', ')}.\n`
-    + `Asistencia hoy: Alto ${asist.Alto}, Medio ${asist.Medio}, Bajo ${asist.Bajo}.\n`
-    + `Últimos ${DIAS_TENDENCIA} días: ${mejoran} personas mejoraron de cuadrante, ${empeoran} empeoraron; asistencia subió en ${asistSube} y bajó en ${asistBaja}.\n`
-    + 'Orden de mejor a peor: Retener (asiste y cumple todo) > Enfoque (asiste, le falta algo) / Actividad (cumple todo pero asiste poco) > Rescatar.';
-  if (pideNombres) {
-    contexto += '\n' + CUADRANTES.map((c) => `${c}: ${nombresPor[c].slice(0, 15).join('; ') || '—'}${nombresPor[c].length > 15 ? ` (y ${nombresPor[c].length - 15} más)` : ''}`).join('\n');
-    if (movimientos.length) contexto += `\nCambios recientes: ${movimientos.slice(0, 15).join('; ')}`;
-  }
-  // Entrevistas de ministración del reporte trimestral (indicadores 12 y 13).
+  // Indicadores trimestrales relacionados (entrevistas de ministración y asistencia).
   const qs = sortedQuarters(db.quarterlyStats || []);
   if (qs.length) {
     const ult = qs[qs.length - 1]; const ant = qs.length > 1 ? qs[qs.length - 2] : null;
-    const lineas = [verH ? 12 : null, verM ? 13 : null].filter(Boolean).map((n) => {
+    const nums = [...(verH ? [12, 14] : []), ...(verM ? [13, 16] : [])];
+    const lineas = nums.map((n) => {
       const p = pctForIndicator(ult, n); const pa = ant ? pctForIndicator(ant, n) : null;
       const def = INDICATOR_DEFS.find((d) => d.number === n);
       return p === null ? null : `${def.label}: ${p}% en ${etiquetaTrimestre(ult)}${pa !== null ? ` (${etiquetaTrimestre(ant)}: ${pa}%)` : ''}`;
     }).filter(Boolean);
-    if (lineas.length) contexto += '\n' + lineas.join('\n');
+    if (lineas.length) contexto += `\nIndicadores trimestrales:\n${lineas.join('\n')}`;
+  }
+  contexto += '\nSugerencias calculadas con estos datos:\n' + grupos.map((g) => `${g.grupo}: ${sugerenciasGrupo(g).join(' ') || 'sin alertas claras'}`).join('\n');
+  if (pideNombres) {
+    contexto += '\n' + grupos.map((g) => CUADRANTES.map((c) => `${g.grupo} — ${c}: ${g.nombres[c].slice(0, 15).join('; ') || '—'}${g.nombres[c].length > 15 ? ` (y ${g.nombres[c].length - 15} más)` : ''}`).join('\n')).join('\n');
+    const casi = grupos.flatMap((g) => g.enfoqueCasiListos.slice(0, 10).map((x) => `${x}`));
+    if (casi.length) contexto += `\nA un paso de Retener: ${casi.join('; ')}`;
   }
 
-  const personas = (n, sing, plur) => `${n} persona${n === 1 ? '' : 's'} ${n === 1 ? sing : plur}`;
-  const tendencia = mejoran || empeoran
-    ? (mejoran > empeoran ? `📈 **Vamos mejorando:** en los últimos ${DIAS_TENDENCIA} días ${personas(mejoran, 'subió', 'subieron')} de cuadrante y ${empeoran} ${empeoran === 1 ? 'bajó' : 'bajaron'}.`
-      : mejoran < empeoran ? `📉 **Ojo:** en los últimos ${DIAS_TENDENCIA} días ${personas(empeoran, 'bajó', 'bajaron')} de cuadrante y ${mejoran} ${mejoran === 1 ? 'subió' : 'subieron'}.`
-        : `↔️ En los últimos ${DIAS_TENDENCIA} días ${personas(mejoran, 'subió', 'subieron')} de cuadrante y la misma cantidad bajó.`)
-    : `ℹ️ No hay cambios de cuadrante registrados en los últimos ${DIAS_TENDENCIA} días.`;
-  const fallback = `🤝 **Enfoque Ministración** (${quien}, ${evaluados} evaluados):\n`
-    + CUADRANTES.map((c) => `• ${c}: **${conteo[c]}**`).join('\n') + `\n\n${tendencia}`
-    + (pideNombres ? '\n\n' + CUADRANTES.filter((c) => nombresPor[c].length && (!CUADRANTES.some((x) => norm.includes(normalizeSearchText(x))) || norm.includes(normalizeSearchText(c))))
-      .map((c) => `**${c}:** ${nombresPor[c].slice(0, 15).join(' · ')}${nombresPor[c].length > 15 ? ` (y ${nombresPor[c].length - 15} más)` : ''}`).join('\n\n') : '');
+  // Respuesta sin IA: resumen por grupo + diferencias + sugerencias.
+  const bloque = (g) => {
+    const e = g.evaluados;
+    return `**${g.grupo}** — ${e} evaluados\n`
+      + `• Retener **${pctDe(g.cuadrantes.Retener, e)}%** · Enfoque ${pctDe(g.cuadrantes.Enfoque, e)}% · Actividad ${pctDe(g.cuadrantes.Actividad, e)}% · Rescatar **${pctDe(g.cuadrantes.Rescatar, e)}%**\n`
+      + `• Asistencia alta: ${pctDe(g.asistencia.Alto, e)}% · sin recomendación: ${pctDe(g.sinRecomendacion, e)}% · sin llamamiento: ${pctDe(g.sinLlamamiento, e)}%\n`
+      + sugerenciasGrupo(g).map((x) => `💡 ${x}`).join('\n');
+  };
+  let fallback = '🤝 **Enfoque Ministración**\n\n' + grupos.map(bloque).join('\n\n');
+  if (grupos.length === 2) {
+    const [a, b] = grupos;
+    const difs = [
+      ['Retener', pctDe(a.cuadrantes.Retener, a.evaluados), pctDe(b.cuadrantes.Retener, b.evaluados)],
+      ['Rescatar', pctDe(a.cuadrantes.Rescatar, a.evaluados), pctDe(b.cuadrantes.Rescatar, b.evaluados)],
+      ['asistencia alta', pctDe(a.asistencia.Alto, a.evaluados), pctDe(b.asistencia.Alto, b.evaluados)],
+      ['sin recomendación', pctDe(a.sinRecomendacion, a.evaluados), pctDe(b.sinRecomendacion, b.evaluados)],
+      ['sin llamamiento', pctDe(a.sinLlamamiento, a.evaluados), pctDe(b.sinLlamamiento, b.evaluados)],
+    ].map(([k, x, y]) => ({ k, x, y, d: Math.abs(x - y) })).sort((p, q) => q.d - p.d).slice(0, 3);
+    if (a.evaluados && b.evaluados) {
+      fallback += '\n\n**Grandes diferencias:**\n' + difs.map((d) => `• ${d.k}: Cuórum ${d.x}% vs Sociedad de Socorro ${d.y}%`).join('\n');
+    } else {
+      const sin = !a.evaluados ? a : b;
+      fallback += `\n\n⚠️ **${sin.grupo}** no tiene evaluaciones cargadas todavía, así que no se puede comparar.`;
+    }
+  }
   return { contexto, fallback };
 }
 
@@ -1162,7 +1232,7 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
     const temaEntrevistas = /\bentrevistas?\b/.test(norm);
     const temaAseo = /\b(aseo|limpieza|limpiar)\b/.test(norm);
     const temaTemplo = /\b(recomendacion(es)?|templo|porcentaje|estadisticas?|cumpleanos|miembros)\b/.test(norm);
-    const temaMinistracion = /\b(ministracion|ministrar|ministrantes?|enfoque|cuadrantes?|rescatar|retener)\b/.test(norm);
+    const temaMinistracion = /\b(ministracion|ministrar|ministrantes?|enfoques?|cuadrantes?|rescatar|retener)\b/.test(norm);
     const temaCrecimiento = !temaMinistracion && /\b(asist\w*|sacramental|crecimiento|indicador(es)?|trimestres?|mejorando|empeorando|bajando|subiendo|tendencia|vamos|reactivad\w*|bautism\w*|sellad\w*|investid\w*|conversos?|misional)\b/.test(norm)
       && !/\b(actividad(es)?|calendario|eventos?|entrevistas?)\b/.test(norm);
     const pideActividades = /\b(actividad(es)?|calendario|eventos?|reunion(es)?)\b/.test(norm);
@@ -1283,7 +1353,10 @@ REGLAS DE COMPORTAMIENTO:
 3. Pon en **negrita** títulos, nombres y fechas. Usa algún emoji amigable (🐝, 📅, 🧹, 🏛️, 🙋).
 4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
 5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.
-6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.`;
+6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.
+7. Si pide un ANÁLISIS o COMPARACIÓN (ej. Cuórum vs Sociedad de Socorro, "grandes diferencias", "en qué puede mejorar"), puedes extenderte más y usar esta estructura con subtítulos en negrita:
+   **Panorama** (1-2 frases con la conclusión principal) · **Grandes diferencias** (2-3 viñetas, siempre con los números de ambos) · **En qué puede mejorar cada uno** (2-3 acciones concretas por organización, basadas en los datos y en las "sugerencias calculadas"; prioriza a las personas que están a un solo paso de Retener).
+   Usa porcentajes para comparar grupos de distinto tamaño. Si a un grupo le faltan evaluaciones, dilo en vez de sacar conclusiones. Tono pastoral y constructivo, nunca de juicio sobre las personas.`;
 
     const redactado = await redactarConIA(systemInstruction, historial, mensaje);
     const resultado = redactado
