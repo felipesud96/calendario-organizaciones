@@ -29,9 +29,19 @@ const cacheRespuestas = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
 const CACHE_MAX_ENTRIES = 500;
 
+// La llave incluye el ID del usuario: algunas respuestas dependen de la
+// persona (ej. "mis entrevistas" de un Miembro), no solo de su rol y
+// organización — con rol+organización, dos miembros distintos podían
+// recibir la respuesta cacheada del otro.
 function scopeCacheParaUsuario(usuario) {
   if (!usuario) return 'anon';
-  return `${usuario.role || ''}:${usuario.organizationId ?? ''}`;
+  return `${usuario.id ?? ''}:${usuario.role || ''}:${usuario.organizationId ?? ''}`;
+}
+
+// Se llama cada vez que Deseret crea algo, para que una consulta hecha
+// justo después ("¿qué entrevistas tengo?") no devuelva la lista vieja.
+function vaciarCache() {
+  cacheRespuestas.clear();
 }
 
 function claveCache(usuario, mensajeMinusculas) {
@@ -60,7 +70,26 @@ function normalizeSearchText(s) {
   return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
-function toISO(d) { return d.toISOString().slice(0, 10); }
+// Fechas SIEMPRE en hora de Chile, sin importar la zona horaria del
+// servidor (Render corre en UTC). Antes se usaba toISOString(), que
+// convierte a UTC: después de las 21:00 en Chile "hoy" pasaba a ser
+// mañana y las fechas calculadas quedaban corridas en un día.
+const ZONA_HORARIA = process.env.TZ_APP || 'America/Santiago';
+
+// Devuelve un Date "local" (a mediodía, para esquivar cambios de horario)
+// con el día calendario actual de Chile.
+function hoyEnChile() {
+  const partes = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', { timeZone: ZONA_HORARIA, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(new Date())
+      .map((p) => [p.type, p.value]),
+  );
+  return new Date(Number(partes.year), Number(partes.month) - 1, Number(partes.day), 12, 0, 0);
+}
+
+function toISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 const DIAS_INDEX = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
 const MESES = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
@@ -81,7 +110,7 @@ function parseFecha(mensajeMin, hoyObj) {
     const month = Number(dmY[2]) - 1;
     let year = dmY[3] ? Number(dmY[3]) : hoyObj.getFullYear();
     if (year < 100) year += 2000;
-    const d = new Date(year, month, day);
+    const d = new Date(year, month, day, 12);
     if (!Number.isNaN(d.getTime())) return toISO(d);
   }
 
@@ -90,8 +119,8 @@ function parseFecha(mensajeMin, hoyObj) {
     const day = Number(deMes[1]);
     const month = MESES[deMes[2]];
     const year = deMes[3] ? Number(deMes[3]) : hoyObj.getFullYear();
-    const d = new Date(year, month, day);
-    if (!deMes[3] && d < hoyObj) d.setFullYear(year + 1); // ya pasó este año y no dijo año -> asume el próximo
+    const d = new Date(year, month, day, 12);
+    if (!deMes[3] && toISO(d) < toISO(hoyObj)) d.setFullYear(year + 1); // ya pasó este año y no dijo año -> asume el próximo
     return toISO(d);
   }
 
@@ -126,17 +155,25 @@ function parseFecha(mensajeMin, hoyObj) {
 // Igual que parseFecha, devuelve null si no encuentra nada en vez de
 // asumir un valor por defecto en silencio.
 function parseHora(mensajeMin) {
-  let m = mensajeMin.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
+  // "p.m." / "p. m." / "hrs" se normalizan antes de buscar la hora.
+  const txt = mensajeMin
+    .replace(/\bp\.?\s?m\.?(?=\s|$|[,.!?])/g, 'pm')
+    .replace(/\ba\.?\s?m\.?(?=\s|$|[,.!?])/g, 'am');
+  // "de la tarde/noche" = pm; "de la mañana" = am.
+  const tardeNoche = /\bde\s+la\s+(tarde|noche)\b/.test(txt);
+  const manana = /\bde\s+la\s+ma[ñn]ana\b/.test(txt);
+  let m = txt.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/);
   if (m) {
     let h = Number(m[1]);
-    if (m[3] === 'pm' && h < 12) h += 12;
-    if (m[3] === 'am' && h === 12) h = 0;
+    const ampm = m[3] || (tardeNoche ? 'pm' : manana ? 'am' : null);
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
     return `${String(h).padStart(2, '0')}:${m[2]}`;
   }
-  m = mensajeMin.match(/\ba\s+las?\s+(\d{1,2})\s*(am|pm)?\b/) || mensajeMin.match(/\b(\d{1,2})\s*(am|pm)\b/);
-  if (m) {
+  m = txt.match(/\ba\s+las?\s+(\d{1,2})\s*(am|pm)?\b/) || txt.match(/\b(\d{1,2})\s*(am|pm)\b/) || txt.match(/\b(\d{1,2})\s*(?:hrs?|horas)\b/);
+  if (m && Number(m[1]) <= 23) {
     let h = Number(m[1]);
-    const ampm = m[2];
+    const ampm = m[2] || (tardeNoche ? 'pm' : manana ? 'am' : null);
     if (ampm === 'pm' && h < 12) h += 12;
     if (ampm === 'am' && h === 12) h = 0;
     if (!ampm && h > 0 && h <= 7) h += 12; // "a las 7" para una actividad de barrio casi siempre es de noche
@@ -157,17 +194,25 @@ const ORG_ALIASES = {
   jas: 'Jóvenes Adultos Solteros',
 };
 
+// Busca la palabra/frase completa (con límites de palabra) — con un
+// includes() simple, "Pedro Rojas" coincidía con el alias "jas" (JAS) y
+// "Camila Hjort" con "hj".
+function contieneFrase(textoNorm, fraseNorm) {
+  const escapada = fraseNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z0-9])${escapada}($|[^a-z0-9])`).test(textoNorm);
+}
+
 function inferOrganizationId(mensajeMin, orgs) {
   const norm = normalizeSearchText(mensajeMin);
   for (const [alias, nombreReal] of Object.entries(ORG_ALIASES)) {
-    if (norm.includes(normalizeSearchText(alias))) {
+    if (contieneFrase(norm, normalizeSearchText(alias))) {
       const org = orgs.find((o) => o.name === nombreReal);
       if (org) return org.id;
     }
   }
   for (const org of orgs) {
     const n = normalizeSearchText(org.name);
-    if (n && norm.includes(n)) return org.id;
+    if (n && contieneFrase(norm, n)) return org.id;
   }
   return null;
 }
@@ -210,101 +255,155 @@ function inferPurpose(mensajeMin) {
 }
 
 // ----------------------------------------------------------------------
+// BORRADORES DE AGENDAMIENTO (conversación en varios pasos)
+// ----------------------------------------------------------------------
+// Antes, si Deseret preguntaba "¿A quién quieres entrevistar?" o "¿A qué
+// hora?", la respuesta del usuario ("con Juan Pérez", "a las 8") ya no
+// empezaba con "agenda…", así que caía al módulo de CONSULTA — y la IA,
+// viendo el historial, contestaba "¡Listo, agendada!" sin que se hubiera
+// guardado nada. Ahora el servidor recuerda lo que ya se sabe (borrador por
+// usuario) y cada respuesta completa solo lo que faltaba.
+const borradores = new Map(); // userId -> { tipo, datos, falta, ts }
+const BORRADOR_TTL_MS = 10 * 60 * 1000;
+
+function leerBorrador(usuario) {
+  if (!usuario) return null;
+  const b = borradores.get(usuario.id);
+  if (!b) return null;
+  if (Date.now() - b.ts > BORRADOR_TTL_MS) { borradores.delete(usuario.id); return null; }
+  return b;
+}
+function guardarBorrador(usuario, tipo, datos, falta) {
+  borradores.set(usuario.id, { tipo, datos, falta, ts: Date.now() });
+}
+function borrarBorrador(usuario) {
+  if (usuario) borradores.delete(usuario.id);
+}
+
+// Nombre escrito como respuesta suelta: "con Juan Pérez", "a la hermana
+// Soto", "Juan Pérez." -> "Juan Pérez" / "hermana Soto".
+function nombreDesdeRespuesta(texto) {
+  const limpio = String(texto || '')
+    .replace(/^\s*(es\s+)?(con|a|para)\s+(el|la)?\s*/i, '')
+    .replace(/[.,;!?]+\s*$/, '')
+    .trim();
+  if (!limpio || limpio.length > 60 || /\d/.test(limpio)) return null;
+  return limpio;
+}
+
+function purposeDesdeRespuesta(mensajeMin) {
+  const directo = PURPOSE_OPTIONS.find((p) => normalizeSearchText(mensajeMin).includes(normalizeSearchText(p)));
+  return directo || inferPurpose(mensajeMin);
+}
+
+// ----------------------------------------------------------------------
 // AGENDAMIENTO REAL — usa las MISMAS reglas de permisos y los MISMOS
 // campos obligatorios que exige POST /api/events y POST /api/interviews
 // (ver events.js / interviews.js), y escribe con nextId()+withDb() como
-// el resto de la app — a diferencia de la versión anterior, que escribía
-// directo con save() e ID de Date.now(), saltándose todo esto.
+// el resto de la app.
 // ----------------------------------------------------------------------
 
-async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, data) {
+async function intentarAgendarActividad(mensaje, mensajeMin, hoyObj, usuario, data, previo = null) {
   if (!usuario) return '🔒 Para agendar actividades necesitas haber iniciado sesión.';
 
-  let titulo = mensaje
-    .replace(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento)?\s*(de|para|del)?/i, '')
-    .trim();
-  titulo = limpiarTitulo(titulo);
-  if (!titulo) titulo = 'Actividad';
-  titulo = titulo.charAt(0).toUpperCase() + titulo.slice(1);
+  const d = { ...(previo || {}) };
+  if (!d.titulo) {
+    let titulo = mensaje
+      .replace(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento)?\s*(de|para|del)?/i, '')
+      .trim();
+    titulo = limpiarTitulo(titulo);
+    if (!titulo) titulo = 'Actividad';
+    d.titulo = titulo.charAt(0).toUpperCase() + titulo.slice(1);
+  }
+  d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
+  d.hora = d.hora || parseHora(mensajeMin);
+  d.orgId = d.orgId || inferOrganizationId(mensajeMin, data.organizations);
+  d.purpose = d.purpose || (previo ? purposeDesdeRespuesta(mensajeMin) : inferPurpose(mensajeMin));
 
-  const fecha = parseFecha(mensajeMin, hoyObj);
-  if (!fecha) return `📅 Me falta la **fecha** para agendar "${titulo}". ¿Para qué día? (puedes decir "mañana", "el sábado", "15 de octubre"…)`;
+  const titulo = d.titulo;
+  const preguntar = (falta, texto) => { guardarBorrador(usuario, 'actividad', d, falta); return texto; };
 
-  const hora = parseHora(mensajeMin);
-  if (!hora) return `🕐 Me falta la **hora** para "${titulo}" el ${fecha}. ¿A qué hora es?`;
+  if (!d.fecha) return preguntar('fecha', `📅 Me falta la **fecha** para agendar "${titulo}". ¿Para qué día? (puedes decir "mañana", "el sábado", "15 de octubre"…)`);
+  if (!d.hora) return preguntar('hora', `🕐 Me falta la **hora** para "${titulo}" el ${d.fecha}. ¿A qué hora es?`);
+  if (!d.orgId) return preguntar('organizacion', `🏷️ ¿Para qué organización es "${titulo}"? (Cuórum de Élderes, Sociedad de Socorro, Primaria, Hombres Jóvenes, Mujeres Jóvenes, Jóvenes Adultos Solteros, Obispado…)`);
 
-  const orgId = inferOrganizationId(mensajeMin, data.organizations);
-  if (!orgId) return `🏷️ ¿Para qué organización es "${titulo}"? (Cuórum de Élderes, Sociedad de Socorro, Primaria, Hombres Jóvenes, Mujeres Jóvenes, Jóvenes Adultos Solteros, Obispado…)`;
+  if (!canEditOrg(usuario, d.orgId)) { borrarBorrador(usuario); return `🚫 No tienes permiso para agendar actividades de esa organización (solo su líder o un Administrador pueden).`; }
 
-  if (!canEditOrg(usuario, orgId)) return `🚫 No tienes permiso para agendar actividades de esa organización (solo su líder o un Administrador pueden).`;
+  if (!d.purpose) return preguntar('proposito', `🎯 ¿Cuál es el propósito de "${titulo}"? (${PURPOSE_OPTIONS.join(', ')})`);
+  if (!PURPOSE_OPTIONS.includes(d.purpose)) return preguntar('proposito', `🎯 No reconocí el propósito — debe ser uno de: ${PURPOSE_OPTIONS.join(', ')}.`);
 
-  const purpose = inferPurpose(mensajeMin);
-  if (!purpose) return `🎯 ¿Cuál es el propósito de "${titulo}"? (Espiritual, Físico, Académico, Social o Servicio)`;
-  if (!PURPOSE_OPTIONS.includes(purpose)) return `🎯 No reconocí el propósito — debe ser uno de: ${PURPOSE_OPTIONS.join(', ')}.`;
+  // Desde acá cualquier salida termina el flujo (se guarda o se deriva al formulario).
+  borrarBorrador(usuario);
 
-  if (orgRequiresSupervisingAdults(data.organizations, orgId)) {
-    return `👥 Esta organización requiere el nombre de al menos **dos adultos supervisores** presentes (Manual General 20.7.1) antes de poder guardar la actividad — dime sus nombres y la agendo.`;
+  if (orgRequiresSupervisingAdults(data.organizations, d.orgId)) {
+    return `👥 Esta organización requiere el nombre de al menos **dos adultos supervisores** presentes (Manual General 20.7.1). Agéndala desde el formulario de **Mis Actividades** para poder indicarlos — no la guardé todavía.`;
   }
 
-  const conflicts = findStakeConflicts(data, { date: fecha, startTime: hora, endTime: null });
+  const conflicts = findStakeConflicts(data, { date: d.fecha, startTime: d.hora, endTime: null });
   if (conflicts.length && !isObispadoLeader(usuario, data)) {
     const lista = conflicts.map((c) => `"${c.title}"`).join(', ');
-    return `⚠️ Esa fecha/hora choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'} (${lista}), que tienen prioridad. Solo el líder de Obispado o un Administrador puede autorizarlo — agéndala desde el formulario normal para poder confirmarlo.`;
+    return `⚠️ Esa fecha/hora choca con ${conflicts.length > 1 ? 'actividades de Estaca' : 'una actividad de Estaca'} (${lista}), que tienen prioridad. Solo el líder de Obispado o un Administrador puede autorizarlo — agéndala desde el formulario normal para poder confirmarlo. No la guardé.`;
   }
 
-  const org = data.organizations.find((o) => o.id === Number(orgId));
+  const org = data.organizations.find((o) => o.id === Number(d.orgId));
   const now = new Date().toISOString();
-  const evento = await withDb((d) => {
+  const evento = await withDb((db) => {
     const e = {
-      id: nextId(d, 'events'),
+      id: nextId(db, 'events'),
       title: titulo,
-      date: fecha,
-      startTime: hora,
-      organizationId: Number(orgId),
-      purpose,
+      date: d.fecha,
+      startTime: d.hora,
+      organizationId: Number(d.orgId),
+      purpose: d.purpose,
       createdBy: usuario.id,
       createdAt: now,
       updatedAt: now,
     };
-    d.events.push(e);
+    db.events.push(e);
     return e;
   });
+  vaciarCache();
 
   return `✅ **¡Listo! Actividad agendada:**\n\n` +
     `• **${evento.title}**\n` +
     `• 📅 ${evento.date} a las ${evento.startTime}\n` +
-    `• 🏷️ ${org?.name || ''} · Propósito: ${purpose}\n\n` +
-    `_Si algo no calza (fecha, hora, propósito u organización), dímelo y lo corrijo._`;
+    `• 🏷️ ${org?.name || ''} · Propósito: ${d.purpose}\n\n` +
+    `_Ya aparece en el calendario. Si algo no calza, edítala desde el calendario._`;
 }
 
-async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, data) {
+async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, data, previo = null, falta = null) {
   if (!usuario) return '🔒 Para agendar entrevistas necesitas haber iniciado sesión.';
 
-  const nombreMatch = mensaje.match(/entrevist\w*\s+(?:a|con)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ.'\- ]+?)(?:\s+(?:el|para|a las?|el d[ií]a|ma[ñn]ana|hoy|pasado|este|próxim\w*)\b|[.,]|$)/i);
-  const memberName = nombreMatch ? nombreMatch[1].trim() : null;
-  if (!memberName) return `🙋 ¿A quién quieres entrevistar? Dime algo como "agenda una entrevista con Juan Pérez el jueves a las 19:00".`;
+  const d = { ...(previo || {}) };
+  if (!d.memberName) {
+    const nombreMatch = mensaje.match(/entrevist\w*\s+(?:a|con)\s+([A-ZÁÉÍÓÚÑa-záéíóúñ.'\- ]+?)(?:\s+(?:el|para|a las?|el d[ií]a|ma[ñn]ana|hoy|pasado|este|esta|pr[oó]xim\w*|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b|[.,]|$)/i);
+    if (nombreMatch) d.memberName = nombreMatch[1].trim();
+    else if (falta === 'nombre') d.memberName = nombreDesdeRespuesta(mensaje);
+  }
+  d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
+  d.hora = d.hora || parseHora(mensajeMin);
+  d.orgId = d.orgId || inferOrganizationId(mensajeMin, data.organizations);
+  if (!d.orgId && usuario.role === 'leader') d.orgId = Number(usuario.organizationId);
 
-  const fecha = parseFecha(mensajeMin, hoyObj);
-  if (!fecha) return `📅 Me falta la **fecha** para la entrevista con **${memberName}**. ¿Qué día?`;
+  const preguntar = (f, texto) => { guardarBorrador(usuario, 'entrevista', d, f); return texto; };
 
-  const hora = parseHora(mensajeMin);
-  if (!hora) return `🕐 Me falta la **hora** para la entrevista con **${memberName}** el ${fecha}. ¿A qué hora?`;
+  if (!d.memberName) return preguntar('nombre', `🙋 ¿A quién quieres entrevistar?${d.fecha ? ` (ya tengo el ${d.fecha}${d.hora ? ' a las ' + d.hora : ''})` : ''}`);
+  if (!d.fecha) return preguntar('fecha', `📅 Me falta la **fecha** para la entrevista con **${d.memberName}**. ¿Qué día?`);
+  if (!d.hora) return preguntar('hora', `🕐 Me falta la **hora** para la entrevista con **${d.memberName}** el ${d.fecha}. ¿A qué hora?`);
+  if (!d.orgId) return preguntar('organizacion', `🏷️ ¿De qué organización es esta entrevista?`);
 
-  let orgId = inferOrganizationId(mensajeMin, data.organizations);
-  if (!orgId && usuario.role === 'leader') orgId = Number(usuario.organizationId);
-  if (!orgId) return `🏷️ ¿De qué organización es esta entrevista?`;
+  borrarBorrador(usuario);
+  if (!orgAllowsInterviews(data, d.orgId)) return `🚫 Esa organización no agenda entrevistas en la app. No la guardé.`;
+  if (!canScheduleOrg(usuario, d.orgId)) return `🚫 No tienes permiso para agendar entrevistas de esa organización. No la guardé.`;
 
-  if (!orgAllowsInterviews(data, orgId)) return `🚫 Esa organización no agenda entrevistas en la app.`;
-  if (!canScheduleOrg(usuario, orgId)) return `🚫 No tienes permiso para agendar entrevistas de esa organización.`;
-
-  const org = data.organizations.find((o) => o.id === Number(orgId));
+  const org = data.organizations.find((o) => o.id === Number(d.orgId));
   const now = new Date().toISOString();
-  const interview = await withDb((d) => {
-    const id = nextId(d, 'interviews');
+  const interview = await withDb((db) => {
+    const id = nextId(db, 'interviews');
     const iv = {
       id,
       groupId: id,
-      memberName,
+      memberName: d.memberName,
       memberUserId: null,
       memberPhone: '',
       memberEmail: '',
@@ -314,10 +413,10 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
       interviewerName: usuario.name || '',
       interviewerEmail: '',
       interviewerPhone: '',
-      date: fecha,
-      startTime: hora,
+      date: d.fecha,
+      startTime: d.hora,
       endTime: null,
-      organizationId: Number(orgId),
+      organizationId: Number(d.orgId),
       scheduledBy: usuario.id,
       reminderSent: false,
       whatsappTodayReminderSent: false,
@@ -328,41 +427,65 @@ async function intentarAgendarEntrevista(mensaje, mensajeMin, hoyObj, usuario, d
       createdAt: now,
       updatedAt: now,
     };
-    d.interviews.push(iv);
+    db.interviews.push(iv);
     return iv;
   });
+  vaciarCache();
 
   return `✅ **¡Listo! Entrevista agendada:**\n\n` +
     `• **${interview.memberName}**\n` +
     `• 📅 ${interview.date} a las ${interview.startTime}\n` +
     `• 🏷️ ${org?.name || ''}\n\n` +
-    `_Si el nombre, la fecha, la hora o la organización no son correctos, dímelo y lo corrijo._`;
+    `_Ya aparece en el módulo de Entrevistas. Si algo no es correcto, edítala desde ahí._`;
+}
+
+// Frases con las que la IA "afirma" haber creado algo. En el módulo de
+// consulta la IA NUNCA crea registros, así que si responde algo así es
+// una alucinación y se reemplaza por un aviso honesto.
+const AFIRMA_AGENDADO = /(\b(he|hemos|ya|lo|la|te\s+lo|te\s+la)\s+(agendado|registrado|creado|programado|guardado)\b|\b(qued[óo]|queda|fue|ha\s+sido|est[áa])\s+(correctamente\s+|exitosamente\s+)?(agendad|registrad|cread|programad|guardad)[oa]s?\b|agendad[oa]\s+(con\s+[ée]xito|exitosamente|correctamente)|¡?listo!?[^\n]{0,40}agend)/i;
+
+function filtrarAlucinacion(texto) {
+  if (!AFIRMA_AGENDADO.test(texto)) return texto;
+  return '⚠️ Ojo: **no he guardado nada** todavía. Para agendar, pídemelo así: ' +
+    '"agenda una entrevista con Juan Pérez el viernes a las 20:00" o ' +
+    '"agenda una actividad de noche de hogar el sábado a las 19:00 para el Cuórum de Élderes".';
 }
 
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null) {
   try {
     const db = load();
-    const hoyObj = new Date();
-    const hoy = hoyObj.toISOString().split('T')[0];
+    const hoyObj = hoyEnChile();
+    const hoy = toISO(hoyObj);
     const mensajeMinusculas = mensaje.toLowerCase().trim();
 
     // ------------------------------------------------------------------------
     // MÓDULO 1: AGENDAMIENTO REAL DE ACTIVIDADES/REUNIONES Y ENTREVISTAS
     // ------------------------------------------------------------------------
-    // El verbo y el sustantivo ya NO necesitan estar pegados — "agendar UNA
-    // actividad" ahora sí dispara esto (antes solo "agendar actividad", sin
-    // artículo, lo cual casi nunca es como se habla naturalmente).
-    // Además de "actividad/reunión/evento/entrevista" literales, se
-    // reconocen los sinónimos más comunes con los que la gente realmente
-    // pide agendar algo (asado, convivencia, paseo, taller, capacitación,
-    // devocional, campamento, cena, once) — todos ruteados como actividad,
-    // salvo "entrevista" que tiene su propio flujo.
     const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
     if (matchAgendar) {
+      borrarBorrador(usuario); // un pedido nuevo reemplaza cualquier borrador anterior
       if (matchAgendar[2] === 'entrevista') {
         return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db);
       }
       return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db);
+    }
+
+    // Continuación de un agendamiento a medias (respuesta a "¿a qué hora?",
+    // "¿a quién?", etc.).
+    const borrador = leerBorrador(usuario);
+    if (borrador) {
+      if (/^\s*(cancela|cancelar|olv[ií]dalo|d[ée]jalo|no\s*,?\s*gracias|mejor no)\b/i.test(mensajeMinusculas)) {
+        borrarBorrador(usuario);
+        return '👌 Listo, cancelé ese agendamiento. No se guardó nada.';
+      }
+      const esPreguntaNueva = /^\s*(¿|qu[ée]\s|cu[aá]l|cu[aá]nt|cu[aá]ndo|d[oó]nde|qui[ée]n(es)?\s+(tiene|hay|son)|mu[ée]strame|hay\s)/i.test(mensajeMinusculas);
+      if (!esPreguntaNueva) {
+        if (borrador.tipo === 'entrevista') {
+          return await intentarAgendarEntrevista(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos, borrador.falta);
+        }
+        return await intentarAgendarActividad(mensaje, mensajeMinusculas, hoyObj, usuario, db, borrador.datos);
+      }
+      borrarBorrador(usuario);
     }
 
     // ------------------------------------------------------------------------
@@ -380,11 +503,12 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
       let filtroEventos = (db.events || []).filter((e) => e.date >= hoy);
       if (mensajeMinusculas.includes('fin de semana')) {
         const sabado = new Date(hoyObj);
-        sabado.setDate(hoyObj.getDate() + ((6 - hoyObj.getDay() + 7) % 7));
+        // Un domingo, "este fin de semana" es ayer (sábado) + hoy.
+        sabado.setDate(hoyObj.getDate() + (hoyObj.getDay() === 0 ? -1 : (6 - hoyObj.getDay() + 7) % 7));
         const domingo = new Date(sabado);
         domingo.setDate(sabado.getDate() + 1);
-        const fSab = sabado.toISOString().split('T')[0];
-        const fDom = domingo.toISOString().split('T')[0];
+        const fSab = toISO(sabado);
+        const fDom = toISO(domingo);
         filtroEventos = filtroEventos.filter((e) => e.date === fSab || e.date === fDom);
       }
       const actividades = filtroEventos.map((e) => {
@@ -501,8 +625,9 @@ REGLAS DE COMPORTAMIENTO:
           config: { systemInstruction },
         });
         if (response && response.text) {
-          guardarCache(clave, response.text);
-          return response.text;
+          const texto = filtrarAlucinacion(response.text);
+          guardarCache(clave, texto);
+          return texto;
         }
       } catch (errGemini) {
         console.warn('⚠️ Gemini falló (saturación/cuota). Pasando a Groq...', errGemini.message);
@@ -528,8 +653,9 @@ REGLAS DE COMPORTAMIENTO:
         });
         const respuestaGroq = completion.choices[0]?.message?.content;
         if (respuestaGroq) {
-          guardarCache(clave, respuestaGroq);
-          return respuestaGroq;
+          const texto = filtrarAlucinacion(respuestaGroq);
+          guardarCache(clave, texto);
+          return texto;
         }
       } catch (errGroq) {
         console.warn('⚠️ Groq falló. Usando Fallback Local...', errGroq.message);

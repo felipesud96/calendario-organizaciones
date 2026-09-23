@@ -49,7 +49,7 @@ function checkGroupEligibility(data, organizationId, members) {
   return null;
 }
 
-function canScheduleOrg(user, organizationId) {
+export function canScheduleOrg(user, organizationId) {
   if (user.role === 'admin') return true;
   if (user.role === 'leader' && Number(user.organizationId) === Number(organizationId)) return true;
   // Punto 28 (idea de UX basada en el Manual General): el Secretario
@@ -78,7 +78,7 @@ export function orgSeesAllInterviews(user, data) {
   return false;
 }
 
-function orgAllowsInterviews(data, organizationId) {
+export function orgAllowsInterviews(data, organizationId) {
   const org = data.organizations.find((o) => o.id === Number(organizationId));
   return !!org && !!org.allowsInterviews;
 }
