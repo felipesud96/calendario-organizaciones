@@ -161,7 +161,7 @@ function orgSetForConflict(item) {
 
 // Todas las demás actividades del mismo día que chocan (horario o lugar) con
 // `event` y son de una organización distinta (sin ninguna en común).
-function findOrgConflictsForEvent(data, event) {
+export function findOrgConflictsForEvent(data, event) {
   return data.events.filter((other) => {
     if (other.id === event.id) return false;
     if (other.date !== event.date) return false;
@@ -211,7 +211,7 @@ export function conflictingEventsOwnedBy(data, userId) {
 // Perfil" (notificationPrefs.eventConflicts). Nunca lanza hacia arriba ni
 // retrasa la respuesta al usuario que está guardando: se llama sin `await`
 // desde el handler de la ruta.
-async function notifyOriginalOwnersOfConflict(data, event, creatorUserId) {
+export async function notifyOriginalOwnersOfConflict(data, event, creatorUserId) {
   const olderConflicts = findOlderConflicts(data, event);
   if (!olderConflicts.length) return;
   const orgName = data.organizations.find((o) => o.id === Number(event.organizationId))?.name || 'otra organización';

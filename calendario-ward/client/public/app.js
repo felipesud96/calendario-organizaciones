@@ -1305,6 +1305,9 @@ function abrirAccesibilidad() {
             </div>
             <label class="a11y-op"><input type="checkbox" id="a11y-contraste" ${c.contraste ? 'checked' : ''} /> <span><b>Alto contraste</b><br><small>Texto más oscuro, bordes marcados y foco bien visible.</small></span></label>
             <label class="a11y-op"><input type="checkbox" id="a11y-mov" ${c.movimiento ? 'checked' : ''} /> <span><b>Menos animaciones</b><br><small>Quita movimientos y transiciones.</small></span></label>
+            ${window.deseretVoz ? `<div class="field" style="margin-top:10px;"><label>Voz de Deseret</label>
+              <div class="view-toggle" role="radiogroup">${[['femenina', '👩 Femenina'], ['masculina', '👨 Masculina']].map(([v, t]) => `<button type="button" role="radio" aria-checked="${window.deseretVoz.tipo() === v}" class="view-toggle-btn ${window.deseretVoz.tipo() === v ? 'active' : ''}" data-voz="${v}">${t}</button>`).join('')}</div>
+              <button type="button" class="btn btn-secondary btn-sm" id="a11y-voz-probar" style="margin-top:8px;">▶ Escuchar</button></div>` : ''}
             <p class="hint-box" style="margin-top:10px;">Se guarda en este dispositivo. También puedes moverte por toda la app con el teclado (Tab y Enter).</p>
           </div>
           <div class="modal-footer" style="justify-content:flex-end;"><button class="btn btn-primary" id="a11y-ok">Listo</button></div>
@@ -1317,6 +1320,8 @@ function abrirAccesibilidad() {
     root.querySelectorAll('[data-escala]').forEach((b) => b.addEventListener('click', () => { setFontScale(b.dataset.escala); pintar(); }));
     document.getElementById('a11y-contraste').addEventListener('change', (e) => guardar({ contraste: e.target.checked }));
     document.getElementById('a11y-mov').addEventListener('change', (e) => guardar({ movimiento: e.target.checked }));
+    root.querySelectorAll('[data-voz]').forEach((btn) => btn.addEventListener('click', () => { window.deseretVoz.elegir(btn.dataset.voz); pintar(); window.deseretVoz.probar(); }));
+    document.getElementById('a11y-voz-probar')?.addEventListener('click', () => window.deseretVoz.probar());
     root.querySelector('[data-escala].active')?.focus();
   };
   pintar();
@@ -7353,7 +7358,8 @@ async function renderMeetingsManage() {
   const active = meetings.filter((m) => m.status === 'active');
   const archived = meetings.filter((m) => m.status === 'archived');
   content.innerHTML = `
-    <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+    <div style="display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+      ${typeof window.abrirEscuchaReunion === 'function' ? '<button class="btn btn-secondary" id="meeting-escucha" title="Deseret graba y transcribe la reunión, y te propone el acta">🎙️ Deseret escucha la reunión</button>' : ''}
       <button class="btn btn-primary" id="meeting-new">+ Nueva acta</button>
     </div>
     <div class="card-list">
@@ -7366,6 +7372,7 @@ async function renderMeetingsManage() {
       </div>` : ''}
   `;
   document.getElementById('meeting-new').addEventListener('click', () => openMeetingModal());
+  document.getElementById('meeting-escucha')?.addEventListener('click', () => window.abrirEscuchaReunion({ onGuardado: () => { if (state.view === 'meetings') renderMeetingsView(); } }));
   wireEmptyStateCta('meeting-empty-new', () => openMeetingModal());
   wireMeetingCards(meetings);
 }

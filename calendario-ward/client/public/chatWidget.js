@@ -47,6 +47,7 @@ const store = {
 };
 const CLAVE_CHAT = 'deseret_chat_v2';   // sessionStorage: conversación de esta pestaña
 const CLAVE_VOZ = 'deseret_voz';        // localStorage: ¿leer respuestas en voz alta?
+const CLAVE_VOZ_TIPO = 'deseret_voz_tipo'; // localStorage: 'femenina' (por defecto) | 'masculina'
 const CLAVE_HEY = 'deseret_hey';        // localStorage: ¿escuchar "Hey Deseret"?
 const CLAVE_INTRO = 'deseret_intro_v1'; // localStorage: ¿ya se mostró la presentación?
 const CLAVE_AUTO = 'deseret_conduccion'; // localStorage: ¿modo conducción?
@@ -133,6 +134,13 @@ const ESTILOS = `
   #chat-window.conduccion #chat-mic-btn svg { width: 30px; height: 30px; }
   .deseret-auto-aviso { display: none; font-size: 13px; background: #fef9c3; color: #713f12; border-bottom: 1px solid #fde68a; padding: 6px 12px; }
   #chat-window.conduccion .deseret-auto-aviso { display: block; }
+  /* Elegir voz femenina o masculina (visible cuando la voz está activada) */
+  .deseret-voz-barra { display: none; align-items: center; gap: 8px; font-size: 13px; padding: 6px 12px; border-bottom: 1px solid var(--border, #e2e8f0); background: var(--bg-soft, #f8fafc); }
+  #chat-window.voz-on .deseret-voz-barra, #chat-window.conduccion .deseret-voz-barra { display: flex; }
+  .deseret-voz-barra .lbl { color: var(--ink-soft, #64748b); }
+  .deseret-voz-op { display: inline-flex; border: 1px solid var(--celeste, #0ea5e9); border-radius: 999px; overflow: hidden; }
+  .deseret-voz-op button { border: 0; background: transparent; color: var(--celeste-dark, #0369a1); font-size: 13px; padding: 4px 12px; cursor: pointer; }
+  .deseret-voz-op button.activa { background: #0284c7; color: #fff; }
 
   /* Ventana */
   #chat-window {
@@ -290,6 +298,7 @@ export function initChatWidget() {
               <button id="chat-close-btn" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
             </div>
           </div>
+          <div class="deseret-voz-barra" role="radiogroup" aria-label="Voz de Deseret"><span class="lbl">Voz:</span><span class="deseret-voz-op"><button type="button" role="radio" data-voz="femenina">👩 Femenina</button><button type="button" role="radio" data-voz="masculina">👨 Masculina</button></span></div>
           <div class="deseret-auto-aviso">🚗 Modo conducción: háblame y te respondo en voz, corto. No mires la pantalla mientras manejas.</div>
           <div id="chat-messages" aria-live="polite"></div>
           <div id="chat-input-area">
@@ -481,6 +490,9 @@ export function initChatWidget() {
   let ultimaFueDictada = false;
   const puedeHablar = 'speechSynthesis' in window;
   const pintarBotonVoz = () => {
+    chatWindow.classList.toggle('voz-on', vozActiva);
+    const tipo = store.get('localStorage', CLAVE_VOZ_TIPO) === 'masculina' ? 'masculina' : 'femenina';
+    chatWindow.querySelectorAll('.deseret-voz-barra [data-voz]').forEach((b) => { const on = b.dataset.voz === tipo; b.classList.toggle('activa', on); b.setAttribute('aria-checked', String(on)); });
     voiceBtn.innerHTML = vozActiva ? ICONOS.vozOn : ICONOS.vozOff;
     voiceBtn.setAttribute('aria-pressed', String(vozActiva));
     voiceBtn.title = vozActiva ? 'Leer respuestas en voz alta: activado' : 'Leer respuestas en voz alta: desactivado';
@@ -493,6 +505,12 @@ export function initChatWidget() {
     pintarBotonVoz();
     if (!vozActiva) callar();
   });
+
+  chatWindow.querySelectorAll('.deseret-voz-barra [data-voz]').forEach((b) => b.addEventListener('click', () => {
+    store.set('localStorage', CLAVE_VOZ_TIPO, b.dataset.voz);
+    pintarBotonVoz();
+    window.deseretVoz?.probar();
+  }));
 
   // Voz: primero la voz neuronal chilena del servidor (Azure, si está
   // configurada); si no está o falla, la mejor voz en español del
@@ -527,13 +545,21 @@ export function initChatWidget() {
     try { audio.pause(); } catch { /* no había nada sonando */ }
     if (puedeHablar) window.speechSynthesis.cancel();
   }
+  // Voz femenina o masculina (la elige cada persona: "usa voz masculina", o
+  // en Accesibilidad). Se guarda en este dispositivo.
+  const tipoVoz = () => (store.get('localStorage', CLAVE_VOZ_TIPO) === 'masculina' ? 'masculina' : 'femenina');
+  const VOCES_HOMBRE = /lorenzo|jorge|pablo|raul|ra[uú]l|alvaro|[aá]lvaro|diego|tom[aá]s|gonzalo|carlos|enrique|juan|miguel|andr[eé]s|dario|dar[ií]o|gerardo|liberto|hombre|male|masculin/i;
+  const VOCES_MUJER = /catalina|helena|laura|sabina|paulina|m[oó]nica|elvira|dalia|elena|luc[ií]a|paloma|isabel|mar[ií]a|francisca|camila|ximena|mujer|female|femenin/i;
   function mejorVozNavegador() {
     const voces = puedeHablar ? window.speechSynthesis.getVoices().filter((v) => /^es[-_]/i.test(v.lang)) : [];
+    const quiere = tipoVoz();
     const puntaje = (v) => {
+      const genero = VOCES_HOMBRE.test(v.name) ? 'masculina' : VOCES_MUJER.test(v.name) ? 'femenina' : null;
       const lang = v.lang.replace('_', '-').toLowerCase();
       let p = { 'es-cl': 60, 'es-419': 45, 'es-us': 42, 'es-mx': 40, 'es-ar': 40, 'es-co': 38, 'es-pe': 38 }[lang] ?? (lang === 'es-es' ? 5 : 25);
       if (/natural|online|neural|premium|enhanced|google/i.test(v.name)) p += 30; // voces más naturales
       if (/catalina|lorenzo/i.test(v.name)) p += 20; // voces chilenas de Microsoft (Edge)
+      if (genero === quiere) p += 100; else if (genero) p -= 50; // primero el tipo de voz elegido
       return p;
     };
     return voces.sort((a, b) => puntaje(b) - puntaje(a))[0] || null;
@@ -577,6 +603,11 @@ export function initChatWidget() {
       window.speechSynthesis.speak(u);
     });
   }
+  window.deseretVoz = {
+    tipo: tipoVoz,
+    elegir(t) { store.set('localStorage', CLAVE_VOZ_TIPO, t === 'masculina' ? 'masculina' : 'femenina'); pintarBotonVoz(); },
+    probar() { hablar(tipoVoz() === 'masculina' ? 'Hola, soy Deseret. Así sueno con voz masculina.' : 'Hola, soy Deseret. Así sueno con voz femenina.'); },
+  };
   async function hablar(texto, alTerminar = null) {
     if (!texto) return;
     const frases = frasesParaVoz(texto);
@@ -590,7 +621,7 @@ export function initChatWidget() {
         const r = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify({ texto: limpio }),
+          body: JSON.stringify({ texto: limpio, voz: tipoVoz() }),
         });
         if (!r.ok) throw new Error(String(r.status));
         const blob = await r.blob();
@@ -668,6 +699,28 @@ export function initChatWidget() {
     sendBtn.disabled = true;
 
     store.set('localStorage', 'deseret_usado', true); // A17: "Pregúntale algo a Deseret" ✓
+    // Comandos que se resuelven aquí mismo (sin ir al servidor).
+    const tn = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const cambioVoz = /\b(voz|habla\w*|hablame)\b.*\b(masculin\w*|de hombre|hombre|varon)\b/.test(tn) ? 'masculina'
+      : /\b(voz|habla\w*|hablame)\b.*\b(femenin\w*|de mujer|mujer)\b/.test(tn) ? 'femenina' : null;
+    const escucharReunion = /^(deseret,?\s*)?(escucha|graba|grabar|escuchar|toma (nota|notas|el acta) de)\s+(la|esta|mi|una)?\s*reunion\b|\bmodo oyente\b/.test(tn);
+    if (cambioVoz || (escucharReunion && typeof window.abrirEscuchaReunion === 'function')) {
+      enviando = false; sendBtn.disabled = false; chatInput.value = '';
+      messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+      estado.msgs.push({ role: 'user', texto: text }); pintarMensaje(estado.msgs.at(-1));
+      if (cambioVoz) {
+        window.deseretVoz.elegir(cambioVoz);
+        estado.msgs.push({ role: 'bot', texto: `🔊 Listo, desde ahora te hablo con **voz ${cambioVoz}** en este dispositivo.${vozActiva ? '' : ' (Activa la lectura en voz alta con el botón del parlante para escucharme.)'}` });
+        pintarMensaje(estado.msgs.at(-1)); guardar();
+        window.deseretVoz.probar();
+      } else {
+        estado.msgs.push({ role: 'bot', texto: '🎙️ Abro el modo **"Deseret escucha la reunión"**: grabo, transcribo y al final te propongo el acta para que la revises.' });
+        pintarMensaje(estado.msgs.at(-1)); guardar();
+        chatWindow.style.display = 'none'; callar();
+        window.abrirEscuchaReunion({ onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } });
+      }
+      return;
+    }
     const dictada = ultimaFueDictada;
     ultimaFueDictada = false;
     quitarChipsViejos();
@@ -697,7 +750,10 @@ export function initChatWidget() {
       const { respuesta, error, ...extra } = data || {};
       const texto = respuesta || error || 'No pude procesar la respuesta.';
       msgBot = { role: 'bot', texto, extra, error: !respuesta, pregunta: text };
-      estado.historial.push({ user: text, bot: texto });
+      // Lo que se mostró como tarjetas también queda en el historial, para
+      // que Deseret entienda "cámbiala", "cancélala"… en el mensaje siguiente.
+      const vistos = [extra.tarjeta?.filas?.map((f) => f[1]).join(' · '), ...(extra.items || []).slice(0, 8).map((it) => `${it.titulo} (${it.fecha}${it.hora ? ` ${it.hora}` : ''})`)].filter(Boolean);
+      estado.historial.push({ user: text, bot: vistos.length ? `${texto}\n[${vistos.join('; ')}]` : texto });
     } catch (e) {
       msgBot = { role: 'bot', texto: 'Error de conexión. Revisa tu internet e intenta de nuevo.', error: true };
     }

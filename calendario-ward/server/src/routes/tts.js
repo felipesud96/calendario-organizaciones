@@ -5,7 +5,9 @@
 // Variables de entorno (Render → Environment):
 //   AZURE_SPEECH_KEY     clave del recurso "Speech" de Azure (obligatoria)
 //   AZURE_SPEECH_REGION  región del recurso, ej. "brazilsouth" o "eastus"
-//   AZURE_SPEECH_VOICE   opcional, por defecto "es-CL-CatalinaNeural"
+//   AZURE_SPEECH_VOICE   opcional, voz femenina (por defecto "es-CL-CatalinaNeural")
+//   AZURE_SPEECH_VOICE_MALE opcional, voz masculina (por defecto "es-CL-LorenzoNeural")
+// Cada persona elige en la app voz femenina o masculina (body.voz).
 //
 // Sin clave, GET /api/tts/estado responde { disponible: false } y el chat
 // sigue usando la voz del navegador, como antes.
@@ -26,6 +28,7 @@ const config = () => ({
   key: process.env.AZURE_SPEECH_KEY || '',
   region: (process.env.AZURE_SPEECH_REGION || '').trim(),
   voz: (process.env.AZURE_SPEECH_VOICE || 'es-CL-CatalinaNeural').trim(),
+  vozHombre: (process.env.AZURE_SPEECH_VOICE_MALE || 'es-CL-LorenzoNeural').trim(),
 });
 export const ttsDisponible = () => { const c = config(); return !!(c.key && c.region); };
 
@@ -55,8 +58,10 @@ export function limpiarParaVoz(texto) {
     .slice(0, MAX_CHARS);
 }
 
-async function sintetizar(texto) {
-  const { key, region, voz } = config();
+async function sintetizar(texto, tipo = 'femenina') {
+  const c = config();
+  const { key, region } = c;
+  const voz = tipo === 'masculina' ? c.vozHombre : c.voz;
   const lang = voz.slice(0, 5);
   // Velocidad un poco más pausada que la normal, y una pausa entre cada
   // línea (cada dato de una ficha o de una lista), como al leer en voz alta.
@@ -79,7 +84,7 @@ async function sintetizar(texto) {
 
 export function registerTtsRoutes(router) {
   router.get('/api/tts/estado', requireAuth(async (req, res) => {
-    sendJson(res, 200, { disponible: ttsDisponible(), voz: ttsDisponible() ? config().voz : null });
+    sendJson(res, 200, { disponible: ttsDisponible(), voz: ttsDisponible() ? config().voz : null, vozHombre: ttsDisponible() ? config().vozHombre : null });
   }));
 
   router.post('/api/tts', requireAuth(async (req, res, params, body) => {
@@ -87,11 +92,13 @@ export function registerTtsRoutes(router) {
     const texto = limpiarParaVoz(body?.texto);
     if (!texto) return sendJson(res, 400, { error: 'Sin texto' });
     if (limitado(req.user.id)) return sendJson(res, 429, { error: 'Demasiadas solicitudes de voz' });
+    const tipo = body?.voz === 'masculina' ? 'masculina' : 'femenina';
+    const claveCache = `${tipo}|${texto}`;
     try {
-      let audio = cache.get(texto);
+      let audio = cache.get(claveCache);
       if (!audio) {
-        audio = await sintetizar(texto);
-        cache.set(texto, audio);
+        audio = await sintetizar(texto, tipo);
+        cache.set(claveCache, audio);
         if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
       }
       res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': audio.length, 'Cache-Control': 'no-store' });

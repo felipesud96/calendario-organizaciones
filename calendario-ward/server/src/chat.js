@@ -7,7 +7,7 @@ import { isObispadoLeader } from './routes/stake.js';
 import { INDICATOR_DEFS, sortedQuarters, pctForIndicator } from './wardGrowth.js';
 import { computeCuadrante, isAdultMale, isAdultFemale, CUADRANTES } from './pastoralFocus.js';
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
-import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES } from './deseretAcciones.js';
+import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES, accionPorReferencia } from './deseretAcciones.js';
 import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
 import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
 import { detectarPlus, manejarPlus } from './deseretPlus.js';
@@ -817,7 +817,7 @@ const HERRAMIENTAS_AGENDAR = [
   },
 ];
 
-const PARECE_AGENDAR = /\b(agend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\w*|crea\w*|agreg\w*|a[nñ]ad\w*|ponme|pon|coordin\w*|organiz\w*|calendariz\w*|compromiso\w*|solicitud\w*|cancel\w*|posterg\w*|dej\w*|muev\w*|mov\w*|pasa\w*|cambi\w*|marc\w*|confirm\w*|rechaz\w*|complet\w*|reprogram\w*)\b/;
+const PARECE_AGENDAR = /\b(agend\w*|reagend\w*|anot\w*|program\w*|reserv\w*|cita|entrevist\w*|crea\w*|agreg\w*|a[nñ]ad\w*|ponme|pon|coordin\w*|organiz\w*|calendariz\w*|compromiso\w*|solicitud\w*|cancel\w*|posterg\w*|dej\w*|muev\w*|mov\w*|pasa\w*|cambi\w*|marc\w*|confirm\w*|rechaz\w*|complet\w*|reprogram\w*)\b/;
 
 function tipoDeHerramienta(nombre) {
   if (nombre === 'agendar_entrevista') return 'entrevista';
@@ -825,7 +825,7 @@ function tipoDeHerramienta(nombre) {
   return 'accion';
 }
 
-async function extraerIntencionConIA(mensaje, hoyObj, data) {
+async function extraerIntencionConIA(mensaje, hoyObj, data, historial = []) {
   const provs = proveedoresIA();
   const gemini = clienteGemini();
   if (!provs.length && !gemini) return null;
@@ -835,13 +835,18 @@ Hoy es ${DIAS_NOMBRE[hoyObj.getDay()]} ${toISO(hoyObj)}. "El viernes" = el próx
 Organizaciones: ${(data.organizations || []).map((o) => o.name).join(', ')}.
 Si el usuario quiere AGENDAR algo, o modificar algo que ya existe (reprogramar, cancelar o marcar una entrevista, confirmar o rechazar una solicitud, completar o crear un compromiso), llama a la función que corresponda con SOLO los datos que dijo (omite los que no dijo, nunca inventes).
 Si pide VARIAS cosas en la misma frase ("agenda a Juan el martes y anota un compromiso para Ana"), llama una función por cada una, en el orden en que las dijo.
-Si solo pregunta o conversa, no llames ninguna función.`;
+Si solo pregunta o conversa, no llames ninguna función.
+Si el usuario se refiere a algo de la conversación anterior ("la", "esa", "reagéndala", "mejor el viernes", "cancélala"), usa el nombre y los datos que aparecen ahí.`;
+  // Las 2 últimas vueltas de la conversación, para entender "la", "esa", "mejor el viernes"...
+  const previos = (historial || []).slice(-2).filter((h) => h && h.user);
+  const turnosGemini = previos.flatMap((h) => [{ role: 'user', parts: [{ text: String(h.user).slice(0, 400) }] }, { role: 'model', parts: [{ text: String(h.bot || '').slice(0, 600) }] }]);
+  const turnosOpenAI = previos.flatMap((h) => [{ role: 'user', content: String(h.user).slice(0, 400) }, { role: 'assistant', content: String(h.bot || '').slice(0, 600) }]);
 
   if (gemini) {
     try {
       const r = await gemini.models.generateContent({
         model: GEMINI_MODEL(),
-        contents: [{ role: 'user', parts: [{ text: mensaje }] }],
+        contents: [...turnosGemini, { role: 'user', parts: [{ text: mensaje }] }],
         config: {
           systemInstruction: sistema,
           temperature: 0,
@@ -866,7 +871,7 @@ Si solo pregunta o conversa, no llames ninguna función.`;
   for (const prov of provs) {
     try {
       const r = await llamarOpenAICompatible(prov, {
-        messages: [{ role: 'system', content: sistema }, { role: 'user', content: mensaje }],
+        messages: [{ role: 'system', content: sistema }, ...turnosOpenAI, { role: 'user', content: mensaje }],
         tools: [...HERRAMIENTAS_AGENDAR, ...HERRAMIENTAS_ACCIONES],
         tool_choice: 'auto',
         temperature: 0,
@@ -1369,6 +1374,12 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     const comparar = usuario && !detectarAccion(norm) && !matchAgendar ? detectarComparar(norm) : null;
     const plus = usuario && !comparar ? detectarPlus(norm, db) : null;
     if (plus === 'deshacer') { borrarBorrador(usuario); colas.delete(usuario.id); return await manejarPlus('deshacer', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, breve }); }
+    // "¿Puedo reagendarla para el jueves?" justo después de hablar de una entrevista.
+    const porReferencia = usuario && !borrador && !detectarAccion(norm) ? accionPorReferencia(norm, historial, usuario, db, toISO(hoyObj)) : null;
+    if (porReferencia) {
+      borrarBorrador(usuario);
+      return await manejarAccion({ accion: porReferencia.accion, args: porReferencia.args, mensaje, mensajeMin: mensajeMinusculas, usuario, hoyObj });
+    }
     // Mientras se dicta un acta, todo lo que llegue es parte del dictado.
     if (borrador?.tipo === 'plus' && borrador.datos.plus === 'dictar' && borrador.falta === 'dictado' && !/^\s*(cancela|cancelar)\b/i.test(mensajeMinusculas)) {
       return await manejarPlus('dictar', { mensaje, mensajeMin: mensajeMinusculas, norm, usuario, hoyObj, historial, borrador, breve });
@@ -1418,7 +1429,7 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     // IA configurada o no respondió, las reglas de siempre.
     const accionRegla = usuario ? detectarAccion(norm) : null;
     if (usuario && (matchAgendar || accionRegla || PARECE_AGENDAR.test(norm))) {
-      const intencion = await extraerIntencionConIA(mensaje, hoyObj, db);
+      const intencion = await extraerIntencionConIA(mensaje, hoyObj, db, historial);
       if (intencion?.llamadas?.length > 1) {
         borrarBorrador(usuario);
         return await variasAcciones(intencion.llamadas, usuario, hoyObj, db);
@@ -1466,7 +1477,8 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     const temaAseo = /\b(aseo|limpieza|limpiar)\b/.test(norm);
     const temaTemplo = /\b(recomendacion(es)?|templo|porcentaje|estadisticas?|cumpleanos|miembros)\b/.test(norm);
     const temaMinistracion = /\b(ministracion|ministrar|ministrantes?|enfoques?|cuadrantes?|rescatar|retener)\b/.test(norm);
-    const temaCrecimiento = !temaMinistracion && /\b(asist\w*|sacramental|crecimiento|indicador(es)?|trimestres?|mejorando|empeorando|bajando|subiendo|tendencia|vamos|reactivad\w*|bautism\w*|sellad\w*|investid\w*|conversos?|misional)\b/.test(norm)
+    const verboAccion = /\b(cambi|cancel|muev|mover|suspend|posterg|reagend|reprogram|elimin|borr|adelant)\w*/.test(norm);
+    const temaCrecimiento = !temaMinistracion && !verboAccion && /\b(asist\w*|sacramental|crecimiento|indicador(es)?|trimestres?|mejorando|empeorando|bajando|subiendo|tendencia|vamos|reactivad\w*|bautism\w*|sellad\w*|investid\w*|conversos?|misional)\b/.test(norm)
       && !/\b(actividad(es)?|calendario|eventos?|entrevistas?)\b/.test(norm);
     const pideActividades = /\b(actividad(es)?|calendario|eventos?|reunion(es)?)\b/.test(norm);
 
@@ -1594,7 +1606,7 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     if (contextoDinamico === '') {
       registrarSinRespuesta(mensaje).catch(() => {});
       contextoDinamico = 'El usuario está saludando o haciendo una consulta general. Invítalo a consultar o agendar actividades/entrevistas, revisar aseo o información del barrio.';
-      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, confirmar solicitudes, registrar compromisos (también para una presidencia completa), **dictar un acta**, ponerte **recordatorios**, decirte qué tienes **hoy** o **esta semana**, sugerirte **a quién entrevistar** y **horarios libres**, buscar **qué se acordó** en actas antiguas, resumir **cómo va una organización**, responder dudas del **Manual General**, contarte cómo vamos en **asistencia** y **ministración**, hacer **cuadros comparativos** y responder preguntas sobre los datos de la app (bienestar, compromisos, presupuesto, discursos, actividades…). Si me equivoco, dime **"deshaz lo último"**. ¿Qué necesitas?';
+      respuestaLocalFallback = '¡Hola! Puedo **agendar**, reprogramar o cancelar entrevistas y actividades, cambiar la fecha o el responsable de un compromiso, confirmar solicitudes, registrar compromisos (también para una presidencia completa), **dictar un acta**, ponerte **recordatorios**, decirte qué tienes **hoy** o **esta semana**, sugerirte **a quién entrevistar** y **horarios libres**, buscar **qué se acordó** en actas antiguas, resumir **cómo va una organización**, responder dudas del **Manual General**, contarte cómo vamos en **asistencia** y **ministración**, hacer **cuadros comparativos** y responder preguntas sobre los datos de la app (bienestar, compromisos, presupuesto, discursos, actividades…). Si me equivoco, dime **"deshaz lo último"**. ¿Qué necesitas?';
     }
 
     const systemInstruction = `Eres Deseret, la abeja asistente de OrganizaSion. Hoy es ${fechaLegible(toISO(hoyObj))}.
@@ -1606,7 +1618,7 @@ REGLAS DE COMPORTAMIENTO:
 - Vocabulario SUD: NUNCA uses la palabra "pastoral" (ni "entrevista pastoral", "registro pastoral", "cuidado pastoral"). Di "entrevista", "ministrar", "ministración" o "seguimiento".
 2. ${items.length ? 'La lista completa YA se le muestra al usuario como tarjetas debajo de tu respuesta: NO la repitas. Responde en 1 o 2 frases breves (un resumen o lo puntual que preguntó).' : 'Sé breve; si hay varios elementos, usa viñetas.'}
 ${breve ? '0. MODO CONDUCCIÓN: la respuesta se escuchará mientras la persona maneja. Máximo 2 frases cortas, sin listas ni viñetas.\n' : ''}3. Pon en **negrita** títulos, nombres y fechas. Tono profesional y cálido: usa pocos emojis y solo funcionales (📅, 🧹, 🏛️, 🙋); nunca 🐝.
-4. Tú no agendas nada en esta conversación. Si el usuario quiere agendar, dile que lo pida así: "agenda una actividad/entrevista para…". Nunca digas que ya agendaste algo.
+4. En este mensaje no se agendó ni se cambió nada. Si el usuario quiere agendar o cambiar algo, dile que lo pida así: "agenda una entrevista con… el…" o "reprograma la entrevista con… para el…". Nunca digas que ya agendaste algo, y nunca digas que no puedes reagendar: sí se puede, con esa frase.
 5. Si ves un "AVISO DE PERMISOS", dile amablemente, en una frase, que esa información no está disponible para su perfil.
 6. Si pregunta si "vamos mejorando" (asistencia, indicadores, ministración), parte con una conclusión clara (sí / no / mixto), y después menciona los 2 o 3 cambios más grandes con sus números (en puntos porcentuales o cantidad de personas). Cierra con una sugerencia breve y práctica si algo va bajando.
 7. Si pide un ANÁLISIS o COMPARACIÓN (ej. Cuórum vs Sociedad de Socorro, "grandes diferencias", "en qué puede mejorar"), puedes extenderte más y usar esta estructura con subtítulos en negrita:
@@ -1632,5 +1644,5 @@ export {
   guardarBorrador, borrarBorrador, leerBorrador, OPCIONES_CONFIRMAR, ES_AFIRMATIVO, vaciarCache,
   toISO, opcionesFecha, OPCIONES_HORA, orgPorId, sumarDias, hoyEnChile, DIAS_NOMBRE,
   redactarConIA, filtrarAlucinacion, contextoCrecimiento, contextoMinistracion,
-  jsonConIA, inferOrganizationId, MESES_NOMBRE,
+  jsonConIA, inferOrganizationId, MESES_NOMBRE, clienteGemini, GEMINI_MODEL,
 };

@@ -26,7 +26,7 @@ import {
 const RE_FICHA = /\b(cuentame|hablame|dime|ficha|informacion|info|historial|que sabes|datos)\b\s+(de|del|sobre|acerca de)\s+/;
 const RE_HORARIOS = /\b(cuando puedo|que horarios?|horarios? (libres?|disponibles?)|mis horarios|tengo (hora|espacio|tiempo)|huecos?|espacios? libres?|disponibilidad para)\b/;
 const RE_PREPARAR = /\b(prepar\w*|arm\w*|sugi\w*|propon\w*|temas? para|agenda para)\b.*\b(consejo|reunion|coordinacion|presidencia|comite|junta)\b/;
-const RE_SEMANA = /\b(mi semana|mi dia|resumen del dia|que tengo|tengo algo|que me toca|mis pendientes|resumen de (la|mi) semana|como viene la semana|agenda de (hoy|manana|la semana))\b/;
+const RE_SEMANA = /\b(mi semana|mi dia|resumen del dia|que tengo|tengo algo|que me toca|con quien (me toca|tengo)|mis pendientes|resumen de (la|mi) semana|como viene la semana|agenda de (hoy|manana|la semana))\b/;
 const RE_TIPOS = /\b(quien puede (hacer|entrevistar|dar|tomar)|quien (hace|da|toma) (la|las|el)|solo (lo|la) (hace|puede hacer) el obispo|solo el obispo|que entrevistas (puede|pueden|hace|hacen)|puede (un|el) consejero|pueden los consejeros|consejeros? (puede|pueden)|le corresponde al obispo)\b/;
 const RE_FEEDBACK = /\b(no supiste|sin respuesta|no respondidas|valoraciones de deseret|feedback de deseret|como le va a deseret)\b/;
 
@@ -190,7 +190,7 @@ Tono cercano, de ministración, centrado en las personas (Manual General 4.2: mi
 function consultaSemana(norm, usuario, data, hoyObj) {
   const hoy = toISO(hoyObj);
   const soloHoy = /\b(hoy|mi dia|del dia)\b/.test(norm);
-  const manana = /\bmanana\b/.test(norm);
+  const manana = /\bmanana\b/.test(norm) && !/\bpasado\s*manana\b/.test(norm);
   // Un día puntual: "¿qué tengo el jueves?", "¿qué tengo el 30?"
   const diaPuntual = !soloHoy && !manana && !/\bsemana\b/.test(norm) ? parseFecha(norm, hoyObj) : null;
   const desde = diaPuntual || (manana ? toISO(sumarDias(hoyObj, 1)) : hoy);

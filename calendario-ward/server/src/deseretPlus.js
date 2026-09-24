@@ -56,12 +56,13 @@ const RE_RESUMEN_ORG = /\b(como (va|van|anda|andan|esta|estan|le va a|les va a)|
 const RE_MANUAL = /\b(manual( general)?|quien (llama|aparta|sostiene|recomienda|aprueba|extiende)|quien(es)? (asiste|asisten|va|van) (al|a la)|cada cuanto|con que frecuencia|cada cuanto tiempo)\b/;
 
 export function detectarPlus(norm, data) {
+  const agendaPropia = /\b(me toca|tengo|agendad\w*)\b/.test(norm);
   if (RE_DESHACER.test(norm)) return 'deshacer';
   if (RE_REC_LISTAR.test(norm)) return 'rec_listar';
   if (RE_REC_BORRAR.test(norm)) return 'rec_borrar';
   if (RE_REC_CREAR.test(norm)) return 'rec_crear';
   if (RE_DICTAR.test(norm)) return 'dictar';
-  if (RE_SUGERIR.test(norm)) return 'sugerir';
+  if (RE_SUGERIR.test(norm) && !agendaPropia) return 'sugerir';
   if (RE_BUSCAR.test(norm)) return 'buscar';
   if (RE_MANUAL.test(norm)) return 'manual';
   if (RE_RESUMEN_ORG.test(norm) && inferOrganizationId(norm, data.organizations || [])) return 'resumen_org';
@@ -492,18 +493,24 @@ async function dictarActa({ mensaje, mensajeMin, usuario, data, hoyObj, borrador
   return resp('No entendí. Vuelve a pedirme "dictar acta" cuando quieras.');
 }
 
-async function estructurarActa(d, usuario, data, hoyObj) {
-  const texto = d.partes.join('\n');
+// Texto (dictado o transcripción de una reunión grabada) → acta validada:
+// { titulo, tipo, fecha, temas[], compromisos[] } con los responsables ya
+// buscados entre las personas asignables. La usan el dictado por chat y el
+// modo "Deseret escucha la reunión" (routes/escucha.js).
+export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion = false } = {}) {
   const asignables = assignableUsersFor(usuario, data);
   const obispado = isObispadoLeader(usuario, data);
-  const sistema = `Ordenas el acta de una reunión de un barrio de La Iglesia (Chile) a partir de un dictado. Hoy es ${toISO(hoyObj)}.
+  const origen = transcripcion
+    ? `la TRANSCRIPCIÓN AUTOMÁTICA de una reunión grabada (puede tener errores de reconocimiento, frases cortadas y varias personas hablando; quien preside suele resumir los acuerdos y asignar los compromisos). Agrupa lo conversado en temas; ignora saludos, oraciones de apertura/cierre y conversación sin relación`
+    : 'un dictado';
+  const sistema = `Ordenas el acta de una reunión de un barrio de La Iglesia (Chile) a partir de ${origen}. Hoy es ${toISO(hoyObj)}.
 Devuelve SOLO un JSON con esta forma:
 {"titulo": "...", "tipo": "general|consejo_barrio|coordinacion_ministracion", "fecha": "AAAA-MM-DD (hoy si no la dijo)",
  "temas": [{"tema": "título corto", "notas": "de qué se habló (breve)", "acuerdo": "qué se acordó, o vacío"}],
  "compromisos": [{"responsable": "nombre tal como lo dijo, o 'yo'", "descripcion": "qué hará", "fecha_limite": "AAAA-MM-DD o vacío"}]}
 Reglas: no inventes nada que no se haya dicho; un compromiso es algo que una persona concreta quedó en hacer; si no se dijo fecha límite, déjala vacía. "El sábado" = el próximo sábado desde hoy.
 Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.`;
-  let acta = await jsonConIA(sistema, texto);
+  let acta = await jsonConIA(sistema, texto.slice(0, transcripcion ? 120000 : 20000));
   if (!acta || typeof acta !== 'object') acta = actaSinIA(texto, hoyObj);
   // Validar y resolver responsables.
   const fechaOk = (f) => (typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : null);
@@ -519,10 +526,15 @@ Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.`;
     const fecha = fechaOk(c.fecha_limite) || toISO(sumarDias(new Date(`${fechaActa}T12:00:00`), 7));
     return { userId: u?.id || usuario.id, nombre: u?.name || null, dicho: nombre, descripcion: String(c.descripcion).trim().slice(0, 300), fecha, sinFecha: !fechaOk(c.fecha_limite) };
   });
-  d.acta = {
+  return {
     titulo: String(acta.titulo || '').trim().slice(0, 100) || `Reunión del ${fechaLegible(fechaActa)}`,
     tipo, fecha: fechaActa, temas, compromisos, dictado: texto.slice(0, 5000),
   };
+}
+
+async function estructurarActa(d, usuario, data, hoyObj) {
+  d.acta = await ordenarActa(d.partes.join('\n'), usuario, data, hoyObj);
+  const { tipo, temas, compromisos } = d.acta; const fechaActa = d.acta.fecha;
   guardarBorrador(usuario, 'plus', d, 'confirmar');
   const filas = [
     ['📅', `${fechaLegible(fechaActa)} · ${TIPOS_ACTA[tipo]}`],
@@ -561,6 +573,12 @@ function actaSinIA(texto, hoyObj) {
 
 async function guardarActa(acta, usuario) {
   if (!acta) return resp('No encontré el acta para guardar. Vuelve a dictarla.');
+  const m = await guardarActaCore(acta, usuario);
+  return resp(`✅ Guardé el acta **«${m.title}»** con ${m.agendaItems.length} tema${m.agendaItems.length === 1 ? '' : 's'} y ${m.commitments.length} compromiso${m.commitments.length === 1 ? '' : 's'}. La encuentras en **Reuniones y Consejos**, y a cada responsable le aparece su compromiso en *Mis Asignaciones*.`);
+}
+
+// Crea el acta (reunión + temas + compromisos) y la devuelve.
+export async function guardarActaCore(acta, usuario, extra = {}) {
   const now = new Date();
   const hora = new Intl.DateTimeFormat('en-GB', { timeZone: ZONA, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const m = await withDb((db) => {
@@ -568,7 +586,7 @@ async function guardarActa(acta, usuario) {
       id: nextId(db, 'meetings'), title: acta.titulo, date: acta.fecha, startTime: hora, endTime: null,
       type: acta.tipo, confidential: false, organizationId: usuario.organizationId || null, status: 'active',
       createdBy: usuario.id, createdAt: now.toISOString(), archivedAt: null, lastEditedBy: null, lastEditedAt: null,
-      councilPrepReminderSent: false, dictadoConDeseret: true,
+      councilPrepReminderSent: false, dictadoConDeseret: true, ...extra,
       agendaItems: acta.temas.map((t) => ({
         id: nextId(db, 'agendaItems'), topic: t.tema, presenter: '', ...EMPTY_AGENDA_ITEM_NOTES,
         ...(acta.tipo === 'consejo_barrio' ? { analisis: t.notas, acuerdo: t.acuerdo } : { notes: [t.notas, t.acuerdo && `Acuerdo: ${t.acuerdo}`].filter(Boolean).join('\n') }),
@@ -583,7 +601,7 @@ async function guardarActa(acta, usuario) {
     return meeting;
   });
   vaciarCache();
-  return resp(`✅ Guardé el acta **«${m.title}»** con ${m.agendaItems.length} tema${m.agendaItems.length === 1 ? '' : 's'} y ${m.commitments.length} compromiso${m.commitments.length === 1 ? '' : 's'}. La encuentras en **Reuniones y Consejos**, y a cada responsable le aparece su compromiso en *Mis Asignaciones*.`);
+  return m;
 }
 
 // Para "¿qué tengo hoy?" leído en voz: frase natural con la agenda del día.

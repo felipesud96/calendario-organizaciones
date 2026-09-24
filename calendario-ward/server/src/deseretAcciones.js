@@ -8,6 +8,8 @@
 //   • confirmar / rechazar solicitudes  ("confirma la solicitud de Jaime")
 //   • completar un compromiso propio    ("completé el compromiso de visitar a los Pérez")
 //   • crear un compromiso               ("anota un compromiso para el hno. Soto: visitar a la familia Pérez el domingo")
+//   • cambiar / cancelar una actividad  ("pasa la noche de hogar al domingo a las 19", "cancela el asado")
+//   • cambiar un compromiso             ("cambia la fecha del compromiso de visitar a los Soto al 5 de octubre", "pásale a Pedro el compromiso de…")
 //
 // Reglas comunes (las mismas de la app, nunca más permisivas):
 //   - Solo se ofrecen registros que la persona puede ver y modificar con las
@@ -19,7 +21,9 @@
 // ----------------------------------------------------------------------
 import { load, withDb, nextId } from './db.js';
 import { canScheduleOrg } from './routes/interviews.js';
-import { assignableUsersFor } from './routes/meetings.js';
+import { assignableUsersFor, canEditMeeting } from './routes/meetings.js';
+import { canEditOrg, findOrgConflictsForEvent, notifyOriginalOwnersOfConflict } from './routes/events.js';
+import { findStakeConflicts } from './stakeCalendar.js';
 import { isObispadoLeader } from './routes/stake.js';
 import {
   sendCancellationEmail, sendRescheduleEmail, sendInterviewCancelledWhatsApp,
@@ -37,15 +41,75 @@ const REGLAS = [
   ['rechazar_solicitud', /\b(rechaz\w*|declin\w*)\b.*\bsolicitud/],
   ['confirmar_solicitud', /\b(confirm\w*|acept\w*|aprueb\w*|aprob\w*)\b.*\bsolicitud/],
   ['cancelar_entrevista', /\b(cancel\w*|anul\w*|suspend\w*|elimin\w*|borr\w*)\b.*\bentrevista/],
-  ['reprogramar_entrevista', /\b(reprogram\w*|cambi\w*|mueve|muev\w*|mover|pasa|pasar|posterg\w*|adelant\w*|corre|correr)\b.*\bentrevista/],
-  ['marcar_entrevista', /(\b(marc\w*)\b.*\bentrevista|\bentrevista\b.*\b(se hizo|no se hizo|hecha|realizada)\b|\b(ya entreviste|no vino|no llego|no se pudo)\b)/],
+  ['reprogramar_entrevista', /\b(reprogram\w*|reagend\w*|cambi\w*|mueve|muev\w*|mover|pasa|pasar|pasemos\w*|pasal[ao]|posterg\w*|adelant\w*|corre|correr|corr[ae]mos\w*)\b.*\bentrevista|\b(reagend\w*|reprogram\w*)\b\s+(a|al|con)\s+\w|\bentrevista\b.*\b(pasemos\w*|pasal[ao]|muevel[ao]|movamos\w*|cambial[ao]|reagend\w*|reprogram\w*|posterg\w*|adelant\w*|corr[ae]mos\w*)\b/],
+  ['marcar_entrevista', /(\b(marc\w*)\b.*\bentrevista|\bentrevista\b.*\b(se hizo|no se hizo|hecha|realizada)\b|\b(ya entreviste|no vino|no llego|no se pudo)\b|\b(falto|no asistio|no se presento)\b.*\bentrevista)/],
+  ['editar_compromiso', /\b(reasign\w*|cambi\w*|muev\w*|mover|posterg\w*|atras\w*|adelant\w*|dale|darle|pasale|pasarle|asignale|asignarselo|extiend\w*|ampli\w*)\b.*\bcompromiso|\bcompromiso\b.*\b(reasign\w*|cambi\w*|muev\w*|posterg\w*|otra fecha|nueva fecha|nuevo responsable|otro responsable|que lo haga)\b/],
   ['crear_compromiso', /\b(anot\w*|cre\w*|agreg\w*|registr\w*|asign\w*|nuevo)\b.*\bcompromiso/],
   ['completar_compromiso', /(\b(complet\w*|cumpl\w*|termin\w*)\b.*\bcompromiso|\bcompromiso\b.*\b(listo|hecho|completado|cumplido)\b|\bmarc\w*\b.*\bcompromiso)/],
 ];
 
+const RE_ACT_CANCELAR = /\b(cancel\w*|suspend\w*|anul\w*|elimin\w*|borr\w*)\b/;
+const RE_ACT_CAMBIAR = /\b(cambi\w*|muev\w*|mover|movamos|pasa|pasar|pasala|pasalo|pasemos\w*|posterg\w*|adelant\w*|corre|correr|corr[ae]mos\w*|reagend\w*|reprogram\w*)\b/;
 export function detectarAccion(norm) {
-  for (const [accion, re] of REGLAS) if (re.test(norm)) return accion;
+  for (const [accion, re] of REGLAS) {
+    if (!re.test(norm)) continue;
+    if (accion === 'editar_compromiso' && /\b(anota\w*|nuevo|crea\w*|registra\w*|agrega\w*)\b/.test(norm)) continue;
+    return accion;
+  }
+  // Actividades (no entrevistas ni compromisos): "cancela el asado", "pasa la noche de hogar al domingo".
+  if (!/\b(entrevist\w*|compromiso\w*|solicitud\w*|recordatorio\w*)\b/.test(norm) && PALABRAS_ACTIVIDAD.test(norm)) {
+    if (RE_ACT_CANCELAR.test(norm)) return 'cancelar_actividad';
+    if (RE_ACT_CAMBIAR.test(norm) && !/\bque (pasa|paso)\b/.test(norm)) return 'reprogramar_actividad';
+  }
   return null;
+}
+
+// "¿Puedo reagendarla para el próximo jueves?" / "cancélala": sin decir
+// "entrevista" ni el nombre, se refiere a la entrevista de la que Deseret
+// acaba de hablar. Se busca en su última respuesta qué entrevista agendada
+// (que la persona puede modificar) se mencionó.
+const RE_REPROG_REF = new RegExp([
+  String.raw`\b(reagend\w*|reprogram\w*)\b`,
+  String.raw`\b(cambi|muev|mov|pas|posterg|adelant|corr|dej)\w*(la|lo)\b`,
+  String.raw`\b(la|lo)\s+(podemos|puedes|podriamos|podria|puedo|quiero|vamos a)\s+(dejar|pasar|mover|cambiar|postergar|adelantar|correr|reagendar|reprogramar)\b`,
+  String.raw`\b(cambia|cambiar|mueve|mover|pasa|pasar|posterga|postergar|adelanta|adelantar|corre|correr|deja|dejar)\s+(la|lo)\b`,
+  String.raw`^\s*(y\s+)?(mejor|que sea|y si (es|fuera|la hacemos))\s+(el|la|a las|para|pasado|manana|hoy|lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d)`,
+  String.raw`\b(una|media|\d+)\s+horas?\s+mas\s+(tarde|temprano)\b`,
+].join('|'));
+const RE_CANCEL_REF = /\b((cancel|anul|suspend|borr|elimin)\w*(la|lo)|(cancela|cancelar|anula|anular|suspende|suspender|borra|borrar|elimina|eliminar|saca|sacar|quita|quitar)\s+(la|lo)|ya no va|no va a poder ir|se cae|se cayo)\b/;
+const RE_MARCAR_REF = /\b(ya (la|lo) (hice|hicimos|termine)|ya se hizo|se hizo|(marca|marcala|marcalo)\b.*\b(hecha|realizada|lista)|no vino|no llego|falto|no asistio|no se presento|no se hizo)\b/;
+export function accionPorReferencia(norm, historial, usuario, data, hoyISO) {
+  const accion = RE_CANCEL_REF.test(norm) ? 'cancelar_entrevista'
+    : RE_MARCAR_REF.test(norm) ? 'marcar_entrevista'
+      : RE_REPROG_REF.test(norm) ? 'reprogramar_entrevista' : null;
+  if (!accion || !usuario) return null;
+  const ultimo = [...(historial || [])].reverse().find((h) => h && h.bot);
+  if (!ultimo) return null;
+  const texto = ` ${palabrasDe(ultimo.bot).join(' ')} `;
+  let mejor = null; let empate = false;
+  for (const g of entrevistasEditables(usuario, data, hoyISO, accion === 'marcar_entrevista')) {
+    for (const r of g.rows) {
+      const ws = palabrasDe(r.memberName).filter((w) => w.length >= 3 && !STOP.has(w));
+      const n = ws.filter((w) => texto.includes(` ${w} `)).length;
+      if (n < Math.min(2, ws.length)) continue;
+      if (!mejor || n > mejor.n) { mejor = { n, nombre: r.memberName, groupId: g.groupId }; empate = false; }
+      else if (n === mejor.n && g.groupId !== mejor.groupId) empate = true;
+    }
+  }
+  if (mejor && !empate) return { accion, args: { nombre: mejor.nombre } };
+  // ¿Hablaban de una actividad? ("cámbiala al domingo" después de verla)
+  if (accion === 'marcar_entrevista') return null;
+  let act = null; let empateAct = false;
+  for (const e of actividadesEditables(usuario, data, hoyISO)) {
+    const ws = palabrasDe(e.title).filter((w) => w.length >= 4 && !STOP.has(w));
+    if (!ws.length) continue;
+    const n = ws.filter((w) => texto.includes(` ${w} `)).length;
+    const score = n / ws.length; // "Noche de hogar" calza entera; "Noche de hogar misional", solo en parte
+    if (n < Math.min(2, ws.length) || score < 0.66) continue;
+    if (!act || score > act.score || (score === act.score && n > act.n)) { act = { score, n, titulo: e.title, id: e.id }; empateAct = false; } else if (score === act.score && n === act.n) empateAct = true;
+  }
+  if (!act || empateAct) return null;
+  return { accion: accion === 'cancelar_entrevista' ? 'cancelar_actividad' : 'reprogramar_actividad', args: { titulo: act.titulo, id: act.id } };
 }
 
 // Herramientas para la IA (se suman a las de agendar en chat.js).
@@ -56,6 +120,9 @@ export const HERRAMIENTAS_ACCIONES = [
   { name: 'confirmar_solicitud', description: 'Confirmar una solicitud de entrevista pendiente.', props: { nombre: 'Quién pidió la entrevista', hora: 'Hora HH:MM si quiere cambiarla' } },
   { name: 'rechazar_solicitud', description: 'Rechazar una solicitud de entrevista pendiente.', props: { nombre: 'Quién pidió la entrevista', motivo: 'Motivo, si lo dijo' } },
   { name: 'completar_compromiso', description: 'Marcar como completado un compromiso propio.', props: { texto: 'Palabras clave del compromiso', comentario: 'Comentario, si lo dijo' } },
+  { name: 'reprogramar_actividad', description: 'Cambiar la fecha y/o la hora de una ACTIVIDAD o reunión del calendario YA agendada (no una entrevista).', props: { titulo: 'Nombre o palabras clave de la actividad', fecha: 'Nueva fecha AAAA-MM-DD, si la dijo', hora: 'Nueva hora HH:MM 24h, si la dijo' } },
+  { name: 'cancelar_actividad', description: 'Cancelar (borrar del calendario) una ACTIVIDAD o reunión ya agendada (no una entrevista).', props: { titulo: 'Nombre o palabras clave de la actividad', motivo: 'Motivo, si lo dijo' } },
+  { name: 'editar_compromiso', description: 'Cambiar la fecha límite y/o la persona responsable de un compromiso YA existente.', props: { texto: 'Palabras clave del compromiso', nueva_fecha: 'Nueva fecha límite AAAA-MM-DD, si la dijo', nuevo_responsable: 'Nombre de la nueva persona responsable, si la dijo' } },
   { name: 'crear_compromiso', description: 'Registrar un compromiso nuevo para alguien.', props: { responsable: 'Nombre del responsable ("yo" si es para sí mismo)', descripcion: 'Qué tiene que hacer', fecha_limite: 'AAAA-MM-DD, si la dijo', reunion: 'Dónde anotarlo, SOLO si lo dijo: nombre del acta/reunión, "nueva" o "ninguna" (compromiso suelto, sin reunión)' } },
 ].map((h) => ({
   type: 'function',
@@ -84,7 +151,12 @@ function coincideNombre(buscado, nombre) {
 function nombreDesdeFrase(mensaje, palabraClave) {
   const re = new RegExp(`${palabraClave}\\w*\\s+(?:de|con|a|del|para)\\s+(?:la\\s+|el\\s+)?([A-ZÁÉÍÓÚÑa-záéíóúñ.'\\- ]+?)(?=\\s+(?:el|al|para|a las?|hoy|ma[ñn]ana|pasado|este|esta|pr[oó]xim\\w*|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|como|porque|ya|no|se)\\b|[.,:;]|$)`, 'i');
   const m = mensaje.match(re);
-  return m ? m[1].trim() : null;
+  if (!m) return null;
+  // "…entrevista de Jaime pasémosla al sábado": el nombre termina antes del verbo.
+  const ws = m[1].trim().split(/\s+/);
+  const i = ws.findIndex((w) => /^(p[aá]s|mu[eé]v|mov|c[aá]mbi|reag[eé]nd|reprogr[aá]m|post[eé]rg|adel[aá]nt|c[oó]rr|canc[eé]l|b[oó]rr|elim[ií]n|susp[eé]nd|d[eé]j|m[aá]rc)[\wáéíóúñ]*$/i.test(w));
+  const nombre = (i >= 0 ? ws.slice(0, i) : ws).join(' ').trim();
+  return nombre || null;
 }
 
 // La fecha/hora NUEVA de un "pasa la del jueves al viernes": se busca
@@ -186,6 +258,12 @@ export async function manejarAccion({ accion, args = {}, mensaje, mensajeMin, us
       return accionCompletarCompromiso(d, falta, mensaje, mensajeMin, usuario, data);
     case 'crear_compromiso':
       return accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, data, hoyObj);
+    case 'reprogramar_actividad':
+    case 'cancelar_actividad':
+      if (!borrador) d.mensajeOriginal = mensajeMin;
+      return accionActividad(d, falta, mensaje, mensajeMin, usuario, data, hoyObj);
+    case 'editar_compromiso':
+      return accionEditarCompromiso(d, falta, mensaje, mensajeMin, usuario, data, hoyObj);
     default:
       borrarBorrador(usuario);
       return resp('No sé hacer eso todavía.');
@@ -222,6 +300,19 @@ async function accionEntrevista(d, falta, mensaje, mensajeMin, usuario, data, ho
       const trozo = falta === 'elegir' ? '' : parteNueva(mensajeMin);
       d.fecha = (a.fecha && /^\d{4}-\d{2}-\d{2}$/.test(a.fecha) ? a.fecha : null) || (trozo ? parseFecha(trozo, hoyObj) : null);
       d.hora = (a.hora && /^\d{2}:\d{2}$/.test(a.hora) ? a.hora : null) || (trozo ? parseHora(trozo) : null);
+      // "para el jueves" dicho un jueves = el jueves de la PRÓXIMA semana
+      // (si fuera hoy, se diría "hoy").
+      const nm = normalizeSearchText(mensajeMin);
+      if (d.fecha === hoyISO && !/\b(hoy|este|esta)\b/.test(nm) && /\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(nm)) d.fecha = toISO(sumarDias(hoyObj, 7));
+      // "una hora más tarde" / "media hora más temprano": relativo a la hora actual.
+      const rel = normalizeSearchText(mensajeMin).match(/\b(una|media|\d+)\s+horas?\s+mas\s+(tarde|temprano)\b/);
+      if (rel && !a.hora) {
+        const mins = (rel[1] === 'una' ? 60 : rel[1] === 'media' ? 30 : Number(rel[1]) * 60) * (rel[2] === 'tarde' ? 1 : -1);
+        const [hh, mm] = g.startTime.split(':').map(Number);
+        const t = Math.min(Math.max(hh * 60 + mm + mins, 0), 23 * 60 + 59);
+        d.hora = `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+        if (!d.fecha) d.fecha = g.date;
+      }
     } else if (falta === 'fecha' || falta === 'hora') {
       d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
       d.hora = parseHora(mensajeMin) || d.hora;
@@ -231,11 +322,11 @@ async function accionEntrevista(d, falta, mensaje, mensajeMin, usuario, data, ho
       const f2 = parseFecha(mensajeMin, hoyObj); const h2 = parseHora(mensajeMin);
       if (f2) d.fecha = f2; if (h2) d.hora = h2;
     }
-    if (!d.fecha && !d.hora) return preguntar('fecha', `📅 ¿Para qué día pasamos la entrevista con **${g.nombres}**? (hoy es ${fechaLegible(g.date)} a las ${g.startTime})`, { opciones: opcionesFecha(hoyObj) });
+    if (!d.fecha && !d.hora) return preguntar('fecha', `📅 ¿Para qué día pasamos la entrevista con **${g.nombres}**? (ahora está el ${fechaLegible(g.date)} a las ${g.startTime})`, { opciones: opcionesFecha(hoyObj) });
     const nuevaFecha = d.fecha || g.date; const nuevaHora = d.hora || g.startTime;
     if (nuevaFecha < toISO(hoyObj)) { d.fecha = null; return preguntar('fecha', '📅 Esa fecha ya pasó. ¿Para qué día la pasamos?', { opciones: opcionesFecha(hoyObj) }); }
     if (!d.hora && falta !== 'confirmar' && falta !== 'hora') {
-      return preguntar('hora', `🕐 ¿A qué hora el ${fechaLegible(nuevaFecha)}? (hoy está a las ${g.startTime})`, { opciones: [{ label: `Misma hora (${g.startTime})`, value: `a las ${g.startTime}` }, ...OPCIONES_HORA] });
+      return preguntar('hora', `🕐 ¿A qué hora el ${fechaLegible(nuevaFecha)}? (ahora está a las ${g.startTime})`, { opciones: [{ label: `Misma hora (${g.startTime})`, value: `a las ${g.startTime}` }, ...OPCIONES_HORA] });
     }
     return preguntar('confirmar', '📝 ¿La reprogramo así? Se les avisará a los participantes.', {
       tarjeta: tarjetaEntrevista({ ...g, date: nuevaFecha, startTime: nuevaHora }, data, 'Reprogramar entrevista', [['↩️', `Antes: ${fechaLegible(g.date)} · ${g.startTime}`]]),
@@ -259,8 +350,8 @@ async function accionEntrevista(d, falta, mensaje, mensajeMin, usuario, data, ho
   // marcar_entrevista
   if (!d.resultado) {
     const r = d.args?.resultado;
-    d.resultado = r === 'no_hecha' || /\b(no se hizo|no vino|no llego|no se pudo|no_hecha|no hecha|no realizada)\b/.test(normalizeSearchText(mensajeMin)) ? 'not_done'
-      : r === 'hecha' || /\b(hecha|se hizo|realizada|ya entreviste|lista)\b/.test(normalizeSearchText(mensajeMin)) ? 'done' : null;
+    d.resultado = r === 'no_hecha' || /\b(no se hizo|no vino|no llego|no se pudo|no_hecha|no hecha|no realizada|falto|no asistio|no se presento)\b/.test(normalizeSearchText(mensajeMin)) ? 'not_done'
+      : r === 'hecha' || /\b(hecha|se hizo|realizada|ya entreviste|lista|ya (la|lo) (hice|hicimos|termine))\b/.test(normalizeSearchText(mensajeMin)) ? 'done' : null;
     d.comentario = d.args?.comentario || (mensaje.match(/(?:porque|comentario:?)\s+(.+)$/i)?.[1] || '').trim();
   }
   if (falta === 'resultado') {
@@ -670,4 +761,322 @@ async function accionCrearCompromiso(d, falta, mensaje, mensajeMin, usuario, dat
     : d.destino.tipo === 'nueva' ? `Creé la reunión **«${acta}»** con fecha de hoy y quedó ahí` : `Quedó en el acta **«${acta}»**`;
   if (d.responsableIds) return resp(`✅ Compromiso grupal registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). ${d.destino.tipo === 'suelto' ? 'Quedó como compromiso suelto (sin reunión)' : `Quedó en el acta **«${acta}»**`}; a cada uno le aparece en *Mis Asignaciones*.`);
   return resp(`✅ Compromiso registrado para **${resp_.name}**: ${d.descripcion} (para el **${fechaLegible(d.fechaLimite)}**). ${donde}, y le aparece en *Mis Asignaciones*.`);
+}
+
+// ======================================================================
+// ACTIVIDADES: reprogramar y cancelar
+// ======================================================================
+// Mismos permisos que PUT/DELETE /api/events/:id (canEditOrg: el
+// Administrador o un líder de la organización de la actividad) y los
+// mismos chequeos: choque con la Estaca (solo el Obispado puede pasarlo por
+// alto) y aviso a los dueños de actividades con las que pase a chocar.
+const PALABRAS_ACTIVIDAD = /\b(actividad(es)?|reunion(es)?|evento|noche de hogar|junta|convivencia|asado|campamento|clase|taller|devocional|paseo|once|cena|fireside|charla|capacitacion|servicio|consejo|comite|bautismo|ensayo|fiesta|celebracion|partido|deporte\w*|futbol|conferencia|velada|kermesse|bingo)\b/;
+const VERBOS_EDICION = /^(cambi|muev|mov|pas|posterg|adelant|corr|reagend|reprogram|cancel|suspend|anul|elimin|borr|dej)/;
+
+// Dónde empieza lo NUEVO en "cambia la noche de hogar al domingo a las 19":
+// en el primer " al " / " para "; si no hay, en " a las ".
+function corteNuevo(txt) {
+  const t = ` ${String(txt).toLowerCase()} `;
+  const idx = [' al ', ' para '].map((k) => t.indexOf(k)).filter((i) => i > 0);
+  const i = idx.length ? Math.min(...idx) : t.indexOf(' a las ');
+  return i > 0 ? i - 1 : -1;
+}
+
+function actividadesEditables(usuario, data, hoyISO) {
+  return (data.events || [])
+    .filter((e) => e.date >= hoyISO && canEditOrg(usuario, e.organizationId))
+    .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')));
+}
+
+// Palabras que identifican la actividad ("la noche de hogar misional",
+// "el asado del cuórum"), sin verbos, fechas ni relleno.
+function palabrasActividad(texto) {
+  const DIAS = /^(lunes|martes|miercoles|jueves|viernes|sabado|domingo|hoy|manana|pasado|proxim\w*|siguiente|semana|mes|hora|horas|tarde|temprano|noche|mediodia)$/;
+  return palabrasDe(texto).filter((w) => w.length >= 3 && !STOP.has(w) && !VERBOS_EDICION.test(w) && !DIAS.test(w)
+    && !/^\d/.test(w) && !['actividad', 'actividades', 'evento', 'para', 'porque', 'mejor', 'favor', 'puedes', 'podemos', 'quiero', 'las', 'los', 'una', 'uno', 'este', 'esta', 'ese', 'esa'].includes(w));
+}
+
+function candidatosActividad(usuario, data, hoyObj, mensaje, mensajeMin, args, esReprogramar) {
+  const lista = actividadesEditables(usuario, data, toISO(hoyObj));
+  // En "cambia la noche de hogar del sábado al domingo", lo que va antes del
+  // último "al / para" identifica la actividad; lo de después es lo nuevo.
+  const i = corteNuevo(mensajeMin);
+  const parteVieja = esReprogramar && i > 0 ? mensaje.slice(0, i) : mensaje;
+  const claves = palabrasActividad(args.titulo || parteVieja);
+  const calza = (e) => { const t = palabrasDe(`${e.title} ${orgPorId(data, e.organizationId)?.name || ''}`); return claves.filter((w) => t.some((x) => x.startsWith(w.slice(0, 5)))).length >= Math.min(2, claves.length); };
+  let cand = claves.length ? lista.filter(calza) : [];
+  // ¿La nombró pero es de otra organización? Se dice claro, en vez de ofrecer otras.
+  const ajenas = claves.length && !cand.length ? (data.events || []).filter((e) => e.date >= toISO(hoyObj) && calza(e)) : [];
+  // "…la del sábado": si nombraron una fecha en la parte vieja, se filtra por ella.
+  const fechaVieja = parseFecha(normalizeSearchText(parteVieja), hoyObj);
+  if (fechaVieja && !args.titulo) {
+    const delDia = (cand.length ? cand : lista).filter((e) => e.date === fechaVieja);
+    if (delDia.length) cand = delDia;
+  }
+  return { cand, lista, ajenas, claves };
+}
+
+const tarjetaActividad = (e, data, titulo, extra = []) => {
+  const org = orgPorId(data, e.organizationId);
+  return { tipo: 'actividad', titulo, color: org?.color || null, filas: [['📅', `${fechaLegible(e.date)} · ${e.startTime || ''}${e.endTime ? `–${e.endTime}` : ''}`], ['🏷️', e.title], ['🏛️', org?.name || ''], ...extra] };
+};
+const horaMas = (h, mins) => { const [a, b] = h.split(':').map(Number); const t = Math.min(Math.max(a * 60 + b + mins, 0), 23 * 60 + 59); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+const minutosEntre = (a, b) => (Number(b.slice(0, 2)) * 60 + Number(b.slice(3))) - (Number(a.slice(0, 2)) * 60 + Number(a.slice(3)));
+
+async function accionActividad(d, falta, mensaje, mensajeMin, usuario, data, hoyObj) {
+  const a = d.args || {};
+  const esReprogramar = d.accion === 'reprogramar_actividad';
+  const verbo = esReprogramar ? 'cambiar' : 'cancelar';
+  const hoyISO = toISO(hoyObj);
+  const preguntar = (f, texto, extra = {}) => { guardarBorrador(usuario, 'accion', d, f); return resp(texto, extra); };
+
+  // Viene de "cámbiala" / "cancélala": ya se sabe cuál es.
+  if (!d.elegido && a.id && actividadesEditables(usuario, data, hoyISO).some((e) => e.id === Number(a.id))) d.elegido = Number(a.id);
+  if (!d.elegido) {
+    const { cand, lista, ajenas, claves } = candidatosActividad(usuario, data, hoyObj, mensaje, mensajeMin, a, esReprogramar);
+    if (ajenas.length) {
+      borrarBorrador(usuario);
+      const e = ajenas[0]; const org = orgPorId(data, e.organizationId);
+      return resp(`🔒 **${e.title}** (${fechaLegible(e.date)}) es de **${org?.name || 'otra organización'}**: solo sus líderes o el Administrador pueden ${verbo}la.`);
+    }
+    if (!lista.length) { borrarBorrador(usuario); return resp(`📭 No encontré actividades próximas que puedas ${verbo} (solo se pueden ${esReprogramar ? 'cambiar' : 'cancelar'} las de tu organización).`); }
+    const opciones = cand.length ? cand : lista.slice(0, 6);
+    if (opciones.length > 1 || !cand.length) {
+      return elegir(usuario, d, opciones.map((e) => ({ id: e.id, e })), claves.length && !cand.length ? `No encontré esa actividad entre las tuyas. ¿Es alguna de estas?` : `¿Cuál actividad quieres ${verbo}?`, (x) => `${x.e.title.slice(0, 40)} · ${fechaLegible(x.e.date)} ${x.e.startTime || ''}`);
+    }
+    d.elegido = opciones[0].id;
+  }
+  const ev = actividadesEditables(usuario, data, hoyISO).find((e) => e.id === d.elegido);
+  if (!ev) { borrarBorrador(usuario); return resp('Esa actividad ya no está disponible (puede que la hayan cambiado o borrado).'); }
+
+  if (!esReprogramar) {
+    if (falta === 'confirmar') {
+      borrarBorrador(usuario);
+      if (!ES_AFIRMATIVO.test(mensajeMin)) return resp('👌 No la cancelé.');
+      await withDb((db) => { db.events = db.events.filter((e) => e.id !== ev.id); });
+      vaciarCache();
+      return resp(`❌ **Cancelada** la actividad **${ev.title}** del ${fechaLegible(ev.date)}. Ya no aparece en el calendario.`);
+    }
+    d.motivo = a.motivo || (mensaje.match(/porque\s+(.+)$/i)?.[1] || '').trim();
+    const confirmados = (ev.rsvps || []).filter((r) => r.response === 'yes').length;
+    return preguntar('confirmar', `⚠️ ¿Cancelo esta actividad? Se borrará del calendario.${confirmados ? ` Ojo: **${confirmados}** persona${confirmados === 1 ? '' : 's'} ya confirmó asistencia; avísales tú.` : ''}`, {
+      tarjeta: tarjetaActividad(ev, data, 'Cancelar actividad', d.motivo ? [['💬', d.motivo]] : []),
+      opciones: [{ label: '✅ Sí, cancelar', value: 'confirmar' }, { label: 'No', value: 'cancelar' }],
+    });
+  }
+
+  // --- Reprogramar ---
+  const nm = normalizeSearchText(mensajeMin);
+  if (falta !== 'confirmar' && falta !== 'elegir' && !d.fecha && !d.hora) {
+    const i = corteNuevo(mensajeMin);
+    const trozo = i >= 0 ? mensajeMin.slice(i) : mensajeMin;
+    d.fecha = (a.fecha && /^\d{4}-\d{2}-\d{2}$/.test(a.fecha) ? a.fecha : null) || parseFecha(trozo, hoyObj);
+    d.hora = (a.hora && /^\d{2}:\d{2}$/.test(a.hora) ? a.hora : null) || parseHora(trozo);
+    const rel = nm.match(/\b(una|media|\d+)\s+horas?\s+mas\s+(tarde|temprano)\b/);
+    if (rel && ev.startTime) { d.hora = horaMas(ev.startTime, (rel[1] === 'una' ? 60 : rel[1] === 'media' ? 30 : Number(rel[1]) * 60) * (rel[2] === 'tarde' ? 1 : -1)); d.fecha = d.fecha || ev.date; }
+    if (d.fecha === hoyISO && !/\b(hoy|este|esta)\b/.test(nm) && /\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(nm)) d.fecha = toISO(sumarDias(hoyObj, 7));
+  } else if (falta === 'fecha' || falta === 'hora') {
+    d.fecha = d.fecha || parseFecha(mensajeMin, hoyObj);
+    d.hora = parseHora(mensajeMin) || d.hora;
+  } else if (falta === 'confirmar' && !ES_AFIRMATIVO.test(mensajeMin)) {
+    if (/^\s*(no|cancel\w*)\b/.test(nm)) { borrarBorrador(usuario); return resp('👌 La dejé como estaba.'); }
+    const f2 = parseFecha(mensajeMin, hoyObj); const h2 = parseHora(mensajeMin);
+    if (f2) d.fecha = f2; if (h2) d.hora = h2;
+  } else if (falta === 'elegir') {
+    // Recién eligió cuál: la fecha/hora nueva venía en el primer mensaje.
+    const primero = d.mensajeOriginal || '';
+    const i = corteNuevo(primero);
+    const trozo = i >= 0 ? primero.slice(i) : '';
+    d.fecha = d.fecha || (a.fecha && /^\d{4}-\d{2}-\d{2}$/.test(a.fecha) ? a.fecha : null) || (trozo ? parseFecha(trozo, hoyObj) : null);
+    d.hora = d.hora || (a.hora && /^\d{2}:\d{2}$/.test(a.hora) ? a.hora : null) || (trozo ? parseHora(trozo) : null);
+  }
+  if (!d.fecha && !d.hora) return preguntar('fecha', `📅 ¿Para qué día pasamos **${ev.title}**? (ahora está el ${fechaLegible(ev.date)}${ev.startTime ? ` a las ${ev.startTime}` : ''})`, { opciones: opcionesFecha(hoyObj) });
+  const nuevaFecha = d.fecha || ev.date;
+  if (nuevaFecha < hoyISO) { d.fecha = null; return preguntar('fecha', '📅 Esa fecha ya pasó. ¿Para qué día la pasamos?', { opciones: opcionesFecha(hoyObj) }); }
+  if (!d.hora && falta !== 'confirmar' && falta !== 'hora' && ev.startTime) {
+    return preguntar('hora', `🕐 ¿A qué hora el ${fechaLegible(nuevaFecha)}? (ahora está a las ${ev.startTime})`, { opciones: [{ label: `Misma hora (${ev.startTime})`, value: `a las ${ev.startTime}` }, ...OPCIONES_HORA] });
+  }
+  const nuevaHora = d.hora || ev.startTime;
+  const nuevoFin = ev.endTime && ev.startTime ? horaMas(nuevaHora, Math.max(minutosEntre(ev.startTime, ev.endTime), 0)) : ev.endTime;
+  const candidato = { ...ev, date: nuevaFecha, startTime: nuevaHora, endTime: nuevoFin };
+  const estaca = findStakeConflicts(data, candidato);
+  const puedePasar = isObispadoLeader(usuario, data);
+  if (estaca.length && !puedePasar) {
+    borrarBorrador(usuario);
+    return resp(`⛔ No puedo moverla ahí: choca con ${estaca.length > 1 ? 'actividades' : 'una actividad'} de la **Estaca** (${estaca.map((s) => `"${s.title}"`).join(', ')}), que tienen prioridad. Elige otro día u hora, o pídele autorización al Obispado.`);
+  }
+  const choques = findOrgConflictsForEvent(data, candidato);
+  if (falta !== 'confirmar' || !ES_AFIRMATIVO.test(mensajeMin)) {
+    return preguntar('confirmar', '📝 ¿La cambio así? (puedes corregir, ej. "a las 19:30" o "el domingo")', {
+      tarjeta: tarjetaActividad(candidato, data, 'Cambiar actividad', [
+        ['↩️', `Antes: ${fechaLegible(ev.date)} · ${ev.startTime || ''}`],
+        ...(estaca.length ? [['⚠️', `Choca con la Estaca: ${estaca.map((s) => s.title).join(', ')} (al confirmar, lo autorizas como Obispado)`]] : []),
+        ...(choques.length ? [['⚠️', `Choca con: ${choques.slice(0, 2).map((c) => `${c.title} (${c.startTime || ''})`).join(', ')}`]] : []),
+      ]),
+      opciones: OPCIONES_CONFIRMAR,
+    });
+  }
+  borrarBorrador(usuario);
+  const actualizado = await withDb((db) => {
+    const e = db.events.find((x) => x.id === ev.id);
+    if (!e) return null;
+    Object.assign(e, { date: nuevaFecha, startTime: nuevaHora, endTime: nuevoFin, updatedAt: new Date().toISOString() });
+    return { ...e };
+  });
+  if (!actualizado) return resp('Esa actividad ya no existe.');
+  vaciarCache();
+  notifyOriginalOwnersOfConflict(load(), actualizado, usuario.id).catch(() => {});
+  return resp(`🔄 **Listo:** **${ev.title}** ahora es el **${fechaLegible(nuevaFecha)}${nuevaHora ? ` a las ${nuevaHora}` : ''}** (antes ${fechaLegible(ev.date)} ${ev.startTime || ''}).${choques.length ? ' Les avisé a los encargados de las actividades con que choca.' : ''}`);
+}
+
+// ======================================================================
+// COMPROMISOS: cambiar fecha límite y/o responsable
+// ======================================================================
+// Mismos permisos que PUT /api/commitments/:id y /reassign: quien creó el
+// acta (o el Administrador), con el acta activa. La fecha se cambia para
+// todo el grupo (igual que en el acta); el responsable, solo en
+// compromisos individuales.
+function compromisosEditables(usuario, data) {
+  const out = []; const grupos = new Set();
+  for (const m of data.meetings || []) {
+    if (m.status !== 'active' || !canEditMeeting(usuario, m)) continue;
+    for (const c of m.commitments || []) {
+      if (c.status !== 'pending') continue;
+      if (c.groupId) { if (grupos.has(c.groupId)) continue; grupos.add(c.groupId); }
+      out.push({ c, m });
+    }
+  }
+  return out.sort((a, b) => String(a.c.dueDate).localeCompare(String(b.c.dueDate)));
+}
+
+// Busca en la frase a la persona nueva: lo que viene después de cada
+// " a " / " para " que calce con alguien asignable (así "visitar a los
+// Soto" no se confunde con el responsable).
+function responsableEnFrase(mensaje, asignables, descripcion = '') {
+  const partes = mensaje.split(/\s+(?:a|al|para|por)\s+(?:el\s+|la\s+|hermano\s+|hermana\s+|hno\.?\s+|hna\.?\s+)?/i).slice(1);
+  const desc = palabrasDe(descripcion);
+  for (const p of partes.reverse()) {
+    const trozo = p.split(/\s+/).slice(0, 3).join(' ').replace(/[?¿!.,]+$/, '');
+    for (let n = Math.min(3, trozo.split(' ').length); n >= 1; n--) {
+      const nombre = trozo.split(' ').slice(0, n).join(' ');
+      if (palabrasDe(nombre).every((w) => desc.includes(w))) continue;
+      const hits = asignables.filter((u) => coincideNombre(nombre, u.name));
+      if (hits.length) return { texto: nombre, hits };
+    }
+  }
+  return null;
+}
+
+async function accionEditarCompromiso(d, falta, mensaje, mensajeMin, usuario, data, hoyObj) {
+  if (!['admin', 'leader', 'ward_clerk'].includes(usuario.role)) { borrarBorrador(usuario); return resp('🚫 Solo quien creó el acta (líderes, secretario de barrio o Administrador) puede cambiar sus compromisos.'); }
+  const a = d.args || {};
+  const nm = normalizeSearchText(mensajeMin);
+  const preguntar = (f, texto, extra = {}) => { guardarBorrador(usuario, 'accion', d, f); return resp(texto, extra); };
+  const editables = compromisosEditables(usuario, data);
+  const asignables = assignableUsersFor(usuario, data);
+
+  if (!d.elegido) {
+    if (!editables.length) { borrarBorrador(usuario); return resp('📭 No encontré compromisos pendientes que puedas cambiar (solo quien creó el acta puede editarlos).'); }
+    const texto = a.texto || mensaje.replace(/^.*?compromiso\w*\s*(de|del|para|:)?\s*/i, '');
+    const nombreNuevo = responsableEnFrase(mensaje, asignables);
+    const palabras = palabrasDe(texto).filter((w) => w.length > 3 && !STOP.has(w) && !VERBOS_EDICION.test(w)
+      && !/^(fecha|plazo|responsable|reasign|dale|darle|pasale|asign|octubre|noviembre|diciembre|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|semana)/.test(w)
+      && !(nombreNuevo && palabrasDe(nombreNuevo.texto).includes(w)));
+    let cand = palabras.length ? editables.filter(({ c }) => { const p = palabrasDe(c.description); return palabras.filter((w) => p.some((x) => x.startsWith(w.slice(0, 5)))).length >= Math.min(2, palabras.length); }) : [];
+    if (!cand.length) cand = editables;
+    if (cand.length > 1) {
+      d.mensajeOriginal = mensaje;
+      const quien = (c) => (c.groupId ? 'grupal' : (data.users.find((u) => u.id === Number(c.assignedToUserId))?.name || '').split(' ')[0]);
+      const texto = cand.length > 6 ? `Tienes **${cand.length}** compromisos pendientes que puedes cambiar; te muestro los 6 que vencen primero. ¿Cuál es? (o dime una palabra del compromiso)` : '¿Cuál compromiso quieres cambiar?';
+      return elegir(usuario, d, cand.map(({ c }) => ({ id: c.id, c })), texto, (x) => `${x.c.description.slice(0, 45)} · ${quien(x.c)} (vence ${x.c.dueDate.slice(8)}/${x.c.dueDate.slice(5, 7)})`);
+    }
+    d.elegido = cand[0].c.id;
+  }
+  const f = editables.find(({ c }) => c.id === d.elegido);
+  if (!f) { borrarBorrador(usuario); return resp('Ese compromiso ya no está pendiente o no lo puedes editar.'); }
+
+  // ¿Qué quiere cambiar? (en la primera frase, o al volver de "¿cuál?")
+  const fuente = falta === 'elegir' ? (d.mensajeOriginal || '') : falta ? '' : mensaje;
+  if (fuente) {
+    const fm = fuente.toLowerCase();
+    const i = Math.max(fm.lastIndexOf(' al '), fm.lastIndexOf(' para el '), fm.lastIndexOf(' hasta el '), fm.lastIndexOf(' hasta '));
+    d.nuevaFecha = d.nuevaFecha || (a.nueva_fecha && /^\d{4}-\d{2}-\d{2}$/.test(a.nueva_fecha) ? a.nueva_fecha : null) || (i >= 0 ? parseFecha(fm.slice(i), hoyObj) : null) || parseFecha(fm, hoyObj);
+    // "posterga una semana", "dale 3 días más", "adelántalo 2 días"
+    const rel = normalizeSearchText(fuente).match(/\b(una|un|dos|tres|cuatro|\d+)\s+(semanas?|dias?)\b/);
+    if (rel && !a.nueva_fecha) {
+      const n = { una: 1, un: 1, dos: 2, tres: 3, cuatro: 4 }[rel[1]] ?? Number(rel[1]);
+      const dias = n * (/^semana/.test(rel[2]) ? 7 : 1) * (/\badelant/.test(normalizeSearchText(fuente)) ? -1 : 1);
+      d.nuevaFecha = toISO(sumarDias(new Date(`${f.c.dueDate}T12:00:00`), dias));
+    }
+    if (d.nuevaFecha && d.nuevaFecha === f.c.dueDate) d.nuevaFecha = null;
+    const quiereResponsable = !!a.nuevo_responsable || /\b(reasign\w*|responsable|dale|darle|darselo|pasale|pasarle|pasaselo|asignale|asignarselo|que lo haga|lo haga|lo tenga)\b/.test(normalizeSearchText(fuente));
+    if (quiereResponsable && !d.nuevoResponsableId) {
+      const r = a.nuevo_responsable ? { texto: a.nuevo_responsable, hits: asignables.filter((u) => coincideNombre(a.nuevo_responsable, u.name)) } : responsableEnFrase(fuente, asignables, f.c.description);
+      if (r && r.hits.length === 1) d.nuevoResponsableId = r.hits[0].id;
+      else if (r && r.hits.length > 1) { d.candidatosResp = r.hits.slice(0, 5).map((u) => u.id); return preguntar('responsable', '👤 ¿A cuál de estas personas se lo paso?', { opciones: r.hits.slice(0, 5).map((u) => ({ label: u.name, value: u.name })) }); }
+      else d.pideResponsable = true;
+    }
+  }
+  if (falta === 'responsable') {
+    const hits = asignables.filter((u) => coincideNombre(mensaje, u.name));
+    if (hits.length !== 1) return preguntar('responsable', hits.length ? '👤 Hay varias personas con ese nombre. ¿Cuál?' : '🔎 No encontré a esa persona entre quienes puedes asignar compromisos. ¿A quién se lo paso?', hits.length ? { opciones: hits.slice(0, 5).map((u) => ({ label: u.name, value: u.name })) } : {});
+    d.nuevoResponsableId = hits[0].id; d.pideResponsable = false;
+  }
+  if (falta === 'que') {
+    if (/\bresponsable|persona|otro|otra|quien\b/.test(nm)) d.pideResponsable = true;
+    const f2 = parseFecha(mensajeMin, hoyObj); if (f2) d.nuevaFecha = f2;
+    const r = responsableEnFrase(` a ${mensaje}`, asignables); if (r && r.hits.length === 1) d.nuevoResponsableId = r.hits[0].id;
+  }
+  if (falta === 'fecha') d.nuevaFecha = parseFecha(mensajeMin, hoyObj);
+  if (falta === 'confirmar' && !ES_AFIRMATIVO.test(mensajeMin)) {
+    if (/^\s*(no|cancel\w*)\b/.test(nm)) { borrarBorrador(usuario); return resp('👌 Lo dejé como estaba.'); }
+    const f2 = parseFecha(mensajeMin, hoyObj); if (f2) d.nuevaFecha = f2;
+  }
+
+  if (d.pideResponsable && !d.nuevoResponsableId) return preguntar('responsable', `👤 ¿A quién le paso el compromiso **${f.c.description}**?`);
+  if (!d.nuevaFecha && !d.nuevoResponsableId) {
+    return preguntar('que', `✏️ ¿Qué cambio en **${f.c.description}**? Dime la nueva fecha (ej. "para el 5 de octubre") o la nueva persona responsable (ej. "a Pedro").`, { opciones: [{ label: '📅 En una semana más', value: toISO(sumarDias(new Date(`${f.c.dueDate}T12:00:00`), 7)) }] });
+  }
+  if (d.nuevaFecha && d.nuevaFecha < toISO(hoyObj)) { d.nuevaFecha = null; return preguntar('fecha', '📅 Esa fecha ya pasó. ¿Para cuándo lo dejamos?', { opciones: opcionesFecha(hoyObj) }); }
+  if (d.nuevoResponsableId && f.c.groupId) { borrarBorrador(usuario); return resp('👥 Ese compromiso es **grupal**: para cambiar a quiénes lo tienen, ábrelo en su acta (Reuniones y Consejos → "sumar" o "quitar" personas).'); }
+  if (d.nuevoResponsableId && Number(d.nuevoResponsableId) === Number(f.c.assignedToUserId)) d.nuevoResponsableId = null;
+  const nuevo = d.nuevoResponsableId ? asignables.find((u) => u.id === Number(d.nuevoResponsableId)) : null;
+  const actual = data.users.find((u) => u.id === Number(f.c.assignedToUserId));
+  if (!d.nuevaFecha && !nuevo) { borrarBorrador(usuario); return resp('👌 No hay nada que cambiar: ya está así.'); }
+
+  if (falta !== 'confirmar' || !ES_AFIRMATIVO.test(mensajeMin)) {
+    return preguntar('confirmar', '📝 ¿Lo cambio así?', {
+      tarjeta: {
+        tipo: 'compromiso', titulo: f.c.description, color: null,
+        filas: [
+          ['👤', nuevo ? `${nuevo.name} (antes: ${actual?.name || '—'})` : (actual?.name || '—')],
+          ['📅', d.nuevaFecha ? `Para el ${fechaLegible(d.nuevaFecha)} (antes: ${fechaLegible(f.c.dueDate)})` : `Para el ${fechaLegible(f.c.dueDate)}`],
+          ['📋', f.m.sueltos ? 'Sin reunión' : f.m.title],
+          ...(f.c.groupId && d.nuevaFecha ? [['👥', 'Compromiso grupal: la fecha cambia para todos']] : []),
+        ],
+      },
+      opciones: OPCIONES_CONFIRMAR,
+    });
+  }
+  borrarBorrador(usuario);
+  const ok = await withDb((db) => {
+    const m = db.meetings.find((x) => x.id === f.m.id);
+    const c = m?.commitments?.find((x) => x.id === f.c.id);
+    if (!m || !c || m.status !== 'active' || c.status !== 'pending') return false;
+    if (d.nuevaFecha) {
+      const targets = c.groupId ? m.commitments.filter((x) => x.groupId === c.groupId) : [c];
+      for (const t of targets) Object.assign(t, { dueDate: d.nuevaFecha, commitmentReminderSent: false, whatsappDueTodaySent: false, pushPorVencerSent: false, pushVencidoSent: false });
+    }
+    if (nuevo) {
+      c.reassignHistory = c.reassignHistory || [];
+      c.reassignHistory.push({ fromUserId: c.assignedToUserId, toUserId: nuevo.id, at: new Date().toISOString() });
+      Object.assign(c, { assignedToUserId: nuevo.id, status: 'pending', completedAt: null, completionComment: '' });
+    }
+    m.lastEditedBy = usuario.id; m.lastEditedAt = new Date().toISOString();
+    return true;
+  });
+  vaciarCache();
+  if (!ok) return resp('Ese compromiso ya no está pendiente (puede que lo hayan cambiado).');
+  const cambios = [nuevo ? `ahora lo tiene **${nuevo.name}**` : null, d.nuevaFecha ? `vence el **${fechaLegible(d.nuevaFecha)}**` : null].filter(Boolean).join(' y ');
+  return resp(`✅ **Listo:** el compromiso "${f.c.description}" ${cambios}.`);
 }
