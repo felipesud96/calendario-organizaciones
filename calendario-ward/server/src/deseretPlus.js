@@ -49,7 +49,7 @@ const RE_DESHACER = /^\s*(deshaz\w*|deshacer|revierte|revertir|anula lo (ultimo|
 const RE_REC_LISTAR = /\b(mis recordatorios|que recordatorios|recordatorios (tengo|pendientes))\b/;
 const RE_REC_BORRAR = /\b(borra|elimina|cancela|quita)\w*\s+(el |mi |los |mis )?recordatorios?\b/;
 const RE_REC_CREAR = /\b(recuerdame|recordarme|recuerdeme|avisame|pon(me)? un recordatorio|crea(me)? un recordatorio|agrega(me)? un recordatorio)\b/;
-const RE_DICTAR = /\b(dictar|dicto|dictare|voy a dictar|registra|registrar|anota|anotar|crea|crear|redacta|redactar|arma|armar)\b.{0,25}\bacta\b|^\s*acta( de la reunion)?\s*:/;
+const RE_DICTAR = /\b(dictar|dicta|dictemos|dicto|dictare|voy a dictar|registra|registrar|anota|anotar|crea|crear|redacta|redactar|arma|armar)\b.{0,25}\bacta\b|^\s*acta( de la reunion)?\s*:/;
 const RE_SUGERIR = /\b(a quien(es)?|quien(es)?)\b.{0,40}\b(entrevist\w*|visit\w*|priorizar|deberia (ver|llamar)|conviene (ver|llamar))\b|\bsugi\w*.{0,20}\b(entrevistas|a quien)\b/;
 const RE_BUSCAR = /\b(que (acordamos|decidimos|quedamos|se acordo|se decidio|dijimos)|acuerdos? (sobre|de|del)|busca\w* en (las )?actas|en que acta|cuando (hablamos|vimos|tratamos|acordamos))\b/;
 const RE_RESUMEN_ORG = /\b(como (va|van|anda|andan|esta|estan|le va a|les va a)|resumen (de|del)|balance (de|del)|estado (de|del))\b/;
@@ -497,27 +497,52 @@ async function dictarActa({ mensaje, mensajeMin, usuario, data, hoyObj, borrador
 // { titulo, tipo, fecha, temas[], compromisos[] } con los responsables ya
 // buscados entre las personas asignables. La usan el dictado por chat y el
 // modo "Deseret escucha la reunión" (routes/escucha.js).
-export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion = false } = {}) {
+// Campos de cada tema según el tipo de acta (los mismos del formulario de
+// la app y de la minuta): Consejo de Barrio = necesidad → análisis →
+// acuerdo → seguimiento; Coordinación de Ministración = quién necesita
+// ayuda → qué se hará → quién lo hará; general = notas + acuerdo.
+export const CAMPOS_TEMA = {
+  general: { notas: 'de qué se habló (breve)', acuerdo: 'qué se acordó, o vacío' },
+  consejo_barrio: { necesidad: 'necesidad detectada', analisis: 'lo que se analizó/conversó', acuerdo: 'qué se acordó', seguimiento: 'cómo y quién hará el seguimiento' },
+  coordinacion_ministracion: { quienNecesita: 'quién necesita ayuda', queSeHara: 'qué se hará', quienLoHara: 'quién lo hará' },
+};
+const TODOS_CAMPOS = ['notas', 'acuerdo', 'necesidad', 'analisis', 'seguimiento', 'quienNecesita', 'queSeHara', 'quienLoHara'];
+
+// `tipoFijo`: el tipo de acta ya elegido (no lo decide la IA).
+// `agendaBase`: temas ya puestos (plantilla o acta existente), [{ ref, tema }]:
+// la IA ubica lo conversado en esos temas (por `ref`) y agrega aparte lo que no calce.
+export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion = false, tipoFijo = null, agendaBase = [] } = {}) {
   const asignables = assignableUsersFor(usuario, data);
   const obispado = isObispadoLeader(usuario, data);
+  const tipoPedido = tipoFijo && TIPOS_ACTA[tipoFijo] ? tipoFijo : null;
+  const campos = CAMPOS_TEMA[tipoPedido || 'general'];
+  const formaTema = `{${tipoPedido || agendaBase.length ? '"ref": número del tema de la agenda o null, ' : ''}"tema": "título corto", ${Object.entries(tipoPedido ? campos : CAMPOS_TEMA.general).map(([k, v]) => `"${k}": "${v}"`).join(', ')}}`;
+  const agendaTxt = agendaBase.length
+    ? `\nLa reunión tenía esta AGENDA (usa "ref" para poner lo conversado en el tema que corresponda; lo que no calce en ninguno va como tema nuevo con "ref": null; no repitas temas de la agenda sin contenido):\n${agendaBase.map((a) => `${a.ref}. ${a.tema}`).join('\n')}`
+    : '';
   const origen = transcripcion
     ? `la TRANSCRIPCIÓN AUTOMÁTICA de una reunión grabada (puede tener errores de reconocimiento, frases cortadas y varias personas hablando; quien preside suele resumir los acuerdos y asignar los compromisos). Agrupa lo conversado en temas; ignora saludos, oraciones de apertura/cierre y conversación sin relación`
     : 'un dictado';
   const sistema = `Ordenas el acta de una reunión de un barrio de La Iglesia (Chile) a partir de ${origen}. Hoy es ${toISO(hoyObj)}.
 Devuelve SOLO un JSON con esta forma:
-{"titulo": "...", "tipo": "general|consejo_barrio|coordinacion_ministracion", "fecha": "AAAA-MM-DD (hoy si no la dijo)",
- "temas": [{"tema": "título corto", "notas": "de qué se habló (breve)", "acuerdo": "qué se acordó, o vacío"}],
+{"titulo": "...", ${tipoPedido ? '' : '"tipo": "general|consejo_barrio|coordinacion_ministracion", '}"fecha": "AAAA-MM-DD (hoy si no la dijo)",
+ "temas": [${formaTema}],
  "compromisos": [{"responsable": "nombre tal como lo dijo, o 'yo'", "descripcion": "qué hará", "fecha_limite": "AAAA-MM-DD o vacío"}]}
 Reglas: no inventes nada que no se haya dicho; un compromiso es algo que una persona concreta quedó en hacer; si no se dijo fecha límite, déjala vacía. "El sábado" = el próximo sábado desde hoy.
-Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.`;
+Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.${agendaTxt}`;
   let acta = await jsonConIA(sistema, texto.slice(0, transcripcion ? 120000 : 20000));
   if (!acta || typeof acta !== 'object') acta = actaSinIA(texto, hoyObj);
   // Validar y resolver responsables.
   const fechaOk = (f) => (typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : null);
-  const tipo = TIPOS_ACTA[acta.tipo] && (acta.tipo === 'general' || obispado) ? acta.tipo : 'general';
+  const tipo = tipoPedido || (TIPOS_ACTA[acta.tipo] && (acta.tipo === 'general' || obispado) ? acta.tipo : 'general');
+  const refsValidas = new Set(agendaBase.map((a) => Number(a.ref)));
   const fechaActa = fechaOk(acta.fecha) || toISO(hoyObj);
   const temas = (Array.isArray(acta.temas) ? acta.temas : []).filter((t) => t && String(t.tema || '').trim()).slice(0, 20)
-    .map((t) => ({ tema: String(t.tema).trim().slice(0, 150), notas: String(t.notas || '').trim().slice(0, 800), acuerdo: String(t.acuerdo || '').trim().slice(0, 500) }));
+    .map((t) => ({
+      tema: String(t.tema).trim().slice(0, 150),
+      ref: refsValidas.has(Number(t.ref)) ? Number(t.ref) : null,
+      ...Object.fromEntries(TODOS_CAMPOS.map((k) => [k, String(t[k] || '').trim().slice(0, 800)])),
+    }));
   const compromisos = (Array.isArray(acta.compromisos) ? acta.compromisos : []).filter((c) => c && String(c.descripcion || '').trim()).slice(0, 20).map((c) => {
     const nombre = String(c.responsable || '').trim();
     let u = null;
@@ -577,6 +602,22 @@ async function guardarActa(acta, usuario) {
   return resp(`✅ Guardé el acta **«${m.title}»** con ${m.agendaItems.length} tema${m.agendaItems.length === 1 ? '' : 's'} y ${m.commitments.length} compromiso${m.commitments.length === 1 ? '' : 's'}. La encuentras en **Reuniones y Consejos**, y a cada responsable le aparece su compromiso en *Mis Asignaciones*.`);
 }
 
+// Tema del borrador → campos del acta según su tipo (lo mismo que muestran
+// el acta y la minuta). Si la IA dejó el contenido en otro campo, se usa
+// igual para no perderlo.
+export function camposDeTema(t, tipo) {
+  const v = (k) => String(t[k] || '').trim();
+  if (tipo === 'consejo_barrio') {
+    return { necesidad: v('necesidad'), analisis: v('analisis') || v('notas'), acuerdo: v('acuerdo'), seguimiento: v('seguimiento') };
+  }
+  if (tipo === 'coordinacion_ministracion') {
+    return { quienNecesita: v('quienNecesita') || v('necesidad'), queSeHara: v('queSeHara') || v('acuerdo') || v('notas') || v('analisis'), quienLoHara: v('quienLoHara') || v('seguimiento') };
+  }
+  const notas = v('notas') || [v('necesidad'), v('analisis'), v('quienNecesita'), v('queSeHara')].filter(Boolean).join('\n');
+  const acuerdo = v('acuerdo');
+  return { notes: [notas, acuerdo && `Acuerdo: ${acuerdo}`].filter(Boolean).join('\n') };
+}
+
 // Crea el acta (reunión + temas + compromisos) y la devuelve.
 export async function guardarActaCore(acta, usuario, extra = {}) {
   const now = new Date();
@@ -589,7 +630,7 @@ export async function guardarActaCore(acta, usuario, extra = {}) {
       councilPrepReminderSent: false, dictadoConDeseret: true, ...extra,
       agendaItems: acta.temas.map((t) => ({
         id: nextId(db, 'agendaItems'), topic: t.tema, presenter: '', ...EMPTY_AGENDA_ITEM_NOTES,
-        ...(acta.tipo === 'consejo_barrio' ? { analisis: t.notas, acuerdo: t.acuerdo } : { notes: [t.notas, t.acuerdo && `Acuerdo: ${t.acuerdo}`].filter(Boolean).join('\n') }),
+        ...camposDeTema(t, acta.tipo),
       })),
       commitments: acta.compromisos.map((c) => ({
         id: nextId(db, 'commitments'), description: c.nombre || !c.dicho ? c.descripcion : `(${c.dicho}) ${c.descripcion}`,

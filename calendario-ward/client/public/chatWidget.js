@@ -704,6 +704,29 @@ export function initChatWidget() {
     const cambioVoz = /\b(voz|habla\w*|hablame)\b.*\b(masculin\w*|de hombre|hombre|varon)\b/.test(tn) ? 'masculina'
       : /\b(voz|habla\w*|hablame)\b.*\b(femenin\w*|de mujer|mujer)\b/.test(tn) ? 'femenina' : null;
     const escucharReunion = /^(deseret,?\s*)?(escucha|graba|grabar|escuchar|toma (nota|notas|el acta) de)\s+(la|esta|mi|una)?\s*reunion\b|\bmodo oyente\b/.test(tn);
+    // "Deseret, comienza la reunión (de presidencia)" / "termina la reunión".
+    const comienza = tn.match(/^(deseret,?\s*)?(comienza|comenzamos|comencemos|empieza|empezamos|empecemos|inicia|iniciamos|iniciemos|partamos|partimos|arranca|arrancamos|da inicio a)\s+(con\s+)?(la|una|nuestra|esta)?\s*reunion\b\s*(.*)$/);
+    const termina = /^(deseret,?\s*)?(termina|terminamos|terminemos|finaliza|finalizamos|cierra|cerramos|concluye|da por terminada|fin de)\s+(la\s+|esta\s+)?reunion\b/.test(tn);
+    if ((comienza || termina) && typeof window.escucharYa === 'function') {
+      enviando = false; sendBtn.disabled = false; chatInput.value = '';
+      messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+      estado.msgs.push({ role: 'user', texto: text }); pintarMensaje(estado.msgs.at(-1));
+      const decir = (t) => { estado.msgs.push({ role: 'bot', texto: t }); pintarMensaje(estado.msgs.at(-1)); guardar(); if (vozActiva || dictada || conduccion) hablar(t); };
+      const dictada = ultimaFueDictada; ultimaFueDictada = false;
+      if (termina) {
+        if (window.terminarEscucha()) { chatWindow.style.display = 'none'; decir('✅ Terminé de escuchar. Te muestro dónde guardar el acta para que la revises.'); }
+        else decir('No estoy escuchando ninguna reunión en este momento. Para empezar, dime **"comienza la reunión"**.');
+        return;
+      }
+      // Lo que viene después de "reunión" es el nombre: "…de presidencia del cuórum".
+      const resto = text.replace(/^.*?reuni[oó]n\b\s*/i, '').replace(/[.!?¿¡]+$/, '').trim();
+      const titulo = resto ? `Reunión ${resto}`.slice(0, 100) : '';
+      const r = await window.escucharYa({ titulo, onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } });
+      if (r === 'empezo') { chatWindow.style.display = 'none'; decir(`🎙️ Empiezo a escuchar${titulo ? ` la **${titulo}**` : ' la reunión'}. Recuerda avisar a los presentes. Cuando terminen, dime **"Deseret, termina la reunión"** o toca el aviso de abajo.`); }
+      else if (r === 'ya') decir('Ya estoy escuchando la reunión. Para terminar, dime **"termina la reunión"**.');
+      else { chatWindow.style.display = 'none'; }
+      return;
+    }
     if (cambioVoz || (escucharReunion && typeof window.abrirEscuchaReunion === 'function')) {
       enviando = false; sendBtn.disabled = false; chatInput.value = '';
       messagesDiv.querySelector('.deseret-bienvenida')?.remove();

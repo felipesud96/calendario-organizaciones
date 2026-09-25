@@ -57,6 +57,7 @@
       .esc-item input, .esc-item textarea, .esc-item select { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--border, #cbd5e1); border-radius: 8px; background: var(--white, #fff); color: inherit; }
       .esc-item input[data-k="tema"], .esc-item input[data-k="descripcion"] { font-weight: 600; padding-right: 30px; }
       .esc-item textarea { min-height: 54px; resize: vertical; }
+      .esc-lbl { font-size: 12px; font-weight: 600; color: var(--ink-soft, #64748b); margin: 2px 0 -4px; }
       .esc-quitar { position: absolute; top: 6px; right: 6px; border: 0; background: transparent; font-size: 18px; cursor: pointer; color: var(--ink-soft, #64748b); }
       .esc-comp { display: grid; grid-template-columns: 1fr; gap: 6px; }
       .esc-comp-fila { display: grid; grid-template-columns: 1fr 150px; gap: 6px; }
@@ -103,7 +104,11 @@
   }
 
   // ---------------- 1. Inicio ----------------
-  async function pantallaInicio() {
+  const CLAVE_AVISO = 'deseret_escucha_aviso'; // ya confirmó una vez que avisa a los presentes
+  const yaAvisado = () => { try { return localStorage.getItem(CLAVE_AVISO) === '1'; } catch { return false; } };
+  const marcarAvisado = () => { try { localStorage.setItem(CLAVE_AVISO, '1'); } catch { /* sin almacenamiento */ } };
+
+  async function pantallaInicio(tituloInicial = '') {
     estilos();
     let estado = null;
     try { estado = await api('/escucha/estado'); } catch (e) { aviso(e.message, 'error'); return; }
@@ -114,7 +119,7 @@
     const puedeOnline = !!navigator.mediaDevices?.getDisplayMedia && !/Android|iPhone|iPad/i.test(navigator.userAgent);
     modal('🎙️ Deseret escucha la reunión', `
       <p style="margin-top:0">Deseret escucha la reunión, la transcribe y al final te propone el <b>acta</b> con los temas, acuerdos y compromisos. <b>Tú la revisas antes de guardarla.</b> El audio no se guarda: solo el texto, y se borra al guardar el acta.</p>
-      <div class="field"><label for="esc-tit">Nombre de la reunión (opcional)</label><input id="esc-tit" type="text" maxlength="100" placeholder="Ej. Reunión de presidencia del Cuórum" /></div>
+      <div class="field"><label for="esc-tit">Nombre de la reunión (opcional)</label><input id="esc-tit" type="text" maxlength="100" placeholder="Ej. Reunión de presidencia del Cuórum" value="${esc(tituloInicial)}" /></div>
       <label style="font-weight:600">¿Dónde es la reunión?</label>
       <div class="esc-fuentes">
         <label class="esc-fuente activa"><input type="radio" name="esc-fuente" value="sala" checked /><span><b>🏠 En una sala</b><br><small>Graba el micrófono. Deja el celular al centro de la mesa y conectado a la corriente.</small></span></label>
@@ -125,17 +130,20 @@
         <li>Usa <b>Pausa</b> en los temas confidenciales. No grabes entrevistas ni temas de dignidad.</li>
         <li>Mantén la app abierta y la pantalla encendida.</li>
       </ul>
-      <label class="a11y-op" style="margin-top:12px"><input type="checkbox" id="esc-ok" /> <span>Avisé a los presentes que Deseret tomará notas de la reunión.</span></label>`,
+      <p class="esc-estado" style="margin:10px 0 0">💡 La próxima vez puedes decir <b>"Deseret, comienza la reunión"</b> y empiezo al tiro; al final, <b>"Deseret, termina la reunión"</b>.</p>
+      <label class="a11y-op" style="margin-top:12px"><input type="checkbox" id="esc-ok" ${yaAvisado() ? 'checked' : ''} /> <span>Avisé a los presentes que Deseret tomará notas de la reunión.</span></label>`,
     '<button class="btn btn-secondary" id="esc-no">Cancelar</button><button class="btn btn-primary" id="esc-empezar" disabled>🎙️ Empezar a escuchar</button>');
     document.getElementById('esc-no').addEventListener('click', cerrarModal);
     const ok = document.getElementById('esc-ok'); const btn = document.getElementById('esc-empezar');
     ok.addEventListener('change', () => { btn.disabled = !ok.checked; });
+    btn.disabled = !ok.checked;
     raiz().querySelectorAll('.esc-fuente input').forEach((r) => r.addEventListener('change', () => {
       raiz().querySelectorAll('.esc-fuente').forEach((l) => l.classList.toggle('activa', l.querySelector('input').checked));
     }));
     btn.addEventListener('click', async () => {
       btn.disabled = true; btn.textContent = 'Preparando…';
       const fuente = raiz().querySelector('.esc-fuente input:checked')?.value || 'sala';
+      marcarAvisado();
       try { await empezar(fuente, document.getElementById('esc-tit').value.trim()); } catch (e) {
         aviso(e.message || 'No se pudo empezar', 'error');
         btn.disabled = false; btn.textContent = '🎙️ Empezar a escuchar';
@@ -164,14 +172,24 @@
         throw new Error('No marcaste "Compartir audio". Vuelve a empezar y activa esa opción al elegir la pestaña.');
       }
     }
-    // Todo pasa por un AudioContext: mezcla micrófono + reunión y mide el nivel.
+    // AudioContext: mezcla micrófono + reunión (online) y mide el nivel. En
+    // sala se graba el micrófono directo: si se empezó por voz ("Deseret,
+    // comienza la reunión") sin tocar la pantalla, el AudioContext puede
+    // quedar suspendido y no se perdería audio igual.
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
-    const destino = ctx.createMediaStreamDestination();
     const analizador = ctx.createAnalyser(); analizador.fftSize = 1024;
-    ctx.createMediaStreamSource(mic).connect(destino);
-    if (pantalla) ctx.createMediaStreamSource(new MediaStream(pantalla.getAudioTracks())).connect(destino);
-    ctx.createMediaStreamSource(destino.stream).connect(analizador);
+    let grabar = mic;
+    if (pantalla) {
+      const mezcla = ctx.createMediaStreamDestination();
+      ctx.createMediaStreamSource(mic).connect(mezcla);
+      ctx.createMediaStreamSource(new MediaStream(pantalla.getAudioTracks())).connect(mezcla);
+      ctx.createMediaStreamSource(mezcla.stream).connect(analizador);
+      grabar = mezcla.stream;
+    } else {
+      ctx.createMediaStreamSource(mic).connect(analizador);
+    }
+    const destino = { stream: grabar };
 
     const { id } = await api('/escucha', { method: 'POST', body: { fuente, titulo } });
     st = {
@@ -335,37 +353,100 @@
       document.getElementById('esc-seguir').addEventListener('click', () => { st.cola = []; terminar(); });
       return;
     }
-    const paso = document.getElementById('esc-paso'); if (paso) paso.textContent = 'Ordenando temas, acuerdos y compromisos…';
+    await pantallaDestino();
+  }
+
+  // ---------------- 2b. ¿Dónde va el acta? ----------------
+  // Acta nueva (con o sin plantilla) o agregar a una acta que ya tengo.
+  const TIPOS = { general: 'Reunión general / de presidencia', consejo_barrio: 'Consejo de barrio', coordinacion_ministracion: 'Coordinación de ministración' };
+  async function pantallaDestino() {
+    let info;
+    try { info = await api('/escucha/destinos'); } catch (e) { info = { tipos: ['general'], actas: [], hoy: '' }; }
+    const deHoy = info.actas.find((a) => a.fecha === info.hoy);
+    const elegido = { modo: deHoy ? 'existente' : 'nueva', meetingId: deHoy?.id || info.actas[0]?.id || null, tipoActa: 'general', plantilla: '' };
+    let plantillas = [];
+    const cargarPlantillas = async () => {
+      plantillas = typeof window.plantillasEscucha === 'function' ? await window.plantillasEscucha(elegido.tipoActa).catch(() => []) : [];
+      if (!plantillas.some((p) => p.clave === elegido.plantilla)) elegido.plantilla = plantillas.find((p) => p.oficial)?.clave || '';
+    };
+    await cargarPlantillas();
+    const pintar = () => {
+      modal('📋 ¿Dónde guardo el acta?', `
+        <div class="esc-fuentes">
+          <label class="esc-fuente ${elegido.modo === 'nueva' ? 'activa' : ''}"><input type="radio" name="esc-dest" value="nueva" ${elegido.modo === 'nueva' ? 'checked' : ''} /><span><b>🆕 Acta nueva</b><br><small>Con fecha y hora de esta reunión.</small></span></label>
+          ${elegido.modo === 'nueva' ? `
+            <div style="padding: 0 4px 4px 30px; display:grid; gap:8px;">
+              ${info.tipos.length > 1 ? `<div class="field" style="margin:0"><label>Tipo</label><select id="esc-d-tipo">${info.tipos.map((t) => `<option value="${t}" ${elegido.tipoActa === t ? 'selected' : ''}>${TIPOS[t]}</option>`).join('')}</select></div>` : ''}
+              <div class="field" style="margin:0"><label>Temas</label><select id="esc-d-plantilla">
+                <option value="">Solo lo que se conversó (sin plantilla)</option>
+                ${plantillas.map((p) => `<option value="${esc(p.clave)}" ${elegido.plantilla === p.clave ? 'selected' : ''}>${esc(p.nombre)} (${p.temas.length} temas)</option>`).join('')}
+              </select></div>
+            </div>` : ''}
+          ${info.actas.length ? `<label class="esc-fuente ${elegido.modo === 'existente' ? 'activa' : ''}"><input type="radio" name="esc-dest" value="existente" ${elegido.modo === 'existente' ? 'checked' : ''} /><span><b>📎 Agregar a una acta que ya tengo</b><br><small>Pongo lo conversado dentro de los temas de su agenda, y agrego al final lo que no calce.</small></span></label>` : ''}
+          ${elegido.modo === 'existente' ? `
+            <div style="padding: 0 4px 4px 30px;"><select id="esc-d-acta" style="width:100%">${info.actas.map((a) => `<option value="${a.id}" ${elegido.meetingId === a.id ? 'selected' : ''}>${esc(a.titulo)} · ${esc(a.fecha)} (${a.temas} temas)</option>`).join('')}</select></div>` : ''}
+        </div>`,
+      '<button class="btn btn-secondary" id="esc-d-desc">Descartar</button><button class="btn btn-primary" id="esc-d-ok">Armar el acta</button>');
+      raiz().querySelectorAll('[name=esc-dest]').forEach((r) => r.addEventListener('change', () => { elegido.modo = r.value; pintar(); }));
+      document.getElementById('esc-d-tipo')?.addEventListener('change', async (e) => { elegido.tipoActa = e.target.value; elegido.plantilla = ''; await cargarPlantillas(); pintar(); });
+      document.getElementById('esc-d-plantilla')?.addEventListener('change', (e) => { elegido.plantilla = e.target.value; });
+      document.getElementById('esc-d-acta')?.addEventListener('change', (e) => { elegido.meetingId = Number(e.target.value); });
+      document.getElementById('esc-d-desc').addEventListener('click', descartar);
+      document.getElementById('esc-d-ok').addEventListener('click', () => {
+        const destino = elegido.modo === 'existente'
+          ? { tipo: 'existente', meetingId: elegido.meetingId }
+          : { tipo: 'nueva', tipoActa: elegido.tipoActa, temasBase: plantillas.find((p) => p.clave === elegido.plantilla)?.temas || [] };
+        armarActa(destino);
+      });
+    };
+    pintar();
+  }
+
+  async function armarActa(destino) {
+    if (!st) return;
+    modal('🧠 Armando el acta…', '<div class="esc-grabando"><div class="deseret-typing"><span></span><span></span><span></span></div><p class="esc-estado">Ordenando temas, acuerdos y compromisos…</p></div>');
     try {
-      const r = await api(`/escucha/${st.id}/terminar`, { method: 'POST', body: {} });
+      const r = await api(`/escucha/${st.id}/terminar`, { method: 'POST', body: { destino } });
       pantallaRevision(r);
     } catch (e) {
       modal('No pude armar el acta', `<p>${esc(e.message)}</p>`, '<button class="btn btn-secondary" id="esc-desc2">Descartar</button><button class="btn btn-primary" id="esc-otra">Intentar de nuevo</button>');
-      document.getElementById('esc-otra').addEventListener('click', terminar);
+      document.getElementById('esc-otra').addEventListener('click', () => pantallaDestino());
       document.getElementById('esc-desc2').addEventListener('click', descartar);
     }
   }
 
   // ---------------- 3. Revisión ----------------
-  function pantallaRevision({ acta, asignables, transcripcion, tipos }) {
-    const TIPOS = { general: 'Reunión general / de presidencia', consejo_barrio: 'Consejo de barrio', coordinacion_ministracion: 'Coordinación de ministración' };
+  // Campos de cada tema, iguales a los del acta y la minuta de la app.
+  const CAMPOS = {
+    general: [['notas', 'De qué se habló'], ['acuerdo', 'Acuerdo (opcional)']],
+    consejo_barrio: [['necesidad', '🧩 Necesidad'], ['analisis', '🔎 Análisis'], ['acuerdo', '✅ Acuerdo'], ['seguimiento', '👣 Seguimiento']],
+    coordinacion_ministracion: [['quienNecesita', '🙋 Quién necesita ayuda'], ['queSeHara', '🛠️ Qué se hará'], ['quienLoHara', '🤝 Quién lo hará']],
+  };
+  function pantallaRevision({ acta, asignables, transcripcion, tipos, destino }) {
+    const existente = destino?.tipo === 'existente';
     const b = { ...acta, temas: acta.temas.map((t) => ({ ...t })), compromisos: acta.compromisos.map((c) => ({ ...c, incluir: true })) };
+    const campos = () => CAMPOS[b.tipo] || CAMPOS.general;
     const opcionesResp = (sel) => asignables.map((u) => `<option value="${u.id}" ${Number(sel) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
     const pintar = () => {
-      modal('📋 Revisa el acta antes de guardarla', `
+      modal(existente ? `📎 Revisa lo que agrego a «${esc(destino.titulo)}»` : '📋 Revisa el acta antes de guardarla', `
+        ${existente ? `<p class="esc-estado" style="margin-top:0">Lo que escribas en cada tema <b>se suma</b> a lo que ya tenía (no se borra nada). Los temas nuevos van al final del acta.</p>` : `
         <div class="field"><label>Nombre</label><input id="esc-r-tit" type="text" maxlength="100" value="${esc(b.titulo)}" /></div>
         <div class="esc-comp-fila">
           <div class="field"><label>Tipo</label><select id="esc-r-tipo">${tipos.map((t) => `<option value="${t}" ${b.tipo === t ? 'selected' : ''}>${TIPOS[t]}</option>`).join('')}</select></div>
           <div class="field"><label>Fecha</label><input id="esc-r-fecha" type="date" value="${esc(b.fecha)}" /></div>
         </div>
-        <label class="a11y-op"><input type="checkbox" id="esc-r-conf" ${b.confidencial ? 'checked' : ''} /> <span>Acta confidencial (solo la ven quien la crea y el Obispado)</span></label>
+        <div class="esc-comp-fila">
+          <div class="field"><label>Hora de inicio</label><input id="esc-r-hi" type="time" value="${esc(b.horaInicio || '')}" /></div>
+          <div class="field"><label>Hora de término</label><input id="esc-r-hf" type="time" value="${esc(b.horaFin || '')}" /></div>
+        </div>
+        <label class="a11y-op"><input type="checkbox" id="esc-r-conf" ${b.confidencial ? 'checked' : ''} /> <span>Acta confidencial (solo la ven quien la crea y el Obispado)</span></label>`}
         <div class="esc-sec">Temas (${b.temas.length})</div>
         ${b.temas.map((t, i) => `
           <div class="esc-item" data-tema="${i}">
-            <button class="esc-quitar" data-quitar-tema="${i}" aria-label="Quitar tema">×</button>
-            <input type="text" data-k="tema" value="${esc(t.tema)}" placeholder="Tema" />
-            <textarea data-k="notas" placeholder="De qué se habló">${esc(t.notas)}</textarea>
-            <textarea data-k="acuerdo" placeholder="Acuerdo (opcional)">${esc(t.acuerdo)}</textarea>
+            ${t.deAgenda ? '' : `<button class="esc-quitar" data-quitar-tema="${i}" aria-label="Quitar tema">×</button>`}
+            <input type="text" data-k="tema" value="${esc(t.tema)}" placeholder="Tema" ${t.deAgenda && existente ? 'readonly' : ''} />
+            ${t.deAgenda ? `<div class="esc-estado" style="margin-top:-2px">${existente ? '📌 Tema de la agenda del acta' : '📌 Tema de la plantilla'}${t.previo ? ` · ya tenía: «${esc(t.previo)}»` : ''}</div>` : '<div class="esc-estado" style="margin-top:-2px">🆕 Tema conversado</div>'}
+            ${t.oracion ? '' : campos().map(([k, ph]) => `<label class="esc-lbl">${ph}</label><textarea data-k="${k}" placeholder="${ph}">${esc(t[k] || '')}</textarea>`).join('')}
           </div>`).join('')}
         <button class="btn btn-secondary btn-sm" id="esc-mas-tema">+ Agregar tema</button>
         <div class="esc-sec">Compromisos (${b.compromisos.length})</div>
@@ -385,13 +466,17 @@
         <details style="margin-top:14px"><summary>Ver lo que transcribí</summary><textarea readonly style="width:100%; min-height:160px; margin-top:6px">${esc(transcripcion)}</textarea></details>`,
       '<button class="btn btn-secondary" id="esc-r-desc">Descartar</button><button class="btn btn-primary" id="esc-r-guardar">💾 Guardar acta</button>');
       const leer = () => {
-        b.titulo = document.getElementById('esc-r-tit').value; b.tipo = document.getElementById('esc-r-tipo').value;
-        b.fecha = document.getElementById('esc-r-fecha').value; b.confidencial = document.getElementById('esc-r-conf').checked;
+        if (!existente) {
+          b.titulo = document.getElementById('esc-r-tit').value; b.tipo = document.getElementById('esc-r-tipo').value;
+          b.fecha = document.getElementById('esc-r-fecha').value; b.confidencial = document.getElementById('esc-r-conf').checked;
+          b.horaInicio = document.getElementById('esc-r-hi').value; b.horaFin = document.getElementById('esc-r-hf').value;
+        }
         raiz().querySelectorAll('[data-tema]').forEach((el) => { const t = b.temas[Number(el.dataset.tema)]; el.querySelectorAll('[data-k]').forEach((x) => { t[x.dataset.k] = x.value; }); });
         raiz().querySelectorAll('[data-comp]').forEach((el) => { const c = b.compromisos[Number(el.dataset.comp)]; el.querySelectorAll('[data-k]').forEach((x) => { c[x.dataset.k] = x.value; }); });
       };
       raiz().querySelectorAll('[data-quitar-tema]').forEach((x) => x.addEventListener('click', () => { leer(); b.temas.splice(Number(x.dataset.quitarTema), 1); pintar(); }));
       raiz().querySelectorAll('[data-quitar-comp]').forEach((x) => x.addEventListener('click', () => { leer(); b.compromisos.splice(Number(x.dataset.quitarComp), 1); pintar(); }));
+      document.getElementById('esc-r-tipo')?.addEventListener('change', () => { leer(); pintar(); });
       document.getElementById('esc-mas-tema').addEventListener('click', () => { leer(); b.temas.push({ tema: '', notas: '', acuerdo: '' }); pintar(); });
       document.getElementById('esc-mas-comp').addEventListener('click', () => {
         leer();
@@ -403,10 +488,10 @@
         leer();
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Guardando…';
         try {
-          const r = await api(`/escucha/${st.id}/guardar`, { method: 'POST', body: { acta: { ...b, compromisos: b.compromisos.filter((c) => String(c.descripcion).trim()) } } });
+          const r = await api(`/escucha/${st.id}/guardar`, { method: 'POST', body: { destino, acta: { ...b, compromisos: b.compromisos.filter((c) => String(c.descripcion).trim()) } } });
           st = null;
           cerrarModal();
-          aviso(`Acta guardada: ${r.temas} tema(s) y ${r.compromisos} compromiso(s).`);
+          aviso(existente ? `Listo: agregué lo conversado al acta (${r.compromisos} compromiso(s) nuevo(s)).` : `Acta guardada: ${r.temas} tema(s) y ${r.compromisos} compromiso(s).`);
           if (typeof onGuardadoCb === 'function') onGuardadoCb(r);
         } catch (e) { aviso(e.message, 'error'); btn.disabled = false; btn.textContent = '💾 Guardar acta'; }
       });
@@ -420,4 +505,21 @@
     pantallaInicio();
   };
   window.escuchaEnCurso = () => !!(st && st.grabando);
+  // "Deseret, comienza la reunión": empieza al tiro (en sala). La primera
+  // vez pide confirmar que se avisa a los presentes. Devuelve lo que pasó.
+  window.escucharYa = async function escucharYa({ titulo = '', onGuardado } = {}) {
+    if (onGuardado) onGuardadoCb = onGuardado;
+    if (st) { pantallaGrabando(); return 'ya'; }
+    estilos();
+    let estado = null;
+    try { estado = await api('/escucha/estado'); } catch { estado = null; }
+    if (!estado?.disponible || !yaAvisado()) { await pantallaInicio(titulo); return 'confirmar'; }
+    try { await empezar('sala', titulo); cerrarModal(); return 'empezo'; } catch (e) { aviso(e.message, 'error'); await pantallaInicio(titulo); return 'error'; }
+  };
+  // "Deseret, termina la reunión".
+  window.terminarEscucha = function terminarEscucha() {
+    if (!st || !st.grabando) return false;
+    terminar();
+    return true;
+  };
 }());

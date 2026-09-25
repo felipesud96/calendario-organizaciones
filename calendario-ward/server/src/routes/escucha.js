@@ -24,10 +24,25 @@
 import { sendJson } from '../router.js';
 import { requireRole } from '../guard.js';
 import { load, withDb, nextId } from '../db.js';
-import { assignableUsersFor } from './meetings.js';
+import { assignableUsersFor, canEditMeeting, EMPTY_AGENDA_ITEM_NOTES } from './meetings.js';
 import { isObispadoLeader } from './stake.js';
-import { clienteGemini, GEMINI_MODEL, hoyEnChile, vaciarCache } from '../chat.js';
-import { ordenarActa, guardarActaCore } from '../deseretPlus.js';
+import { clienteGemini, GEMINI_MODEL, hoyEnChile, vaciarCache, toISO } from '../chat.js';
+import { ordenarActa, guardarActaCore, camposDeTema } from '../deseretPlus.js';
+
+const CAMPOS = ['notas', 'acuerdo', 'necesidad', 'analisis', 'seguimiento', 'quienNecesita', 'queSeHara', 'quienLoHara'];
+const ORACION = /^(oraci[oó]n|bienvenida y oraci[oó]n)\b/i;
+// Deja el contenido de cada tema en los campos del tipo de acta (así la
+// revisión muestra todo lo que se va a guardar).
+function alPatron(t, tipo) {
+  const v = (k) => String(t[k] || '').trim();
+  if (tipo === 'consejo_barrio') return { ...t, necesidad: v('necesidad') || v('quienNecesita'), analisis: v('analisis') || v('notas'), acuerdo: v('acuerdo') || v('queSeHara'), seguimiento: v('seguimiento') || v('quienLoHara') };
+  if (tipo === 'coordinacion_ministracion') return { ...t, quienNecesita: v('quienNecesita') || v('necesidad'), queSeHara: v('queSeHara') || v('acuerdo') || v('notas') || v('analisis'), quienLoHara: v('quienLoHara') || v('seguimiento') };
+  return { ...t, notas: v('notas') || [v('necesidad'), v('analisis'), v('quienNecesita'), v('queSeHara')].filter(Boolean).join('\n'), acuerdo: v('acuerdo') };
+}
+const tiposPermitidos = (user, data) => (isObispadoLeader(user, data) ? ['general', 'consejo_barrio', 'coordinacion_ministracion'] : ['general']);
+const horaChile = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: process.env.TZ_APP || 'America/Santiago', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
+// Lo que un tema de un acta existente ya tenía (para mostrarlo al revisar).
+const contenido = (a) => ({ previo: [a.notes, a.necesidad, a.analisis, a.acuerdo, a.seguimiento, a.quienNecesita, a.queSeHara, a.quienLoHara].filter(Boolean).join(' · ').slice(0, 200) });
 
 const ROLES = ['admin', 'leader', 'ward_clerk'];
 const MAX_TROZO = 20 * 1024 * 1024;
@@ -148,19 +163,65 @@ export function registerEscuchaRoutes(router) {
     sendJson(res, 200, { ok: true, n, texto });
   }));
 
-  router.post('/api/escucha/:id/terminar', requireRole(ROLES, async (req, res, params) => {
+  // ¿Dónde puede quedar el acta? Tipos permitidos y actas activas que esta
+  // persona puede editar (para "agregar a una acta que ya tengo").
+  router.get('/api/escucha/destinos', requireRole(ROLES, async (req, res) => {
+    const data = load();
+    const actas = (data.meetings || [])
+      .filter((m) => m.status === 'active' && !m.sueltos && canEditMeeting(req.user, m))
+      .sort((a, b) => (b.date + (b.startTime || '')).localeCompare(a.date + (a.startTime || '')))
+      .slice(0, 12)
+      .map((m) => ({ id: m.id, titulo: m.title, fecha: m.date, tipo: m.type || 'general', temas: (m.agendaItems || []).length }));
+    sendJson(res, 200, { tipos: tiposPermitidos(req.user, data), actas, hoy: toISO(hoyEnChile()) });
+  }));
+
+  // destino: { tipo: 'nueva', tipoActa, temasBase: [..] } | { tipo: 'existente', meetingId }
+  router.post('/api/escucha/:id/terminar', requireRole(ROLES, async (req, res, params, body) => {
     const data = load();
     const s = sesionDe(data, params.id, req.user);
     if (!s) return sendJson(res, 404, { error: 'Sesión no encontrada' });
     const texto = [...s.trozos].sort((a, b) => a.n - b.n).map((t) => t.texto).filter(Boolean).join('\n');
     if (texto.replace(/\s/g, '').length < 40) return sendJson(res, 400, { error: 'No alcancé a escuchar nada claro. Revisa que el micrófono esté cerca y sin silenciar, e inténtalo de nuevo.' });
-    const acta = await ordenarActa(`${s.titulo ? `Reunión: ${s.titulo}\n` : ''}${texto}`, req.user, data, hoyEnChile(), { transcripcion: true });
-    if (s.titulo && /^Reunión del /.test(acta.titulo)) acta.titulo = s.titulo;
+    const d = body?.destino || {};
+    let tipoActa = 'general'; let base = []; let meeting = null;
+    if (d.tipo === 'existente') {
+      meeting = (data.meetings || []).find((m) => m.id === Number(d.meetingId));
+      if (!meeting || meeting.status !== 'active' || !canEditMeeting(req.user, meeting)) return sendJson(res, 403, { error: 'No puedes editar esa acta (solo quien la creó, o el Administrador, y si está activa).' });
+      tipoActa = meeting.type || 'general';
+      base = (meeting.agendaItems || []).map((a, i) => ({ ref: i + 1, tema: a.topic, agendaId: a.id, existente: true, ...contenido(a) }));
+    } else {
+      tipoActa = tiposPermitidos(req.user, data).includes(d.tipoActa) ? d.tipoActa : 'general';
+      base = (Array.isArray(d.temasBase) ? d.temasBase : []).map((t) => String(t || '').trim()).filter(Boolean).slice(0, 30)
+        .map((t, i) => ({ ref: i + 1, tema: t.slice(0, 150) }));
+    }
+    const inicio = new Date(s.creado);
+    const fechaInicio = new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TZ_APP || 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(inicio);
+    const acta = await ordenarActa(`${s.titulo ? `Reunión: ${s.titulo}\n` : ''}${texto}`, req.user, data, hoyEnChile(), {
+      transcripcion: true, tipoFijo: tipoActa, agendaBase: base.filter((b) => !ORACION.test(b.tema)).map((b) => ({ ref: b.ref, tema: b.tema })),
+    });
+    // Temas finales: los de la agenda (en su orden, con lo conversado en cada
+    // uno) y después los temas nuevos que no calzaron.
+    const vacio = { notas: '', acuerdo: '', necesidad: '', analisis: '', seguimiento: '', quienNecesita: '', queSeHara: '', quienLoHara: '' };
+    const temas = [
+      ...base.map((b) => {
+        const hits = acta.temas.filter((t) => t.ref === b.ref);
+        const junto = { ...vacio };
+        for (const h of hits) for (const k of Object.keys(vacio)) if (h[k]) junto[k] = junto[k] ? `${junto[k]}\n${h[k]}` : h[k];
+        return { tema: b.tema, agendaId: b.agendaId || null, deAgenda: true, oracion: ORACION.test(b.tema), previo: b.existente ? b.previo : '', ...junto };
+      }),
+      ...acta.temas.filter((t) => !t.ref).map((t) => ({ ...vacio, ...t, agendaId: null, deAgenda: false })),
+    ];
     const asignables = assignableUsersFor(req.user, data).map((u) => ({ id: u.id, name: u.name }));
     if (!asignables.some((u) => u.id === req.user.id)) asignables.unshift({ id: req.user.id, name: req.user.name });
     sendJson(res, 200, {
-      acta, asignables, transcripcion: texto,
-      tipos: isObispadoLeader(req.user, data) ? ['general', 'consejo_barrio', 'coordinacion_ministracion'] : ['general'],
+      acta: {
+        ...acta, tipo: tipoActa, temas: temas.map((t) => alPatron(t, tipoActa)),
+        titulo: meeting ? meeting.title : (s.titulo || acta.titulo),
+        fecha: meeting ? meeting.date : fechaInicio,
+        horaInicio: horaChile(inicio), horaFin: horaChile(new Date()),
+      },
+      destino: meeting ? { tipo: 'existente', meetingId: meeting.id, titulo: meeting.title } : { tipo: 'nueva' },
+      asignables, transcripcion: texto, tipos: tiposPermitidos(req.user, data),
     });
   }));
 
@@ -170,25 +231,65 @@ export function registerEscuchaRoutes(router) {
     if (!s) return sendJson(res, 404, { error: 'Sesión no encontrada' });
     const a = body?.acta || {};
     const fechaOk = (f) => (typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : null);
+    const horaOk = (h) => (typeof h === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(h) ? h : null);
     const asignables = new Set([req.user.id, ...assignableUsersFor(req.user, data).map((u) => u.id)]);
-    const obispado = isObispadoLeader(req.user, data);
-    const acta = {
-      titulo: String(a.titulo || '').trim().slice(0, 100) || 'Reunión',
-      tipo: obispado && ['consejo_barrio', 'coordinacion_ministracion'].includes(a.tipo) ? a.tipo : 'general',
-      fecha: fechaOk(a.fecha) || new Date().toISOString().slice(0, 10),
-      temas: (Array.isArray(a.temas) ? a.temas : []).filter((t) => String(t?.tema || '').trim()).slice(0, 30).map((t) => ({
-        tema: String(t.tema).trim().slice(0, 150), notas: String(t.notas || '').trim().slice(0, 1500), acuerdo: String(t.acuerdo || '').trim().slice(0, 800),
-      })),
-      compromisos: (Array.isArray(a.compromisos) ? a.compromisos : []).filter((c) => String(c?.descripcion || '').trim() && fechaOk(c.fecha)).slice(0, 40).map((c) => ({
-        userId: asignables.has(Number(c.userId)) ? Number(c.userId) : req.user.id,
-        nombre: 'ok', dicho: '', descripcion: String(c.descripcion).trim().slice(0, 300), fecha: c.fecha,
-      })),
-    };
-    const m = await guardarActaCore(acta, req.user, { escuchadoConDeseret: true, confidential: !!a.confidencial });
+    const temas = (Array.isArray(a.temas) ? a.temas : []).filter((t) => String(t?.tema || '').trim()).slice(0, 40).map((t) => ({
+      tema: String(t.tema).trim().slice(0, 150), agendaId: t.agendaId ? Number(t.agendaId) : null,
+      ...Object.fromEntries(CAMPOS.map((k) => [k, String(t[k] || '').trim().slice(0, 1500)])),
+    }));
+    const compromisos = (Array.isArray(a.compromisos) ? a.compromisos : []).filter((c) => String(c?.descripcion || '').trim() && fechaOk(c.fecha)).slice(0, 40).map((c) => ({
+      userId: asignables.has(Number(c.userId)) ? Number(c.userId) : req.user.id,
+      nombre: 'ok', dicho: '', descripcion: String(c.descripcion).trim().slice(0, 300), fecha: c.fecha,
+    }));
+    const destino = body?.destino || {};
+    let resultado;
+    if (destino.tipo === 'existente') {
+      // Agregar a una acta que ya existe: lo conversado se suma a cada tema
+      // de su agenda (sin borrar lo que ya tenía) y lo demás va al final.
+      resultado = await withDb((db) => {
+        const m = db.meetings.find((x) => x.id === Number(destino.meetingId));
+        if (!m || m.status !== 'active' || !canEditMeeting(req.user, m)) return { error: 'No puedes editar esa acta.' };
+        let nuevosTemas = 0;
+        for (const t of temas) {
+          const campos = camposDeTema(t, m.type);
+          const hayAlgo = Object.values(campos).some(Boolean);
+          const item = t.agendaId ? (m.agendaItems || []).find((x) => x.id === t.agendaId) : null;
+          if (item) {
+            if (!hayAlgo) continue;
+            for (const [k, v] of Object.entries(campos)) if (v) item[k] = item[k] ? `${item[k]}\n${v}` : v;
+          } else if (hayAlgo || !t.agendaId) {
+            m.agendaItems = m.agendaItems || [];
+            m.agendaItems.push({ id: nextId(db, 'agendaItems'), topic: t.tema, presenter: '', ...EMPTY_AGENDA_ITEM_NOTES, ...campos });
+            nuevosTemas += 1;
+          }
+        }
+        m.commitments = m.commitments || [];
+        for (const c of compromisos) {
+          m.commitments.push({
+            id: nextId(db, 'commitments'), description: c.descripcion, dueDate: c.fecha, assignedToUserId: c.userId, groupId: null,
+            confidential: false, priority: 'media', status: 'pending', completedAt: null, completionComment: '', whatsappDueTodaySent: false, reassignHistory: [],
+          });
+        }
+        m.escuchadoConDeseret = true;
+        m.lastEditedBy = req.user.id; m.lastEditedAt = new Date().toISOString();
+        return { meetingId: m.id, temas: m.agendaItems.length, nuevosTemas, compromisos: compromisos.length };
+      });
+      if (resultado.error) return sendJson(res, 403, { error: resultado.error });
+    } else {
+      const tipo = tiposPermitidos(req.user, data).includes(a.tipo) ? a.tipo : 'general';
+      const m = await guardarActaCore({
+        titulo: String(a.titulo || '').trim().slice(0, 100) || 'Reunión', tipo, fecha: fechaOk(a.fecha) || toISO(hoyEnChile()),
+        temas, compromisos,
+      }, req.user, {
+        escuchadoConDeseret: true, confidential: !!a.confidencial,
+        ...(horaOk(a.horaInicio) ? { startTime: a.horaInicio } : {}), ...(horaOk(a.horaFin) ? { endTime: a.horaFin } : {}),
+      });
+      resultado = { meetingId: m.id, temas: m.agendaItems.length, compromisos: m.commitments.length };
+    }
     // Listo: se borra la transcripción.
     await withDb((db) => { db.escuchas = (db.escuchas || []).filter((x) => x.id !== s.id); });
     vaciarCache();
-    sendJson(res, 201, { ok: true, meetingId: m.id, temas: m.agendaItems.length, compromisos: m.commitments.length });
+    sendJson(res, 201, { ok: true, ...resultado });
   }));
 
   router.delete('/api/escucha/:id', requireRole(ROLES, async (req, res, params) => {

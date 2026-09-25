@@ -8474,6 +8474,27 @@ function presidencyAgendaTopics(orgName) {
   return [PRESIDENCY_FIXED_OPENING, PRESIDENCY_FIXED_THOUGHT, ...tpl.temas, PRESIDENCY_FIXED_CLOSING];
 }
 
+// Plantillas que ofrece "Deseret escucha la reunión" al armar un acta nueva
+// (ver escucha.js): la oficial del tipo de acta (Consejo de Barrio /
+// Coordinación de Ministración) o la de presidencia de la organización, más
+// "Mis plantillas". Así el acta queda con los mismos temas que la minuta de siempre.
+window.plantillasEscucha = async function plantillasEscucha(tipo) {
+  const lista = [];
+  if (AGENDA_TEMPLATES[tipo]) {
+    lista.push({ clave: 'oficial', oficial: true, nombre: `Plantilla de ${tipo === 'consejo_barrio' ? 'Consejo de Barrio' : 'Coordinación de Ministración'}`, temas: AGENDA_TEMPLATES[tipo] });
+  } else if (tipo === 'general') {
+    const org = orgById(state.user?.organizationId)?.name || null;
+    const temas = presidencyAgendaTopics(org);
+    if (temas) lista.push({ clave: 'oficial', oficial: true, nombre: `Reunión de presidencia — ${org}`, temas });
+  }
+  try {
+    const mias = await api('/meeting-templates');
+    for (const t of mias || []) lista.push({ clave: `mia-${t.id}`, nombre: `📑 ${t.nombre}`, temas: t.temas || [] });
+  } catch (e) { /* sin plantillas propias */ }
+  return lista;
+};
+window.renderMeetingsView = (...a) => renderMeetingsView(...a);
+
 // Fecha + horario de una reunión, en un solo texto — usada tanto en el
 // detalle del acta como en ambas formas de compartir la minuta (texto e
 // imagen). Las actas creadas antes de que se pidiera la hora de inicio no
