@@ -68,10 +68,35 @@ const ICONOS = {
   arriba: svg('<path d="M7 10v12"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18.4 22H7V10l4.3-8a3 3 0 0 1 3.7 3.9z"/>', ' width="14" height="14"'),
   oido: svg('<path d="M6 8.5a6 6 0 0 1 12 0c0 3.5-3 4.5-3.5 7a3.5 3.5 0 0 1-6.5 1"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-1.5 2-1.5 3"/>'),
   auto: svg('<path d="M5 17h14v-5l-2-5H7l-2 5z"/><circle cx="8" cy="17" r="2"/><circle cx="16" cy="17" r="2"/><path d="M5 12h14"/>'),
+  mas: svg('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
+  enviarFlecha: svg('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>'),
+  calendario: svg('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>'),
+  reloj: svg('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
+  persona: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  grupo: svg('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>'),
+  check: svg('<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'),
+  campana: svg('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>'),
+  documento: svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8"/>'),
+  etiqueta: svg('<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7" cy="7" r="1.5"/>'),
+  edificio: svg('<path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/>'),
+  comentario: svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+  alerta: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  lugar: svg('<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>'),
+  grafico: svg('<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>'),
+  sumar: svg('<path d="M12 5v14M5 12h14"/>'),
   abajo: svg('<path d="M17 14V2"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 5.6 2H17v12l-4.3 8a3 3 0 0 1-3.7-3.9z"/>', ' width="14" height="14"'),
 };
 // Sugerencias de la pantalla de bienvenida.
-const SUGERENCIAS = ['¿Qué tengo esta semana?', 'Agendar una entrevista', '¿Cómo vamos en ministración?'];
+const SUGERENCIAS = ['¿A quién le falta llamamiento?', 'Casos de bienestar vigentes', '¿Qué compromisos están atrasados?'];
+
+// Las respuestas se muestran sin emojis decorativos (el servidor todavía los
+// usa en algunos textos): se quitan al dibujar, para un estilo sobrio.
+const sinEmojis = (t) => String(t ?? '')
+  .replace(/(\p{Extended_Pictographic}|\p{Regional_Indicator})(\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*/gu, '')
+  .replace(/^[ \t]+/gm, '')
+  .replace(/[ \t]{2,}/g, ' ')
+  .trim();
+const horaAhora = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 const ESTILOS = `
   #organiza-chat-widget button, .chat-btn { outline: none; -webkit-tap-highlight-color: transparent; }
@@ -123,148 +148,178 @@ const ESTILOS = `
     body:has(.mobile-fab) #deseret-intro { bottom: calc(212px + env(safe-area-inset-bottom)); }
     #deseret-intro::after { right: 36px; }
   }
+  /* ================= Ventana de Deseret (diseño sobrio) ================= */
+  #chat-window {
+    --d-bg: var(--white, #fff); --d-ink: var(--ink, #0f172a); --d-muted: #64748b; --d-faint: #94a3b8;
+    --d-line: #e6e9ef; --d-soft: #f5f7fa; --d-bubble: #e8f1fa; --d-bubble-ink: #0c2a4a;
+    --d-brand: #0b5fa5; --d-brand-soft: #eef6fc;
+    position: fixed; right: 16px; bottom: 16px; z-index: 1000;
+    width: 400px; max-width: calc(100vw - 32px);
+    height: 600px; max-height: calc(100vh - 32px);
+    flex-direction: column;
+    background: var(--d-bg); color: var(--d-ink);
+    border: 1px solid var(--d-line); border-radius: 16px;
+    box-shadow: 0 18px 48px rgba(15,23,42,.16);
+    overflow: hidden; font-size: 14.5px;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #2a3f52; --d-soft: #1b2a38; --d-bubble: #1e3a4f; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
+  }
+  :root[data-theme="dark"] #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #2a3f52; --d-soft: #1b2a38; --d-bubble: #1e3a4f; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
+  /* En el computador: panel lateral de alto completo, integrado a la app */
+  @media (min-width: 900px) {
+    #chat-window { top: 0; right: 0; bottom: 0; height: 100vh; max-height: none; width: 410px; border-radius: 0; border: 0; border-left: 1px solid var(--d-line); box-shadow: -12px 0 32px rgba(15,23,42,.10); animation: d-entrar .18s ease-out; }
+  }
+  @keyframes d-entrar { from { transform: translateX(16px); opacity: .6; } to { transform: none; opacity: 1; } }
+
+  #chat-header { position: relative; display: flex; align-items: center; gap: 10px; height: 60px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--d-line); background: var(--d-bg); flex: none; }
+  .deseret-id { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .deseret-id img { width: 30px; height: 30px; flex: none; }
+  .deseret-id .nombre { font-weight: 650; font-size: 15px; line-height: 1.15; letter-spacing: -.01em; }
+  .deseret-id .estado { font-size: 12px; color: var(--d-muted); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+  .deseret-id .estado::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+  .deseret-botones { display: flex; gap: 2px; flex: none; }
+  #chat-header .deseret-botones > button { background: transparent; border: 0; color: var(--d-muted); cursor: pointer; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; }
+  #chat-header .deseret-botones > button:hover, #chat-header .deseret-botones > button[aria-expanded="true"] { background: var(--d-soft); color: var(--d-ink); }
+
+  /* Menú "⋯" con las opciones */
+  #chat-menu { position: absolute; top: 54px; right: 8px; width: 290px; background: var(--d-bg); border: 1px solid var(--d-line); border-radius: 14px; box-shadow: 0 14px 36px rgba(15,23,42,.18); padding: 6px; z-index: 5; }
+  #chat-menu[hidden] { display: none; }
+  .dm-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--d-ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+  .dm-item:hover { background: var(--d-soft); }
+  .dm-item svg { width: 17px; height: 17px; color: var(--d-muted); flex: none; }
+  .dm-item span { flex: 1; }
+  .dm-sw { width: 32px; height: 18px; border-radius: 99px; background: #cbd5e1; position: relative; flex: none; transition: background .15s; }
+  .dm-sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .dm-item[aria-pressed="true"] .dm-sw { background: var(--d-brand); }
+  .dm-item[aria-pressed="true"] .dm-sw::after { left: 16px; }
+  .dm-sep { height: 1px; background: var(--d-line); margin: 4px 6px; }
+  .deseret-voz-barra { display: flex; margin: 0 10px 6px 37px; border: 1px solid var(--d-line); border-radius: 9px; overflow: hidden; }
+  .deseret-voz-barra button { flex: 1; border: 0; background: transparent; color: var(--d-muted); font: inherit; font-size: 12.5px; padding: 6px 0; cursor: pointer; white-space: nowrap; }
+  .deseret-voz-barra button.activa { background: var(--d-bubble); color: var(--d-brand); font-weight: 600; }
+  #chat-window:not(.voz-on):not(.conduccion) .deseret-voz-barra { opacity: .55; }
+
   .deseret-hey-aviso { font-size: 12px; background: #ecfdf5; color: #065f46; border-bottom: 1px solid #a7f3d0; padding: 6px 12px; display: none; }
-  #chat-header button.hey-on { background: rgba(74,222,128,.3); opacity: 1; }
-  #chat-header button.auto-on { background: rgba(250,204,21,.35); opacity: 1; }
+  .deseret-auto-aviso { display: none; font-size: 13px; background: #fffbeb; color: #78350f; border-bottom: 1px solid #fde68a; padding: 7px 16px; }
+  #chat-window.conduccion .deseret-auto-aviso { display: block; }
   /* Modo conducción: letra grande, sin botones secundarios, micrófono enorme */
   #chat-window.conduccion #chat-messages .msg { font-size: 18px; line-height: 1.5; }
   #chat-window.conduccion .msg-actions, #chat-window.conduccion .deseret-items { display: none; }
   #chat-window.conduccion .deseret-chip { font-size: 16px; padding: 9px 14px; }
-  #chat-window.conduccion #chat-mic-btn { width: 64px; height: 64px; }
-  #chat-window.conduccion #chat-mic-btn svg { width: 30px; height: 30px; }
-  .deseret-auto-aviso { display: none; font-size: 13px; background: #fef9c3; color: #713f12; border-bottom: 1px solid #fde68a; padding: 6px 12px; }
-  #chat-window.conduccion .deseret-auto-aviso { display: block; }
-  /* Elegir voz femenina o masculina (visible cuando la voz está activada) */
-  .deseret-voz-barra { display: none; align-items: center; gap: 8px; font-size: 13px; padding: 6px 12px; border-bottom: 1px solid var(--border, #e2e8f0); background: var(--bg-soft, #f8fafc); }
-  #chat-window.voz-on .deseret-voz-barra, #chat-window.conduccion .deseret-voz-barra { display: flex; }
-  .deseret-voz-barra .lbl { color: var(--ink-soft, #64748b); }
-  .deseret-voz-op { display: inline-flex; border: 1px solid var(--celeste, #0ea5e9); border-radius: 999px; overflow: hidden; }
-  .deseret-voz-op button { border: 0; background: transparent; color: var(--celeste-dark, #0369a1); font-size: 13px; padding: 4px 12px; cursor: pointer; }
-  .deseret-voz-op button.activa { background: #0284c7; color: #fff; }
+  #chat-window.conduccion #chat-mic-btn { width: 52px; height: 52px; }
+  #chat-window.conduccion #chat-mic-btn svg { width: 26px; height: 26px; }
 
-  /* Ventana */
-  #chat-window {
-    position: fixed; right: 16px; bottom: 16px; z-index: 1000;
-    width: 380px; max-width: calc(100vw - 32px);
-    height: 560px; max-height: calc(100vh - 32px);
-    flex-direction: column;
-    background: var(--white, #fff); color: var(--ink, #0f172a);
-    border: 1px solid var(--border, #dbeafe); border-radius: var(--radius, 12px);
-    box-shadow: var(--shadow-lg, 0 10px 30px rgba(3,105,161,.18));
-    overflow: hidden;
-  }
-  #chat-header {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    padding: 10px 10px 10px 14px;
-    background: linear-gradient(135deg, #075985, #0284c7); color: #fff;
-  }
-  .deseret-id { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .deseret-id img { width: 38px; height: 38px; flex: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)); }
-  .deseret-id .nombre { font-weight: 700; font-size: 15px; line-height: 1.2; }
-  .deseret-id .estado { font-size: 12px; opacity: .9; display: flex; align-items: center; gap: 5px; }
-  .deseret-id .estado::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
-  .deseret-botones { display: flex; gap: 2px; flex: none; }
-  #chat-header button { background: transparent; border: 0; color: #fff; cursor: pointer; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
-  #chat-header button:hover { background: rgba(255,255,255,.18); }
-  #chat-header button[aria-pressed="false"] { opacity: .7; }
-  #chat-messages {
-    flex: 1; overflow-y: auto; padding: 12px;
-    display: flex; flex-direction: column; gap: 8px;
-    background: var(--celeste-lighter, #f0f9ff);
-  }
-  #chat-messages .msg { max-width: 88%; padding: 8px 11px; border-radius: 12px; font-size: 14px; line-height: 1.45; word-wrap: break-word; }
-  #chat-messages .msg.bot {
-    align-self: flex-start; position: relative; margin-left: 34px; max-width: calc(88% - 34px);
-    background: var(--white, #fff); border: 1px solid var(--border, #dbeafe); border-top-left-radius: 4px;
-    box-shadow: 0 1px 2px rgba(15,23,42,.05);
-  }
-  #chat-messages .msg.bot::before {
-    content: ''; position: absolute; left: -34px; top: 0; width: 26px; height: 26px;
-    background: url('/deseret.svg') center / contain no-repeat;
-  }
+  /* Mensajes */
+  #chat-messages { flex: 1; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 18px; background: var(--d-bg); }
+  #chat-messages > * { flex-shrink: 0; }
+  #chat-messages .msg { font-size: 14.5px; line-height: 1.55; word-wrap: break-word; }
+  #chat-messages .msg.bot { align-self: stretch; position: relative; padding-left: 34px; min-height: 24px; }
+  #chat-messages .msg.bot::before { content: ''; position: absolute; left: 0; top: 0; width: 24px; height: 24px; background: url('/deseret.svg') center / contain no-repeat; }
+  #chat-messages .msg.bot + .msg.bot { margin-top: -8px; }
   #chat-messages .msg.bot + .msg.bot::before { display: none; }
-  #chat-messages .msg.user { border-top-right-radius: 4px; }
+  #chat-messages .msg.bot .cuerpo strong { font-weight: 650; }
+  #chat-messages .msg.user { align-self: flex-end; max-width: 82%; background: var(--d-bubble); color: var(--d-bubble-ink); padding: 10px 14px; border-radius: 18px 18px 4px 18px; }
+  #chat-messages .msg.error .cuerpo { color: var(--danger, #ef4444); }
+  #chat-messages .msg.con-tabla { max-width: 100%; }
+
+  /* Hora + acciones (copiar, 👍/👎): discretas; los botones aparecen al pasar el mouse o al tocar el mensaje */
+  .msg-actions { display: flex; align-items: center; gap: 4px; margin-top: 6px; min-height: 22px; }
+  .msg-actions .hora { font-size: 11.5px; color: var(--d-faint); margin-right: 6px; }
+  .btn-action { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 0; border-radius: 7px; padding: 3px 6px; cursor: pointer; color: var(--d-faint); font-size: 11.5px; opacity: 0; transition: opacity .15s; }
+  .msg.bot:hover .btn-action, .msg.bot:focus-within .btn-action, .msg.bot.ver .btn-action, .btn-action.activo { opacity: 1; }
+  @media (hover: none) { .msg.bot:last-child .btn-action { opacity: 1; } }
+  .btn-action:hover:not(:disabled) { background: var(--d-soft); color: var(--d-ink); }
+  .btn-action.activo { color: var(--d-brand); }
+  .btn-action:disabled:not(.activo) { opacity: .35; cursor: default; }
 
   /* Bienvenida */
-  .deseret-bienvenida { text-align: center; padding: 14px 8px 4px; color: var(--ink-soft, #475569); }
-  .deseret-bienvenida img { width: 72px; height: 72px; filter: drop-shadow(0 4px 10px rgba(240,165,0,.35)); }
-  .deseret-bienvenida .t { font-weight: 700; font-size: 17px; color: var(--ink, #0f172a); margin-top: 6px; }
-  .deseret-bienvenida .s { font-size: 13px; margin-top: 2px; }
-  .deseret-bienvenida .deseret-chips { justify-content: center; margin-top: 12px; }
-  #chat-messages .msg.user { align-self: flex-end; background: #0284c7; color: #fff; }
-  #chat-messages .msg.error { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
+  .deseret-bienvenida { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 8px 2px; }
+  .deseret-bienvenida img { width: 52px; height: 52px; }
+  .deseret-bienvenida .t { font-weight: 650; font-size: 21px; letter-spacing: -.02em; margin-top: 14px; color: var(--d-ink); }
+  .deseret-bienvenida .s { font-size: 14.5px; color: var(--d-muted); margin: 2px 0 18px; }
+  .d-acciones { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .d-accion { text-align: left; border: 1px solid var(--d-line); border-radius: 14px; padding: 12px; background: var(--d-bg); color: var(--d-ink); cursor: pointer; font: inherit; transition: border-color .15s, background .15s; }
+  .d-accion:hover { border-color: #bcd3e8; background: var(--d-soft); }
+  .d-accion .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--d-brand-soft); color: var(--d-brand); margin-bottom: 10px; }
+  .d-accion .ic svg { width: 16px; height: 16px; }
+  .d-accion b { display: block; font-size: 14px; font-weight: 600; }
+  .d-accion small { display: block; font-size: 12.5px; color: var(--d-muted); line-height: 1.35; margin-top: 2px; }
+  .deseret-bienvenida .deseret-chips { margin-top: 16px; }
 
-  /* Punto 14: indicador de "escribiendo" */
-  .deseret-typing { display: inline-flex; gap: 4px; align-items: center; padding: 4px 2px; }
-  .deseret-typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--celeste, #0ea5e9); animation: deseret-bounce 1.2s infinite ease-in-out; }
+  /* Indicador "escribiendo" */
+  .deseret-typing { display: inline-flex; gap: 4px; align-items: center; padding: 6px 0; }
+  .deseret-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--d-faint); animation: deseret-bounce 1.2s infinite ease-in-out; }
   .deseret-typing span:nth-child(2) { animation-delay: .15s; }
   .deseret-typing span:nth-child(3) { animation-delay: .3s; }
-  @keyframes deseret-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .4; } 40% { transform: translateY(-5px); opacity: 1; } }
+  @keyframes deseret-bounce { 0%, 80%, 100% { opacity: .35; } 40% { opacity: 1; } }
 
   /* Cuadros comparativos */
-  #chat-messages .msg.con-tabla { max-width: 100%; width: 100%; box-sizing: border-box; }
-  .deseret-tabla-wrap { overflow-x: auto; margin-top: 8px; border: 1px solid var(--border, #e2e8f0); border-radius: 10px; -webkit-overflow-scrolling: touch; }
+  .deseret-tabla-wrap { overflow-x: auto; margin-top: 10px; border: 1px solid var(--d-line); border-radius: 12px; -webkit-overflow-scrolling: touch; }
   .deseret-tabla { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
-  .deseret-tabla th, .deseret-tabla td { padding: 6px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border, #e2e8f0); }
-  .deseret-tabla thead th { background: #075985; color: #fff; font-weight: 600; white-space: nowrap; position: sticky; top: 0; }
+  .deseret-tabla th, .deseret-tabla td { padding: 7px 9px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--d-line); }
+  .deseret-tabla thead th { background: var(--d-soft); color: var(--d-muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; position: sticky; top: 0; }
   .deseret-tabla tbody tr:last-child td, .deseret-tabla tbody tr:last-child th { border-bottom: 0; }
-  .deseret-tabla tbody th { font-weight: 600; min-width: 96px; color: var(--text-muted, #475569); }
+  .deseret-tabla tbody th { font-weight: 600; min-width: 96px; color: var(--d-muted); }
   .deseret-tabla.lista td:first-child { min-width: 120px; font-weight: 600; }
   .deseret-tabla.lista td:last-child { min-width: 190px; }
-  .deseret-tabla td.distinto { background: rgba(250, 204, 21, .18); }
+  .deseret-tabla td.distinto { background: rgba(250, 204, 21, .16); }
   .deseret-tabla td { min-width: 90px; }
 
-  /* Punto 7: botones de respuesta rápida */
-  .deseret-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .deseret-chip {
-    border: 1px solid var(--celeste, #0ea5e9); background: var(--white, #fff); color: var(--celeste-dark, #0369a1);
-    border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; text-align: left;
-  }
-  .deseret-chip:hover { background: var(--celeste-light, #e0f2fe); }
-  .deseret-chip.primario { background: #0284c7; border-color: #0284c7; color: #fff; font-weight: 600; }
+  /* Botones de respuesta rápida */
+  .deseret-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .deseret-chip { border: 1px solid var(--d-line); background: var(--d-bg); color: var(--d-ink); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+  .deseret-chip:hover { background: var(--d-soft); border-color: #bcd3e8; }
+  .deseret-chip.primario { background: var(--d-brand); border-color: var(--d-brand); color: #fff; font-weight: 600; border-radius: 10px; padding: 8px 16px; }
+  .deseret-chip.secundario { border-radius: 10px; padding: 8px 16px; font-weight: 600; color: var(--d-ink); }
 
-  /* Punto 6: tarjeta de confirmación */
-  .deseret-confirm { margin-top: 8px; border: 1px solid var(--border, #dbeafe); border-left: 4px solid var(--c); border-radius: 10px; padding: 8px 10px; background: var(--celeste-lighter, #f0f9ff); }
-  .deseret-confirm .t { font-weight: 700; margin-bottom: 4px; }
-  .deseret-confirm .f { display: flex; gap: 8px; font-size: 13px; padding: 1px 0; }
+  /* Tarjeta de confirmación */
+  .deseret-confirm { margin-top: 10px; border: 1px solid var(--d-line); border-radius: 14px; padding: 14px; background: var(--d-bg); }
+  .deseret-confirm .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--d-muted); font-weight: 600; }
+  .deseret-confirm .h { font-size: 15.5px; font-weight: 650; margin: 4px 0 2px; line-height: 1.3; }
+  .deseret-confirm .org { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--d-muted); margin-bottom: 8px; }
+  .d-punto { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; background: var(--c, #94a3b8); }
+  .deseret-confirm .f { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; padding: 4px 0; }
+  .deseret-confirm .f svg { width: 16px; height: 16px; color: var(--d-muted); flex: none; margin-top: 2px; }
+  .deseret-confirm .f .n { width: 16px; flex: none; color: var(--d-muted); font-size: 13px; }
+  .deseret-confirm .antes { font-size: 12.5px; color: var(--d-faint); margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--d-line); }
+  .deseret-confirm .antes s { color: var(--d-faint); }
 
-  /* Punto 16: tarjetas de actividades / entrevistas */
-  .deseret-items { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-  .deseret-item { display: flex; gap: 10px; align-items: stretch; border: 1px solid var(--border, #dbeafe); border-radius: 10px; background: var(--white, #fff); overflow: hidden; }
-  .deseret-item .barra { width: 5px; background: var(--c); flex: none; }
-  .deseret-item .cuando { flex: none; width: 62px; padding: 6px 0; text-align: center; font-size: 11px; color: var(--ink-soft, #475569); line-height: 1.3; }
-  .deseret-item .cuando b { display: block; font-size: 13px; color: var(--ink, #0f172a); }
-  .deseret-item .que { padding: 6px 8px 6px 0; min-width: 0; }
-  .deseret-item .que .titulo { font-weight: 600; font-size: 13px; }
-  .deseret-item .que .org { font-size: 11px; color: var(--c); font-weight: 600; }
+  /* Lista de la agenda (actividades, entrevistas, compromisos…) */
+  .deseret-items { margin-top: 10px; border: 1px solid var(--d-line); border-radius: 14px; overflow: hidden; }
+  .deseret-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--d-line); background: var(--d-bg); }
+  .deseret-item:first-child { border-top: 0; }
+  .deseret-item .dia { width: 42px; text-align: center; flex: none; }
+  .deseret-item .dia b { display: block; font-size: 10.5px; letter-spacing: .06em; color: var(--d-muted); font-weight: 600; }
+  .deseret-item .dia span { display: block; font-size: 18px; font-weight: 650; line-height: 1.1; }
+  .deseret-item .que { flex: 1; min-width: 0; }
+  .deseret-item .que .titulo { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deseret-item .que .org { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--d-muted); }
+  .deseret-item .ic { width: 30px; height: 30px; border-radius: 9px; background: var(--d-soft); display: grid; place-items: center; color: var(--d-muted); flex: none; }
+  .deseret-item .ic svg { width: 16px; height: 16px; }
 
-  .msg-actions { display: flex; gap: 8px; margin-top: 6px; font-size: 11px; }
-  .btn-action { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; cursor: pointer; color: var(--ink-soft, #64748b); font-size: 11px; }
-  .btn-action:hover:not(:disabled) { background: var(--celeste-lighter, #f0f9ff); border-color: var(--border, #dbeafe); color: var(--ink, #0f172a); }
-  .btn-action.activo { color: var(--celeste-dark, #0369a1); background: var(--celeste-light, #e0f2fe); }
-  .btn-action:disabled:not(.activo) { opacity: .45; cursor: default; }
-
-  #chat-input-area { display: flex; gap: 6px; align-items: center; padding: 10px; border-top: 1px solid var(--border, #dbeafe); background: var(--white, #fff); }
-  #chat-input {
-    flex: 1; min-width: 0; height: 40px; padding: 0 14px; font-size: 16px;
-    border: 1px solid var(--border, #dbeafe); border-radius: 999px;
-    background: var(--celeste-lighter, #f8fafc); color: var(--ink, #0f172a);
-  }
-  #chat-input:focus { outline: none; border-color: var(--celeste, #0ea5e9); box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
-  #chat-send-btn, #chat-mic-btn { flex: none; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border, #dbeafe); border-radius: 50%; cursor: pointer; background: var(--white, #fff); color: var(--ink-soft, #475569); }
-  #chat-mic-btn:hover { color: var(--ink, #0f172a); background: var(--celeste-lighter, #f0f9ff); }
-  #chat-send-btn { background: #0284c7; color: #fff; border-color: #0284c7; }
-  #chat-send-btn:disabled { opacity: .6; cursor: default; }
+  /* Entrada de texto */
+  #chat-input-area { border-top: 1px solid var(--d-line); padding: 10px 12px 10px; background: var(--d-bg); flex: none; }
+  .d-campo { display: flex; align-items: center; gap: 6px; border: 1px solid #d7dce4; border-radius: 14px; padding: 5px 5px 5px 12px; background: var(--d-bg); transition: border-color .15s, box-shadow .15s; }
+  .d-campo:focus-within { border-color: var(--d-brand); box-shadow: 0 0 0 3px rgba(11,95,165,.12); }
+  #chat-input { flex: 1; min-width: 0; height: 36px; padding: 0; font-size: 16px; border: 0; background: transparent; color: var(--d-ink); outline: none; }
+  #chat-input::placeholder { color: var(--d-faint); }
+  #chat-mic-btn { flex: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; cursor: pointer; background: transparent; color: var(--d-muted); }
+  #chat-mic-btn:hover { background: var(--d-soft); color: var(--d-ink); }
+  #chat-send-btn { flex: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; cursor: pointer; background: var(--d-brand); color: #fff; }
+  #chat-send-btn:disabled { opacity: .5; cursor: default; }
+  .d-pie { font-size: 11px; color: var(--d-faint); text-align: center; margin-top: 7px; }
   @keyframes pulse-wave {
-    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7); }
-    50% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
-    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+    0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
   }
-  .mic-listening { background-color: #dc3545 !important; color: white !important; border-color: #dc3545 !important; animation: pulse-wave 1s infinite ease-in-out; }
+  .mic-listening { background-color: #dc3545 !important; color: white !important; animation: pulse-wave 1.2s infinite ease-out; }
 
-  /* Punto 13: en el celular, pantalla completa */
+  /* En el celular: pantalla completa */
   @media (max-width: 600px) {
     #chat-window { right: 0; bottom: 0; width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; border: 0; }
+    #chat-input-area { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   }
 `;
 
@@ -288,23 +343,31 @@ export function initChatWidget() {
           <div id="chat-header">
             <div class="deseret-id">
               <img src="${AVATAR}" alt="" />
-              <div><div class="nombre">Deseret</div><div class="estado">Asistente IA</div></div>
+              <div><div class="nombre">Deseret</div><div class="estado">Asistente del barrio</div></div>
             </div>
             <div class="deseret-botones">
-              <button id="chat-hey-btn" title='Activar "Hey Deseret"' aria-label='Activar "Hey Deseret"' aria-pressed="false" style="display:none">${ICONOS.oido}</button>
-              <button id="chat-auto-btn" title="Modo conducción (solo voz, respuestas cortas)" aria-label="Modo conducción" aria-pressed="false">${ICONOS.auto}</button>
-              <button id="chat-voice-btn" title="Leer respuestas en voz alta" aria-label="Leer respuestas en voz alta" aria-pressed="false">${ICONOS.vozOff}</button>
-              <button id="chat-reset-btn" title="Reiniciar conversación" aria-label="Reiniciar conversación">${ICONOS.reiniciar}</button>
-              <button id="chat-close-btn" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
+              <button id="chat-menu-btn" type="button" title="Opciones" aria-label="Opciones de Deseret" aria-haspopup="menu" aria-expanded="false">${ICONOS.mas}</button>
+              <button id="chat-close-btn" type="button" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
+            </div>
+            <div id="chat-menu" role="menu" hidden>
+              <button id="chat-voice-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.vozOn}<span>Leer respuestas en voz alta</span><i class="dm-sw"></i></button>
+              <div class="deseret-voz-barra" role="radiogroup" aria-label="Voz de Deseret"><button type="button" role="radio" data-voz="femenina">Voz femenina</button><button type="button" role="radio" data-voz="masculina">Voz masculina</button></div>
+              <button id="chat-hey-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false" style="display:none">${ICONOS.mic}<span>“Hey Deseret”</span><i class="dm-sw"></i></button>
+              <button id="chat-auto-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.auto}<span>Modo conducción</span><i class="dm-sw"></i></button>
+              <div class="dm-sep"></div>
+              <button id="chat-escucha-btn" type="button" class="dm-item" role="menuitem">${ICONOS.mic}<span>Escuchar una reunión</span></button>
+              <button id="chat-reset-btn" type="button" class="dm-item" role="menuitem">${ICONOS.reiniciar}<span>Nueva conversación</span></button>
             </div>
           </div>
-          <div class="deseret-voz-barra" role="radiogroup" aria-label="Voz de Deseret"><span class="lbl">Voz:</span><span class="deseret-voz-op"><button type="button" role="radio" data-voz="femenina">👩 Femenina</button><button type="button" role="radio" data-voz="masculina">👨 Masculina</button></span></div>
-          <div class="deseret-auto-aviso">🚗 Modo conducción: háblame y te respondo en voz, corto. No mires la pantalla mientras manejas.</div>
+          <div class="deseret-auto-aviso">Modo conducción: háblame y te respondo en voz, corto. No mires la pantalla mientras manejas.</div>
           <div id="chat-messages" aria-live="polite"></div>
           <div id="chat-input-area">
-            <button id="chat-mic-btn" title="Dictar por voz" aria-label="Dictar por voz">${ICONOS.mic}</button>
-            <input type="text" id="chat-input" placeholder="Pregunta o pide agendar algo..." enterkeyhint="send" />
-            <button id="chat-send-btn" title="Enviar" aria-label="Enviar">${ICONOS.enviar}</button>
+            <div class="d-campo">
+              <input type="text" id="chat-input" placeholder="Escribe o habla con Deseret…" enterkeyhint="send" />
+              <button id="chat-mic-btn" type="button" title="Dictar por voz" aria-label="Dictar por voz">${ICONOS.mic}</button>
+              <button id="chat-send-btn" type="button" title="Enviar" aria-label="Enviar">${ICONOS.enviarFlecha}</button>
+            </div>
+            <div class="d-pie">Deseret puede equivocarse: revisa antes de confirmar.</div>
           </div>
         </div>
       </div>`);
@@ -316,6 +379,25 @@ export function initChatWidget() {
   const sendBtn = document.getElementById('chat-send-btn');
   const chatInput = document.getElementById('chat-input');
   const messagesDiv = document.getElementById('chat-messages');
+
+  // ---------------- Menú "⋯" (voz, Hey Deseret, conducción, escuchar reunión, nueva conversación) ----------------
+  const menuBtn = document.getElementById('chat-menu-btn');
+  const menu = document.getElementById('chat-menu');
+  function cerrarMenu() { menu.hidden = true; menuBtn.setAttribute('aria-expanded', 'false'); }
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const abrir = menu.hidden;
+    menu.hidden = !abrir;
+    menuBtn.setAttribute('aria-expanded', String(abrir));
+  });
+  document.addEventListener('click', (e) => { if (!menu.hidden && !e.target.closest('#chat-menu') && !e.target.closest('#chat-menu-btn')) cerrarMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { cerrarMenu(); menuBtn.focus(); } });
+  document.getElementById('chat-escucha-btn').addEventListener('click', () => {
+    cerrarMenu();
+    if (typeof window.abrirEscuchaReunion !== 'function') return;
+    chatWindow.style.display = 'none';
+    window.abrirEscuchaReunion({ onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } });
+  });
 
   // ---------------- Punto 11: la conversación sobrevive a una recarga ----------------
   // Se guarda en sessionStorage (solo esta pestaña; se borra al cerrar sesión).
@@ -334,10 +416,42 @@ export function initChatWidget() {
     estado.msgs.forEach((m) => { if (m.extra) delete m.extra.opciones; });
   };
 
+  // Tarjeta de confirmación: el servidor manda filas [ícono-emoji, texto];
+  // aquí se dibujan con íconos de línea. La fila del nombre (actividad o
+  // persona) pasa a ser el título, la de la organización va con su punto de
+  // color y la de "antes" queda tachada al final.
+  const ICONO_FILA = {
+    '📅': 'calendario', '🗓️': 'calendario', '🗓': 'calendario', '🕐': 'reloj', '⏰': 'reloj', '🙋': 'persona', '👤': 'persona',
+    '👥': 'grupo', '🏷️': 'etiqueta', '🏛️': 'edificio', '📋': 'documento', '💬': 'comentario', '⚠️': 'alerta', '🎯': 'check', '📍': 'lugar',
+  };
+  const ES_ACCION = /^(cambiar|cancelar|reprogramar|agendar|nueva|nuevo|registrar|marcar|confirmar|rechazar|completar|reasignar|mover|editar)\b/i;
   function htmlTarjeta(t) {
-    const filas = (t.filas || []).filter((f) => f[1])
-      .map(([ico, val]) => `<div class="f"><span>${escapeHtml(ico)}</span><span>${escapeHtml(val)}</span></div>`).join('');
-    return `<div class="deseret-confirm" style="--c:${colorSeguro(t.color)}"><div class="t">${escapeHtml(t.titulo || '')}</div>${filas}</div>`;
+    let filas = (t.filas || []).filter((f) => f[1]).map(([ico, val]) => [String(ico).trim(), String(val)]);
+    let k = ''; let h = '';
+    if (ES_ACCION.test(t.titulo || '')) {
+      k = t.titulo;
+      const i = filas.findIndex(([ico]) => ico === '🏷️' || ico === '🙋');
+      if (i >= 0) { h = filas[i][1]; filas.splice(i, 1); }
+    } else {
+      k = { compromiso: 'Compromiso', acta: 'Acta', entrevista: 'Entrevista', actividad: 'Actividad' }[t.tipo] || '';
+      h = t.titulo || '';
+    }
+    const org = filas.find(([ico]) => ico === '🏛️' || (ico === '🏷️' && ES_ACCION.test(t.titulo || '')));
+    if (org) filas = filas.filter((f) => f !== org);
+    const antes = filas.filter(([ico]) => ico === '↩️' || ico === '↩');
+    filas = filas.filter(([ico]) => ico !== '↩️' && ico !== '↩');
+    const fila = ([ico, val]) => {
+      const nombre = ICONO_FILA[ico];
+      const marca = nombre ? ICONOS[nombre] : /^\d+\.$|^…$/.test(ico) ? `<span class="n">${escapeHtml(ico)}</span>` : '<span class="n"></span>';
+      return `<div class="f">${marca}<span>${escapeHtml(sinEmojis(val))}</span></div>`;
+    };
+    return `<div class="deseret-confirm" style="--c:${colorSeguro(t.color)}">
+      ${k ? `<div class="k">${escapeHtml(k)}</div>` : ''}
+      ${h ? `<div class="h">${escapeHtml(sinEmojis(h))}</div>` : ''}
+      ${org ? `<div class="org"><i class="d-punto"></i>${escapeHtml(org[1])}</div>` : ''}
+      ${filas.map(fila).join('')}
+      ${antes.map(([, v]) => `<div class="antes">Antes: <s>${escapeHtml(v.replace(/^antes:\s*/i, ''))}</s></div>`).join('')}
+    </div>`;
   }
 
   // Cuadro: en los comparativos (voz 'columnas') la primera columna es la
@@ -356,13 +470,17 @@ export function initChatWidget() {
   }
   const tablaComoTexto = (t) => [t.columnas || [], ...(t.filas || [])].map((f) => f.join('\t')).join('\n');
 
+  const DIAS_CORTOS = ['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'];
   function htmlItems(items) {
     return `<div class="deseret-items">${items.map((it) => {
-      const icono = { entrevista: '🙋 ', aseo: '🧹 ', recordatorio: '⏰ ', acta: '📋 ', compromiso: '🎯 ' }[it.tipo] || '';
+      const ic = { entrevista: 'persona', recordatorio: 'campana', acta: 'documento', compromiso: 'check', aseo: 'check', solicitud: 'persona' }[it.tipo] || (/consejo|reuni[oó]n|comit/i.test(it.titulo || '') ? 'grupo' : 'calendario');
+      const [y, m, d] = String(it.fecha || '').split('-').map(Number);
+      const dia = y ? DIAS_CORTOS[new Date(y, m - 1, d, 12).getDay()] : '';
+      const detalle = [it.org, it.hora].filter(Boolean).join(' · ');
       return `<div class="deseret-item" style="--c:${colorSeguro(it.color)}">
-        <div class="barra"></div>
-        <div class="cuando"><b>${escapeHtml(fechaCorta(it.fecha))}</b>${escapeHtml(it.hora || '')}</div>
-        <div class="que"><div class="titulo">${icono}${escapeHtml(it.titulo)}</div><div class="org">${escapeHtml(it.org || '')}</div></div>
+        <div class="dia"><b>${dia}</b><span>${d || ''}</span></div>
+        <div class="que"><div class="titulo">${escapeHtml(sinEmojis(it.titulo))}</div><div class="org"><i class="d-punto"></i>${escapeHtml(detalle)}</div></div>
+        <div class="ic">${ICONOS[ic]}</div>
       </div>`;
     }).join('')}</div>`;
   }
@@ -374,7 +492,8 @@ export function initChatWidget() {
       div.textContent = m.texto;
     } else {
       const extra = m.extra || {};
-      div.innerHTML = `<div class="cuerpo">${formatear(m.texto)}</div>`
+      if (!m.hora) m.hora = horaAhora();
+      div.innerHTML = `<div class="cuerpo">${formatear(sinEmojis(m.texto))}</div>`
         + (extra.tarjeta ? htmlTarjeta(extra.tarjeta) : '')
         + (Array.isArray(extra.items) && extra.items.length ? htmlItems(extra.items) : '')
         + (extra.tabla?.filas?.length ? htmlTabla(extra.tabla) : '');
@@ -385,8 +504,10 @@ export function initChatWidget() {
         extra.opciones.forEach((o) => {
           const b = document.createElement('button');
           b.type = 'button';
-          b.className = `deseret-chip${/confirmar/i.test(o.value) ? ' primario' : ''}`;
-          b.textContent = o.label;
+          const primario = /confirmar/i.test(o.value) || /^s[ií],/i.test(sinEmojis(o.label));
+          const secundario = !primario && /^(cancelar|no)$/i.test(String(o.value).trim());
+          b.className = `deseret-chip${primario ? ' primario' : secundario ? ' secundario' : ''}`;
+          b.textContent = sinEmojis(o.label).replace(/^\d+\.\s*/, (x) => x) || o.label;
           // Botones especiales: "📇 Ver ficha completa" abre la Ficha 360° de la app.
           // Se cierra el chat antes de abrirla: la ficha es un modal de la app
           // (z-index 100) y quedaba DETRÁS de la ventana de Deseret (1000) —
@@ -407,18 +528,25 @@ export function initChatWidget() {
       if (!m.error && m.texto) {
         const acciones = document.createElement('div');
         acciones.className = 'msg-actions';
+        const hora = document.createElement('span');
+        hora.className = 'hora';
+        hora.textContent = m.hora || '';
+        acciones.appendChild(hora);
+        // En el celular: tocar el mensaje muestra copiar / 👍 / 👎.
+        div.addEventListener('click', (e) => { if (!e.target.closest('button')) div.classList.toggle('ver'); });
         const copiar = document.createElement('button');
         copiar.type = 'button';
         copiar.className = 'btn-action';
-        copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`;
+        copiar.innerHTML = ICONOS.copiar;
         copiar.title = 'Copiar respuesta';
+        copiar.setAttribute('aria-label', 'Copiar respuesta');
         copiar.addEventListener('click', () => {
           // Con cuadro, se copia también (separado por tabulaciones: se pega
           // directo como tabla en Excel, Google Sheets o Word).
           const texto = (div.querySelector('.cuerpo')?.innerText || '') + (m.extra?.tabla?.filas?.length ? `\n\n${tablaComoTexto(m.extra.tabla)}` : '');
           navigator.clipboard?.writeText(texto).then(() => {
-            copiar.innerHTML = `${ICONOS.ok}<span>Copiado</span>`;
-            setTimeout(() => { copiar.innerHTML = `${ICONOS.copiar}<span>Copiar</span>`; }, 1500);
+            copiar.innerHTML = ICONOS.ok;
+            setTimeout(() => { copiar.innerHTML = ICONOS.copiar; }, 1500);
           });
         });
         acciones.appendChild(copiar);
@@ -462,7 +590,22 @@ export function initChatWidget() {
   function pintarBienvenida() {
     const w = document.createElement('div');
     w.className = 'deseret-bienvenida';
-    w.innerHTML = `<img src="${AVATAR}" alt="" /><div class="t">Deseret</div><div class="s">Tu asistente para organizar el barrio</div>`;
+    let nombre = '';
+    try { nombre = String((typeof state !== 'undefined' && state?.user?.name) || '').trim().split(/\s+/)[0] || ''; } catch { nombre = ''; }
+    w.innerHTML = `<img src="${AVATAR}" alt="" /><div class="t">Hola${nombre ? `, ${escapeHtml(nombre)}` : ''}</div><div class="s">¿En qué te ayudo hoy?</div>
+      <div class="d-acciones">
+        <button type="button" class="d-accion" data-accion="semana"><div class="ic">${ICONOS.calendario}</div><b>Mi semana</b><small>Lo que tienes estos días</small></button>
+        <button type="button" class="d-accion" data-accion="agendar"><div class="ic">${ICONOS.sumar}</div><b>Agendar</b><small>Entrevista o actividad</small></button>
+        <button type="button" class="d-accion" data-accion="escuchar"><div class="ic">${ICONOS.mic}</div><b>Escuchar reunión</b><small>Transcribe y arma el acta</small></button>
+        <button type="button" class="d-accion" data-accion="datos"><div class="ic">${ICONOS.grafico}</div><b>Consultar datos</b><small>Bienestar, compromisos, presupuesto…</small></button>
+      </div>`;
+    w.querySelectorAll('[data-accion]').forEach((b) => b.addEventListener('click', () => {
+      const a = b.dataset.accion;
+      if (a === 'semana') { w.remove(); enviar('¿Qué tengo esta semana?'); }
+      else if (a === 'agendar') { chatInput.value = 'Agenda una entrevista con '; chatInput.focus(); }
+      else if (a === 'escuchar') { if (typeof window.abrirEscuchaReunion === 'function') { chatWindow.style.display = 'none'; callar(); window.abrirEscuchaReunion({ onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } }); } }
+      else { chatInput.value = ''; chatInput.placeholder = 'Ej.: ¿cuáles son los casos de bienestar vigentes?'; chatInput.focus(); }
+    }));
     const chips = document.createElement('div');
     chips.className = 'deseret-chips';
     SUGERENCIAS.forEach((q) => {
@@ -479,7 +622,8 @@ export function initChatWidget() {
 
   function repintarTodo() {
     messagesDiv.innerHTML = '';
-    if (!estado.msgs.length) estado.msgs.push({ role: 'bot', texto: SALUDO });
+    // Sin conversación: la pantalla de inicio (el saludo antiguo ya no se muestra).
+    estado.msgs = estado.msgs.filter((m) => m.texto !== SALUDO);
     if (!estado.msgs.some((m) => m.role === 'user')) pintarBienvenida();
     estado.msgs.forEach(pintarMensaje);
   }
@@ -493,11 +637,10 @@ export function initChatWidget() {
     chatWindow.classList.toggle('voz-on', vozActiva);
     const tipo = store.get('localStorage', CLAVE_VOZ_TIPO) === 'masculina' ? 'masculina' : 'femenina';
     chatWindow.querySelectorAll('.deseret-voz-barra [data-voz]').forEach((b) => { const on = b.dataset.voz === tipo; b.classList.toggle('activa', on); b.setAttribute('aria-checked', String(on)); });
-    voiceBtn.innerHTML = vozActiva ? ICONOS.vozOn : ICONOS.vozOff;
     voiceBtn.setAttribute('aria-pressed', String(vozActiva));
     voiceBtn.title = vozActiva ? 'Leer respuestas en voz alta: activado' : 'Leer respuestas en voz alta: desactivado';
   };
-  if (!puedeHablar) estadoVozServidor().then((ok) => { if (!ok) voiceBtn.style.display = 'none'; });
+  if (!puedeHablar) estadoVozServidor().then((ok) => { if (!ok) { voiceBtn.style.display = 'none'; chatWindow.querySelector('.deseret-voz-barra').style.display = 'none'; } });
   pintarBotonVoz();
   voiceBtn.addEventListener('click', () => {
     vozActiva = !vozActiva;
@@ -1114,7 +1257,8 @@ export function initChatWidget() {
     });
   }
   document.getElementById('chat-reset-btn').addEventListener('click', () => {
-    estado = { msgs: [{ role: 'bot', texto: '¡Hola! Conversación reiniciada. ¿Qué necesitas?' }], historial: [] };
+    estado = { msgs: [], historial: [] };
+    cerrarMenu();
     guardar();
     repintarTodo();
     chatInput.value = '';
@@ -1180,7 +1324,7 @@ export function initChatWidget() {
       isListening = false;
       micBtn.classList.remove('mic-listening');
       micBtn.title = 'Dictar por voz';
-      chatInput.placeholder = 'Pregunta o pide agendar algo...';
+      chatInput.placeholder = 'Escribe o habla con Deseret…';
       try { recognition.stop(); } catch { /* ya estaba detenido */ }
     };
 

@@ -478,7 +478,7 @@ Reglas:
 - Si total_filas es 0, dilo con naturalidad (ej. "No encontré casos de bienestar vigentes").
 - ${tabla ? 'Debajo de tu respuesta se muestra un cuadro con el detalle: NO lo repitas completo; da la conclusión y lo más relevante en 1 a 3 frases (o hasta 4 viñetas si es una comparación).' : 'Sé breve y directo; usa viñetas solo si hay varios elementos.'}
 ${breve ? '- MODO CONDUCCIÓN: máximo 2 frases cortas, sin listas.\n' : ''}- Si la lista se cortó (total_filas mayor que las filas mostradas), menciona el total.
-- Pon en **negrita** nombres, números clave y fechas. Fechas en formato legible (ej. "15 de agosto").
+- No uses emojis. Usa **negrita** solo para 1 o 2 datos clave (un número o una fecha). Fechas en formato legible (ej. "15 de agosto").
 - Tono cercano y respetuoso, nunca de juicio. Vocabulario SUD: nunca uses la palabra "pastoral".
 - No digas que "consultaste la base de datos" ni menciones colecciones, campos o JSON.`;
   const redactado = await redactar(sistemaRespuesta, [], mensaje);
