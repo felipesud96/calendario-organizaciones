@@ -8493,7 +8493,6 @@ window.plantillasEscucha = async function plantillasEscucha(tipo) {
   } catch (e) { /* sin plantillas propias */ }
   return lista;
 };
-window.renderMeetingsView = (...a) => renderMeetingsView(...a);
 
 // Fecha + horario de una reunión, en un solo texto — usada tanto en el
 // detalle del acta como en ambas formas de compartir la minuta (texto e
