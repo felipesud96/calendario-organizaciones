@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OrganizaSion</title>
+  <!-- Modo oscuro manual (interruptor ☀️/🌙 de la barra superior, ver
+       THEME_KEY/applyTheme en app.js): esto va inline y lo más arriba
+       posible para que, si la persona ya eligió un tema a mano, se aplique
+       ANTES de que se pinte la página — si no, se vería un parpadeo del
+       tema equivocado (el del sistema) por una fracción de segundo antes de
+       que app.js termine de cargar y lo corrija. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('organizasion_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        var a = JSON.parse(localStorage.getItem('organizasion_a11y') || '{}');
+        if (a.contraste) document.documentElement.setAttribute('data-contraste', 'alto');
+        if (a.movimiento) document.documentElement.setAttribute('data-movimiento', 'reducido');
+      } catch (e) { /* almacenamiento no disponible — se ve el tema del sistema, sin parpadeo que evitar */ }
+    })();
+  </script>
+  <link rel="icon" type="image/png" href="/logo-bee.png" />
+  <!-- Acceso directo desde el celular/tablet ("Agregar a pantalla de inicio"):
+       el manifest + estos íconos hacen que el acceso directo muestre el logo
+       de la abeja y diga "OrganizaSion", en vez del ícono/nombre genérico del
+       navegador. apple-touch-icon es aparte porque Safari/iOS no lee el
+       manifest para el ícono del acceso directo. -->
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-apple-touch.png" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="OrganizaSion" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="offline-banner" class="offline-banner" style="display:none;">📡 Sin conexión a internet — reconectando… los cambios no se guardarán hasta que vuelvas a estar en línea.</div>
+  <div id="install-banner" class="install-banner" style="display:none;">
+    <span class="install-banner-text">📲 Instala OrganizaSion en tu celular para un acceso más rápido</span>
+    <span class="install-banner-actions">
+      <button type="button" id="install-banner-yes" class="install-banner-btn install-banner-btn-primary">Instalar</button>
+      <button type="button" id="install-banner-no" class="install-banner-btn">Ahora no</button>
+    </span>
+  </div>
+  <div id="app">
+    <div class="loading-screen"><div class="spinner"></div></div>
+  </div>
+  <button type="button" id="scroll-top-btn" class="scroll-top-btn" style="display:none;" title="Volver arriba" aria-label="Volver arriba">↑</button>
+  <!-- Lee fotos de la pizarra para armar compromisos de una acta (ver
+       "📷 Leer pizarra" en Nueva Acta) — corre entera en el navegador de la
+       persona, no se manda ninguna foto a nuestro servidor ni a nadie. Si el
+       celular no tiene internet en ese momento, no llega a cargar y el botón
+       avisa que no está disponible; el resto de la app sigue funcionando
+       normal (los compromisos siempre se pueden escribir a mano). -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- Rasteriza la tarjeta de "Compartir minuta" (ver buildMinutaImageNode en
+       app.js) a una imagen PNG prolija para compartir por WhatsApp — corre
+       entera en el navegador de la persona, no se sube nada a ningún
+       servidor. Si el celular no tiene internet en ese momento, el botón
+       cae de vuelta a compartir como texto plano (ver shareMinutaAsImage). -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="/app.js"></script>
+  <!-- "Deseret escucha la reunión": graba, transcribe y propone el acta (ver escucha.js). -->
+  <script src="/escucha.js"></script>
+  <!-- Botón "atrás" del celular: cierra ventanas y vuelve a Inicio en vez de salir (ver atras.js). -->
+  <script src="/atras.js"></script>
+  <!-- Deseret, el asistente de IA: se abre tocando el logo de la abeja
+       de la barra superior (ver chatWidget.js). -->
+  <script type="module">
+    import { initChatWidget } from '/chatWidget.js';
+    initChatWidget();
+  </script>
+</body>
+</html>
