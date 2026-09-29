@@ -60,6 +60,7 @@ const ICONOS = {
   vozOn: svg('<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>'),
   vozOff: svg('<path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>'),
   reiniciar: svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>'),
+  guia: svg('<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>'),
   cerrar: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
   mic: svg('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/>'),
   enviar: svg('<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>'),
@@ -239,6 +240,11 @@ const ESTILOS = `
   .deseret-bienvenida .t { font-weight: 650; font-size: 21px; letter-spacing: -.02em; margin-top: 14px; color: var(--d-ink); }
   .deseret-bienvenida .s { font-size: 14.5px; color: var(--d-muted); margin: 2px 0 18px; }
   .d-acciones { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .d-guia { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--d-brand); background: var(--d-brand-soft); color: var(--d-ink); border-radius: 14px; padding: 12px; margin-bottom: 10px; cursor: pointer; font: inherit; }
+  .d-guia .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--d-bg); color: var(--d-brand); flex-shrink: 0; }
+  .d-guia .ic svg { width: 16px; height: 16px; }
+  .d-guia b { display: block; font-size: 14px; font-weight: 600; }
+  .d-guia small { display: block; font-size: 12.5px; color: var(--d-muted); margin-top: 2px; }
   .d-accion { text-align: left; border: 1px solid var(--d-line); border-radius: 14px; padding: 12px; background: var(--d-bg); color: var(--d-ink); cursor: pointer; font: inherit; transition: border-color .15s, background .15s; }
   .d-accion:hover { border-color: #bcd3e8; background: var(--d-soft); }
   .d-accion .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--d-brand-soft); color: var(--d-brand); margin-bottom: 10px; }
@@ -356,6 +362,7 @@ export function initChatWidget() {
               <button id="chat-auto-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.auto}<span>Modo conducción</span><i class="dm-sw"></i></button>
               <div class="dm-sep"></div>
               <button id="chat-escucha-btn" type="button" class="dm-item" role="menuitem">${ICONOS.mic}<span>Escuchar una reunión</span></button>
+              <button id="chat-guia-btn" type="button" class="dm-item" role="menuitem">${ICONOS.guia}<span>Guía rápida</span></button>
               <button id="chat-reset-btn" type="button" class="dm-item" role="menuitem">${ICONOS.reiniciar}<span>Nueva conversación</span></button>
             </div>
           </div>
@@ -595,13 +602,91 @@ export function initChatWidget() {
     scrollAbajo();
   }
 
+  // ---------------- Punto 17: guía rápida según el rol ----------------
+  // La primera vez, la bienvenida ofrece una guía de 3 pasos con lo que más
+  // le sirve a cada persona según su rol; cada paso tiene "Probar" (lo hace
+  // de verdad) y "Siguiente". Se puede repetir desde el menú "⋯".
+  const CLAVE_GUIA = 'deseret_guia_v1';
+  function rolGuia() {
+    let u = null; try { u = state.user; } catch { u = null; }
+    if (!u) return 'miembro';
+    let obispado = false; try { obispado = typeof isObispadoUser === 'function' && isObispadoUser(); } catch { obispado = false; }
+    if (u.role === 'admin' || obispado) return 'obispado';
+    if (u.role === 'leader') return 'lider';
+    if (u.role === 'financial_clerk') return 'finanzas';
+    if (['ward_clerk', 'executive_secretary', 'secretary'].includes(u.role)) return 'secretario';
+    return 'miembro';
+  }
+  const NOMBRE_ROL = { obispado: 'el Obispado', lider: 'líder de organización', secretario: 'secretario', finanzas: 'secretario de finanzas', miembro: 'miembro del barrio' };
+  const GUIAS = {
+    obispado: [
+      { t: 'Tu semana de un vistazo', x: 'Pregúntame "¿qué tengo esta semana?" y te muestro entrevistas, compromisos y actividades juntos.', a: { enviar: '¿Qué tengo esta semana?' } },
+      { t: 'Actas sin escribir', x: 'Al empezar una reunión dime "comienza la reunión". Escucho, y al final te propongo el acta con acuerdos y compromisos para que la revises.', a: { fn: 'escuchar' } },
+      { t: 'Pregúntame por los datos', x: 'Puedo responder cosas como "¿qué compromisos están atrasados?" o "casos de bienestar vigentes", siempre con lo que tú puedes ver.', a: { enviar: '¿Qué compromisos están atrasados?' } },
+    ],
+    lider: [
+      { t: 'Agenda con una frase', x: 'Escríbeme o díctame, por ejemplo: "agenda una actividad de servicio el sábado a las 10". Yo lleno todo y tú confirmas.', a: { prellenar: 'Agenda una actividad ' } },
+      { t: 'Afiches en segundos', x: 'En cada actividad está el botón "Afiche": describes la idea y lo pinto con los datos listos para compartir por WhatsApp.', a: { fn: 'afiche' } },
+      { t: 'Compromisos de tu organización', x: 'Pregúntame "¿qué compromisos tiene mi organización?" y te digo cuáles vencen pronto o están atrasados.', a: { enviar: '¿Qué compromisos tiene mi organización?' } },
+    ],
+    secretario: [
+      { t: 'Actas sin escribir', x: 'En la reunión dime "comienza la reunión". Transcribo y al final te propongo el acta en el formato de la minuta.', a: { fn: 'escuchar' } },
+      { t: 'Entrevistas con una frase', x: 'Por ejemplo: "agenda una entrevista con el hermano Soto el domingo a las 11". Reviso choques de horario por ti.', a: { prellenar: 'Agenda una entrevista con ' } },
+      { t: 'Tu semana', x: 'Pregúntame "¿qué tengo esta semana?" para ver lo que viene.', a: { enviar: '¿Qué tengo esta semana?' } },
+    ],
+    finanzas: [
+      { t: 'Boletas con una foto', x: 'En Presupuesto, al registrar un gasto, toca "Leer boleta con foto": leo el monto, la fecha y el comercio por ti.', a: { fn: 'presupuesto' } },
+      { t: 'Consultas de gastos', x: 'Pregúntame, por ejemplo, "¿cuánto se ha gastado este trimestre por organización?".', a: { enviar: '¿Cuánto se ha gastado este trimestre por organización?' } },
+      { t: 'Tu semana', x: 'Pregúntame "¿qué tengo esta semana?" para ver lo que viene.', a: { enviar: '¿Qué tengo esta semana?' } },
+    ],
+    miembro: [
+      { t: 'Actividades del barrio', x: 'Pregúntame "¿qué actividades hay este mes?" y te las muestro.', a: { enviar: '¿Qué actividades hay este mes?' } },
+      { t: 'Tus entrevistas', x: 'Puedo decirte cuándo es tu próxima entrevista o recordártela.', a: { enviar: '¿Cuándo es mi próxima entrevista?' } },
+      { t: 'Háblame con la voz', x: 'Toca el micrófono y pregúntame lo que necesites; también puedo leerte las respuestas en voz alta (menú "⋯").', a: { microfono: true } },
+    ],
+  };
+  function pasoGuia(i) {
+    const g = GUIAS[rolGuia()];
+    const p = g[i];
+    if (!p) return;
+    messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+    const opciones = [{ label: 'Probar', value: `__guia_probar_${i}` }, { label: i < g.length - 1 ? 'Siguiente' : 'Terminar', value: `__guia_${i + 1}` }];
+    estado.msgs.push({ role: 'bot', texto: `**Paso ${i + 1} de ${g.length} · ${p.t}**\n${p.x}`, extra: { opciones } });
+    pintarMensaje(estado.msgs.at(-1)); guardar(); scrollAbajo();
+  }
+  function manejarGuia(valor) {
+    store.set('localStorage', CLAVE_GUIA, true);
+    messagesDiv.querySelectorAll('.deseret-chips').forEach((el) => el.remove());
+    const g = GUIAS[rolGuia()];
+    const probar = /^__guia_probar_(\d+)$/.exec(valor);
+    if (probar) {
+      const a = g[Number(probar[1])]?.a || {};
+      if (a.enviar) { enviar(a.enviar); return; }
+      if (a.prellenar) { chatInput.value = a.prellenar; chatInput.focus(); return; }
+      if (a.microfono) { if (micBtn.style.display !== 'none') micBtn.click(); return; }
+      if (a.fn === 'escuchar' && typeof window.abrirEscuchaReunion === 'function') { chatWindow.style.display = 'none'; callar(); window.abrirEscuchaReunion({}); return; }
+      if (a.fn === 'afiche' && typeof window.abrirAfiche === 'function') { chatWindow.style.display = 'none'; callar(); window.abrirAfiche({}); return; }
+      if (a.fn === 'presupuesto') { chatWindow.style.display = 'none'; callar(); try { state.view = 'budget'; renderCurrentView(); } catch { /* sin permiso */ } return; }
+      return;
+    }
+    const n = Number((/^__guia_(\d+)$/.exec(valor) || [])[1]);
+    if (n >= g.length) {
+      estado.msgs.push({ role: 'bot', texto: 'Listo. Cuando quieras repetir la guía, está en el menú "⋯". ¿En qué te ayudo?' });
+      pintarMensaje(estado.msgs.at(-1)); guardar(); scrollAbajo();
+      return;
+    }
+    pasoGuia(n);
+  }
+
   // Bienvenida: la abeja en grande + sugerencias, mientras no se haya escrito nada.
   function pintarBienvenida() {
     const w = document.createElement('div');
     w.className = 'deseret-bienvenida';
     let nombre = '';
     try { nombre = String((typeof state !== 'undefined' && state?.user?.name) || '').trim().split(/\s+/)[0] || ''; } catch { nombre = ''; }
+    const guiaVista = store.get('localStorage', CLAVE_GUIA) === true;
     w.innerHTML = `<img src="${AVATAR}" alt="" /><div class="t">Hola${nombre ? `, ${escapeHtml(nombre)}` : ''}</div><div class="s">¿En qué te ayudo hoy?</div>
+      ${guiaVista ? '' : `<button type="button" class="d-guia" data-accion="guia"><span class="ic">${ICONOS.guia}</span><span><b>¿Primera vez? Guía rápida</b><small>3 pasos con lo más útil para ${escapeHtml(NOMBRE_ROL[rolGuia()])}</small></span></button>`}
       <div class="d-acciones">
         <button type="button" class="d-accion" data-accion="semana"><div class="ic">${ICONOS.calendario}</div><b>Mi semana</b><small>Lo que tienes estos días</small></button>
         <button type="button" class="d-accion" data-accion="agendar"><div class="ic">${ICONOS.sumar}</div><b>Agendar</b><small>Entrevista o actividad</small></button>
@@ -610,6 +695,7 @@ export function initChatWidget() {
       </div>`;
     w.querySelectorAll('[data-accion]').forEach((b) => b.addEventListener('click', () => {
       const a = b.dataset.accion;
+      if (a === 'guia') { w.remove(); pasoGuia(0); return; }
       if (a === 'semana') { w.remove(); enviar('¿Qué tengo esta semana?'); }
       else if (a === 'agendar') { chatInput.value = 'Agenda una entrevista con '; chatInput.focus(); }
       else if (a === 'escuchar') { if (typeof window.abrirEscuchaReunion === 'function') { chatWindow.style.display = 'none'; callar(); window.abrirEscuchaReunion({ onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } }); } }
@@ -844,6 +930,7 @@ export function initChatWidget() {
   let enviando = false;
   async function enviar(textoAEnviar, textoVisible) {
     const text = String(textoAEnviar ?? chatInput.value).trim();
+    if (text.startsWith('__guia')) { manejarGuia(text); return; }
     if (!text || enviando) return;
     clearTimeout(autoSendTimer);
     stopListeningState();
@@ -980,6 +1067,13 @@ export function initChatWidget() {
     } else callar();
   };
   document.getElementById('chat-close-btn').addEventListener('click', toggleChat);
+  // Desde la app ("Pedir ideas a Deseret", buscador): abre el chat y pregunta.
+  window.preguntarDeseret = (texto) => {
+    document.getElementById('deseret-intro')?.remove();
+    if (chatWindow.style.display === 'none') toggleChat();
+    messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+    if (texto) enviar(String(texto));
+  };
 
   // ---------------- D6: avisos al abrir el chat (una vez al día) ----------------
   async function mostrarAvisos() {
@@ -994,7 +1088,9 @@ export function initChatWidget() {
       if (!a?.texto) return;
       quitarChipsViejos();
       messagesDiv.querySelector('.deseret-bienvenida')?.remove();
-      const m = { role: 'bot', texto: a.texto, extra: { opciones: a.opciones || [] } };
+      const opciones = [...(a.opciones || [])];
+      if (store.get('localStorage', CLAVE_GUIA) !== true) opciones.push({ label: 'Guía rápida', value: '__guia_0' });
+      const m = { role: 'bot', texto: a.texto, extra: { opciones } };
       estado.msgs.push(m);
       pintarMensaje(m);
       guardar();
@@ -1035,7 +1131,7 @@ export function initChatWidget() {
     const d = document.createElement('div');
     d.id = 'deseret-intro';
     d.setAttribute('role', 'status');
-    d.innerHTML = `<button class="x" type="button" aria-label="Cerrar">×</button><b>¡Hola! Soy Deseret 👋</b>Tu asistente con IA. Pregúntame lo que necesites o pídeme agendar una entrevista o actividad.${heySoportado ? ' También puedes activar <b style="display:inline">“Hey Deseret”</b> para llamarme con la voz.' : ''}`;
+    d.innerHTML = `<button class="x" type="button" aria-label="Cerrar">×</button><b>Hola, soy Deseret</b>Tu asistente con IA. Tócame y te muestro en 3 pasos lo más útil para ti.${heySoportado ? ' También puedes activar <b style="display:inline">“Hey Deseret”</b> para llamarme con la voz.' : ''}`;
     d.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); cerrarIntro(); });
     d.addEventListener('click', () => { cerrarIntro(); if (chatWindow.style.display === 'none') toggleChat(); });
     document.getElementById('organiza-chat-widget').appendChild(d);
@@ -1276,6 +1372,7 @@ export function initChatWidget() {
       }
     });
   }
+  document.getElementById('chat-guia-btn').addEventListener('click', () => { cerrarMenu(); pasoGuia(0); });
   document.getElementById('chat-reset-btn').addEventListener('click', () => {
     estado = { msgs: [], historial: [] };
     cerrarMenu();

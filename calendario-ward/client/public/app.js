@@ -66,7 +66,30 @@ const state = {
 const root = document.getElementById('app');
 
 // ---------------- API helper ----------------
-async function api(path, { method = 'GET', body } = {}) {
+// Punto 16: una barra fina arriba mientras hay pedidos en curso (solo si
+// tardan más de 300 ms) y, al guardar, el botón tocado queda "ocupado" hasta
+// que responde el servidor (evita el doble clic y se nota que algo pasa).
+let cargasEnCurso = 0; let barraTimer = null;
+function barraCarga(delta) {
+  cargasEnCurso = Math.max(0, cargasEnCurso + delta);
+  let b = document.getElementById('barra-carga');
+  if (!b) { b = document.createElement('div'); b.id = 'barra-carga'; b.setAttribute('aria-hidden', 'true'); document.body.appendChild(b); }
+  clearTimeout(barraTimer);
+  if (cargasEnCurso > 0) barraTimer = setTimeout(() => b.classList.add('on'), 300);
+  else b.classList.remove('on');
+}
+async function api(path, opts = {}) {
+  const metodo = opts.method || 'GET';
+  const boton = metodo !== 'GET' && document.activeElement && document.activeElement.tagName === 'BUTTON' && !document.activeElement.disabled ? document.activeElement : null;
+  if (boton) { boton.disabled = true; boton.classList.add('btn-ocupado'); }
+  barraCarga(1);
+  try { return await apiBase(path, opts); }
+  finally {
+    barraCarga(-1);
+    if (boton) { boton.disabled = false; boton.classList.remove('btn-ocupado'); }
+  }
+}
+async function apiBase(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   let res;
@@ -146,13 +169,31 @@ function withSavingState(btn, fn, savingLabel = 'Guardando…') {
 // pasa, usa uno neutro (📭) para que igual se vea completo.
 // `compact` es para huecos chicos (tarjetas dentro de un panel, celdas de
 // tabla) donde el tamaño normal del ícono se vería desproporcionado.
-function emptyStateHtml(message, cta, icon, compact) {
+// Los emojis de antes se muestran ahora como íconos de línea (más sobrio),
+// y se puede sumar una pregunta para Deseret (`deseret`): aparece el botón
+// "Pedir ideas a Deseret", que abre el chat con esa pregunta ya enviada.
+const EMPTY_ICONO = {
+  '🌤️': 'calendar', '📆': 'calendar', '🗓️': 'calendar', '🎉': 'check', '✅': 'check', '🔍': 'search', '📥': 'inbox',
+  '📋': 'file', '📜': 'file', '📝': 'file', '🧾': 'file', '💾': 'file', '🤝': 'users', '👤': 'users', '👥': 'users', '🎯': 'check',
+  '📈': 'chart', '🏅': 'check', '🧹': 'calendar', '🏘️': 'users', '📭': 'inbox',
+};
+function emptyStateHtml(message, cta, emoji, compact, deseret) {
+  const nombre = EMPTY_ICONO[emoji] || 'inbox';
   return `<div class="empty-state${compact ? ' compact' : ''}">
-    <div class="empty-state-icon" aria-hidden="true">${esc(icon || '📭')}</div>
+    <div class="empty-state-icon" aria-hidden="true">${icon(nombre, compact ? 16 : 22)}</div>
     <div>${esc(message)}</div>
-    ${cta ? `<button type="button" class="btn btn-primary btn-sm" id="${cta.id}" style="margin-top:12px;">${esc(cta.label)}</button>` : ''}
+    ${cta || deseret ? `<div class="empty-state-acciones">
+      ${cta ? `<button type="button" class="btn btn-primary btn-sm" id="${cta.id}">${esc(cta.label)}</button>` : ''}
+      ${deseret ? `<button type="button" class="btn btn-secondary btn-sm" data-preguntar-deseret="${esc(deseret)}"><img src="/deseret.svg" alt="" width="16" height="16" /> Pedir ideas a Deseret</button>` : ''}
+    </div>` : ''}
   </div>`;
 }
+// Cualquier botón con data-preguntar-deseret abre el chat con esa pregunta.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-preguntar-deseret]');
+  if (!b) return;
+  if (typeof window.preguntarDeseret === 'function') { closeModal(); window.preguntarDeseret(b.dataset.preguntarDeseret); }
+});
 function wireEmptyStateCta(id, fn) {
   const btn = document.getElementById(id);
   if (btn) btn.addEventListener('click', fn);
@@ -207,6 +248,12 @@ const ICON_PATHS = {
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
   moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  chart: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  sparkle: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
 };
@@ -1656,7 +1703,8 @@ function renderSearchResults(results, query) {
     return;
   }
   if (!results.length) {
-    el.innerHTML = '<div class="search-hint">Sin resultados para "' + esc(query) + '"</div>';
+    const conDeseret = !document.getElementById('search-deseret')?.hidden;
+    el.innerHTML = conDeseret ? '' : '<div class="search-hint">Sin resultados para "' + esc(query) + '"</div>';
     return;
   }
   el.innerHTML = results.map((r) => `
@@ -1672,7 +1720,53 @@ function renderSearchResults(results, query) {
   });
 }
 
+// Punto 18: si lo escrito parece una pregunta o una frase ("compromisos
+// atrasados de la Primaria", "¿cuándo fue la última entrevista de Soto?"),
+// además de los resultados normales Deseret responde arriba, en el mismo
+// panel. Solo consulta (nunca crea ni cambia nada) y respeta los permisos.
+const PALABRAS_PREGUNTA = /^(que|qu[eé]|cuando|cu[aá]ndo|cuanto|cu[aá]nto|cuantos|cu[aá]ntos|cuantas|cu[aá]ntas|quien|qui[eé]n|quienes|qui[eé]nes|cual|cu[aá]l|cuales|cu[aá]les|donde|d[oó]nde|como|c[oó]mo|hay|tengo|tiene|lista|muestra|dame|ver)\b/i;
+function pareceFrase(q) {
+  const t = q.trim();
+  return t.length >= 8 && (/[?¿]/.test(t) || PALABRAS_PREGUNTA.test(t) || t.split(/\s+/).length >= 3);
+}
+let deseretBuscaTimer = null; let deseretBuscaId = 0;
+function formatoDeseret(t) { return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n+/g, '<br>'); }
+function pintarRespuestaDeseret(q, estado, r) {
+  const box = document.getElementById('search-deseret');
+  if (!box) return;
+  if (estado === 'oculto') { box.innerHTML = ''; box.hidden = true; return; }
+  box.hidden = false;
+  const cab = `<div class="sd-cab"><img src="/deseret.svg" alt="" width="18" height="18" /> Deseret</div>`;
+  if (estado === 'ofrecer') {
+    box.innerHTML = `${cab}<button type="button" class="sd-preguntar">Preguntar: “${esc(q)}”</button>`;
+    box.querySelector('.sd-preguntar').addEventListener('click', () => preguntarEnBuscador(q));
+    return;
+  }
+  if (estado === 'pensando') { box.innerHTML = `${cab}<div class="sd-pensando"><span></span><span></span><span></span></div>`; return; }
+  if (!r || !r.texto) { box.innerHTML = `${cab}<div class="sd-texto">No encontré una respuesta para eso en los datos que puedes ver. <button type="button" class="sd-chat">Preguntar en el chat</button></div>`; }
+  else {
+    const tabla = r.tabla && r.tabla.filas && r.tabla.filas.length ? `<div class="sd-tabla"><table><thead><tr>${r.tabla.columnas.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${r.tabla.filas.slice(0, 8).map((f) => `<tr>${f.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>${r.tabla.filas.length > 8 ? `<div class="sd-mas">y ${r.tabla.filas.length - 8} más</div>` : ''}</div>` : '';
+    box.innerHTML = `${cab}<div class="sd-texto">${formatoDeseret(r.texto)}</div>${tabla}<button type="button" class="sd-chat">Seguir en el chat</button>`;
+  }
+  box.querySelector('.sd-chat')?.addEventListener('click', () => { toggleSearchPanel(false); if (typeof window.preguntarDeseret === 'function') window.preguntarDeseret(q); });
+}
+async function preguntarEnBuscador(q) {
+  clearTimeout(deseretBuscaTimer);
+  const id = ++deseretBuscaId;
+  pintarRespuestaDeseret(q, 'pensando');
+  let r = null;
+  try { r = await api('/search/preguntar', { method: 'POST', body: { q } }); } catch (e) { r = null; }
+  if (id !== deseretBuscaId) return;
+  const actual = document.getElementById('search-input')?.value.trim();
+  if (actual !== q.trim()) return;
+  pintarRespuestaDeseret(q, 'listo', r);
+}
 async function runSearch(query) {
+  clearTimeout(deseretBuscaTimer);
+  if (pareceFrase(query)) {
+    pintarRespuestaDeseret(query, 'ofrecer');
+    deseretBuscaTimer = setTimeout(() => preguntarEnBuscador(query), 1200);
+  } else { deseretBuscaId += 1; pintarRespuestaDeseret(query, 'oculto'); }
   try {
     const data = await api('/search?q=' + encodeURIComponent(query));
     renderSearchResults(data.results, query);
@@ -1806,9 +1900,11 @@ function wireTopbarUtilities() {
     searchInput.addEventListener('input', () => {
       const q = searchInput.value;
       clearTimeout(searchDebounceTimer);
-      if (q.trim().length < 2) { renderSearchResults([], q); return; }
+      if (q.trim().length < 2) { renderSearchResults([], q); clearTimeout(deseretBuscaTimer); pintarRespuestaDeseret(q, 'oculto'); return; }
       searchDebounceTimer = setTimeout(() => runSearch(q), 300);
     });
+    // Enter con una frase: Deseret responde de inmediato.
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && pareceFrase(searchInput.value)) { e.preventDefault(); preguntarEnBuscador(searchInput.value.trim()); } });
   }
   refreshNotifBadge();
 }
@@ -2365,9 +2461,10 @@ function render() {
     </div>
     <div id="search-panel" class="topbar-dropdown-panel" hidden>
       <div class="search-panel-row">
-        <input type="text" id="search-input" placeholder="Buscar actividades, entrevistas, actas, discursos…" autocomplete="off" />
+        <input type="text" id="search-input" placeholder="Busca o pregunta: “compromisos atrasados de la Primaria”" autocomplete="off" />
         <button type="button" class="icon-btn" id="search-close">×</button>
       </div>
+      <div id="search-deseret" hidden></div>
       <div id="search-results"></div>
     </div>
     <div id="notif-panel" class="topbar-dropdown-panel" hidden>
@@ -2692,7 +2789,7 @@ async function renderHomeView() {
     </button>`;
   const timeline = orden.length
     ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
-    : emptyStateHtml('No tienes nada agendado para esta semana', null, '🌤️');
+    : emptyStateHtml('No tienes nada agendado para esta semana', canManageAnyEvents() ? { id: 'home-empty-new', label: '+ Agendar algo' } : null, '🌤️', false, lider ? 'Dame 3 ideas de actividades sencillas para esta semana en mi organización' : null);
 
   container.innerHTML = `
     <div class="view-header">
@@ -2704,6 +2801,7 @@ async function renderHomeView() {
     </div>
     ${primerosPasosHtml(r.primerosPasos)}
     <div class="home-kpis">${kpis}</div>
+    <div id="home-sugerencias"></div>
     ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">📥 Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
     <div class="card home-card"><div class="home-card-t">🗓️ Tu semana</div>${timeline}</div>`;
 
@@ -2715,10 +2813,48 @@ async function renderHomeView() {
   const b1 = document.getElementById('home-buscar-persona');
   if (b1) b1.addEventListener('click', () => abrirBuscadorPersonas());
   wirePrimerosPasos();
+  wireEmptyStateCta('home-empty-new', () => openEventModal(null));
+  if (lider && canManageAnyEvents()) pintarSugerenciasInicio();
   document.getElementById('home-deseret').addEventListener('click', () => {
     const logo = document.querySelector('.topbar-logo');
     if (logo) logo.click();
   });
+}
+
+// Punto 10: "Estados vacíos útiles" en Inicio — organizaciones que no tienen
+// ninguna actividad en los próximos 30 días, con acceso directo para
+// agendar o pedirle ideas a Deseret. El líder ve solo la suya; el Obispado
+// y el Administrador, todas (menos el propio Obispado).
+async function pintarSugerenciasInicio() {
+  const cont = document.getElementById('home-sugerencias');
+  if (!cont) return;
+  const hoy = toISODate(new Date());
+  const hasta = new Date(); hasta.setDate(hasta.getDate() + 30);
+  let eventos = [];
+  try { eventos = await api(`/events?from=${hoy}&to=${toISODate(hasta)}`); } catch (e) { return; }
+  if (state.view !== 'home' || !document.getElementById('home-sugerencias')) return;
+  const todas = state.user.role === 'admin' || isObispadoUser();
+  const orgs = state.organizations.filter((o) => !/obispado|estaca/i.test(o.name) && (todas || o.id === Number(state.user.organizationId)));
+  const conActividad = new Set();
+  for (const e of eventos) {
+    if (e.isMeeting) continue;
+    conActividad.add(Number(e.organizationId));
+    (e.involvedOrganizationIds || []).forEach((id) => conActividad.add(Number(id)));
+  }
+  const sin = orgs.filter((o) => !conActividad.has(o.id)).slice(0, 3);
+  if (!sin.length) return;
+  cont.innerHTML = `<div class="card home-card home-sugerencias">
+    <div class="home-card-t">${icon('sparkle')} Sugerencias</div>
+    ${sin.map((o) => `<div class="home-sug">
+      <span class="org-dot" style="background:${esc(o.color)}"></span>
+      <span class="home-sug-t"><b>${esc(o.name)}</b> no tiene actividades en los próximos 30 días.</span>
+      <span class="home-sug-a">
+        <button type="button" class="btn btn-secondary btn-sm" data-preguntar-deseret="${esc(`Dame 3 ideas de actividades para ${o.name} en las próximas semanas, sencillas y de bajo costo`)}">Ideas</button>
+        <button type="button" class="btn btn-primary btn-sm home-sug-new">Agendar</button>
+      </span>
+    </div>`).join('')}
+  </div>`;
+  cont.querySelectorAll('.home-sug-new').forEach((b) => b.addEventListener('click', () => openEventModal(null)));
 }
 
 // ======================================================================
@@ -2967,7 +3103,7 @@ async function renderCalendarView() {
             <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
           </div>`).join('')}
       </div>
-    </div>`).join('') : emptyStateHtml('Mes libre, sin actividades' + (state.activeOrgIds ? ' con los filtros de organización activos' : ''), null, '🌤️');
+    </div>`).join('') : emptyStateHtml('Mes libre, sin actividades' + (state.activeOrgIds ? ' con los filtros de organización activos' : ''), null, '🌤️', false, canManageAnyEvents() ? 'Dame ideas de actividades para este mes en mi organización' : null);
 
   container.innerHTML = `
     <div class="cal-header">
@@ -3578,11 +3714,12 @@ function openDayModal(iso) {
                   <div class="lc-sub">${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
-              </div>`).join('') : emptyStateHtml('Sin actividades este día', null, '📆')}
+              </div>`).join('') : emptyStateHtml('Sin actividades este día', canManageAnyEvents() ? { id: 'day-empty-new', label: '+ Agendar este día' } : null, '📆')}
           </div>
         </div>
       </div>
     </div>`;
+  wireEmptyStateCta('day-empty-new', () => openEventModal(null, { presetDate: iso }));
   document.getElementById('day-modal-close').addEventListener('click', closeModal);
   document.getElementById('day-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'day-modal-backdrop') closeModal(); });
   modalRoot.querySelectorAll('.list-card').forEach((card) => card.addEventListener('click', () => {
@@ -10495,6 +10632,7 @@ function convenioDefaultValue(it, key) {
 
 async function renderPastoralFocusView() {
   const content = document.getElementById('stats-content');
+  content.innerHTML = skeletonCardsHtml(4);
   let items;
   try { items = await api('/pastoral-focus'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -10735,6 +10873,7 @@ async function renderDirectoryMembersView() {
   // no hace falta un chequeo de permisos aparte del lado cliente; el
   // servidor igual lo vuelve a exigir en cada endpoint /api/directory/*.
   const content = document.getElementById('wg-content');
+  content.innerHTML = skeletonCardsHtml(4);
   let members;
   try { members = await api('/directory/members'); }
   catch (e) { toast(e.message, 'error'); content.innerHTML = '<div class="empty-state">No se pudo cargar</div>'; return; }
@@ -11669,10 +11808,29 @@ async function renderTablero() {
   const tabla = `<div class="tb-tabla-wrap"><table class="tb-tabla"><thead><tr><th></th>${d.trimestres.map((t) => `<th>${esc(t)}</th>`).join('')}</tr></thead>
     <tbody>${d.series.map((s) => `<tr><th>${esc(s.titulo)}</th>${s.valores.map((v) => `<td>${fmt(v, s.unidad)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   content.innerHTML = `
+    <div class="tb-lectura" id="tb-lectura"><div class="tb-lectura-cab"><img src="/deseret.svg" alt="" width="20" height="20" /> <b>Lo que dicen los números</b><button type="button" class="btn btn-ghost btn-sm" id="tb-lectura-otra" hidden>Actualizar</button></div><div class="tb-lectura-txt"><span class="skeleton-line" style="width:92%;height:11px;display:block"></span><span class="skeleton-line" style="width:78%;height:11px;display:block;margin-top:8px"></span><span class="skeleton-line" style="width:60%;height:11px;display:block;margin-top:8px"></span></div></div>
     <div class="tb-head"><p>Últimos 6 trimestres · <b>${esc(d.alcance)}</b></p><button class="btn btn-ghost btn-sm" id="tb-tabla-btn">${state.tableroTabla ? '📈 Ver gráficos' : '🔢 Ver tabla'}</button></div>
     ${state.tableroTabla ? tabla : `<div class="tb-grid">${d.series.map(tile).join('')}</div>`}
     <div class="hint-box" style="margin-top:12px;">Asistencia, recomendaciones y ministración salen de los trimestres cargados en <b>Crecimiento del Barrio</b>; entrevistas, compromisos y actividades se calculan con lo registrado en la app.</div>`;
   document.getElementById('tb-tabla-btn').addEventListener('click', () => { state.tableroTabla = !state.tableroTabla; renderTablero(); });
+  cargarLecturaTablero(false);
+}
+// Punto 20: Deseret explica el tablero en 2 a 4 frases, con una sugerencia.
+async function cargarLecturaTablero(nueva) {
+  const box = document.getElementById('tb-lectura');
+  if (!box) return;
+  const txt = box.querySelector('.tb-lectura-txt');
+  const otra = document.getElementById('tb-lectura-otra');
+  if (nueva) txt.innerHTML = '<span class="skeleton-line" style="width:90%;height:11px;display:block"></span><span class="skeleton-line" style="width:70%;height:11px;display:block;margin-top:8px"></span>';
+  try {
+    const r = await api(`/tablero/lectura${nueva ? '?nueva=1' : ''}`);
+    if (!document.getElementById('tb-lectura')) return;
+    txt.innerHTML = esc(r.texto).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(Sugerencia:)/, '<br><span class="tb-sug">$1</span>');
+  } catch (e) {
+    if (!document.getElementById('tb-lectura')) return;
+    txt.innerHTML = '<span style="color:var(--ink-soft)">Deseret no pudo leer el tablero ahora. Toca "Actualizar" para intentarlo de nuevo.</span>';
+  }
+  if (otra) { otra.hidden = false; otra.onclick = () => cargarLecturaTablero(true); }
 }
 
 async function renderStatsPending() {
@@ -12630,7 +12788,7 @@ async function renderWardGrowthView() {
       <button class="subtab-btn ${state.wardGrowthSubtab === 'instantanea' ? 'active' : ''}" data-tab="instantanea">Instantánea del Barrio</button>
       ${showDirectorio ? `<button class="subtab-btn ${state.wardGrowthSubtab === 'directorio' ? 'active' : ''}" data-tab="directorio">👥 Directorio</button>` : ''}
     </div>
-    <div id="wg-content"><div class="empty-state">Cargando…</div></div>
+    <div id="wg-content">${skeletonCardsHtml(3)}</div>
   `;
   container.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => { state.wardGrowthSubtab = b.dataset.tab; renderWardGrowthView(); }));
   const newQuarterBtn = document.getElementById('wg-new-quarter');

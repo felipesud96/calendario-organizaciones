@@ -5,6 +5,9 @@ import { canSeeMeeting as canSeeCalendarMeeting } from './events.js';
 import { orgSeesAllInterviews } from './interviews.js';
 import { canSeeMeetingRecord } from './meetings.js';
 import { isObispadoLeader } from './stake.js';
+import { consultaLibre } from '../deseretConsulta.js';
+import { hoyEnChile, toISO } from '../chat.js';
+import { jsonRapido, textoRapido } from '../iaRapida.js';
 
 // Módulo "Búsqueda global": una sola caja de texto en la barra superior que
 // busca a la vez en actividades/reuniones del calendario, entrevistas, actas
@@ -19,7 +22,34 @@ function normalizeSearchText(s) {
 
 const MAX_PER_CATEGORY = 8;
 
+// Buscador que entiende frases: "¿cuándo fue la última entrevista del hermano
+// Soto?" o "compromisos atrasados de la Primaria". Usa la misma consulta de
+// SOLO LECTURA de Deseret (deseretConsulta.js), que ya filtra por permisos:
+// nunca crea ni cambia nada.
+const usosPregunta = new Map();
+function preguntaLimitada(id) {
+  const ahora = Date.now();
+  const l = (usosPregunta.get(id) || []).filter((t) => ahora - t < 60_000);
+  l.push(ahora); usosPregunta.set(id, l);
+  return l.length > 15;
+}
+
 export function registerSearchRoutes(router) {
+  router.post('/api/search/preguntar', requireAuth(async (req, res, params, body) => {
+    const q = String(body?.q || '').trim().slice(0, 300);
+    if (q.length < 4) return sendJson(res, 400, { error: 'Pregunta muy corta' });
+    if (preguntaLimitada(req.user.id)) return sendJson(res, 429, { error: 'Espera un momento antes de preguntar de nuevo' });
+    try {
+      const r = await consultaLibre({ mensaje: q, usuario: req.user, data: load(), hoyISO: toISO(hoyEnChile()), planificar: jsonRapido, redactar: textoRapido });
+      if (!r || !r.texto) return sendJson(res, 200, { texto: null });
+      const texto = String(r.texto).replace(/\p{Extended_Pictographic}\uFE0F?/gu, '').trim();
+      sendJson(res, 200, { texto, tabla: r.tabla || null });
+    } catch (e) {
+      console.warn('[buscador] pregunta:', e.message);
+      sendJson(res, 200, { texto: null });
+    }
+  }));
+
   router.get('/api/search', requireAuth(async (req, res) => {
     const raw = String(req.query.q || '').trim();
     if (raw.length < 2) return sendJson(res, 200, { query: raw, results: [] });
