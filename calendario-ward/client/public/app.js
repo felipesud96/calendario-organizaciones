@@ -208,6 +208,7 @@ const ICON_PATHS = {
   sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
   moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
 };
 function icon(name, size = 16) {
   const paths = ICON_PATHS[name];
@@ -6219,6 +6220,79 @@ function wireBudgetCategoryCards(categories) {
   });
 }
 
+// ---------------- Leer boleta con foto (gasto del presupuesto) ----------------
+// Botón "Leer boleta con foto" arriba del formulario de gasto: la foto se
+// achica en el navegador (máx. 1600 px), el servidor la lee con IA
+// (routes/boleta.js) y se PRELLENAN monto, descripción, fecha y —si hay una
+// actividad ese mismo día— la actividad. La persona revisa y guarda.
+// La foto no se guarda en ningún lado.
+function boletaBoxHtml(p) {
+  return `<div class="boleta-box" style="margin-bottom:14px;">
+    <button type="button" class="btn btn-secondary" id="${p}-boleta-btn" style="width:100%; justify-content:center; gap:8px;">${icon('camera')} Leer boleta con foto</button>
+    <input type="file" accept="image/*" id="${p}-boleta-file" style="display:none" />
+    <div id="${p}-boleta-estado" style="display:none; margin-top:8px; font-size:13px; color:var(--ink-soft); display:flex; gap:10px; align-items:center;"></div>
+  </div>`;
+}
+async function achicarFoto(file, max = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise((ok, mal) => { img.onload = ok; img.onerror = mal; img.src = url; });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.85));
+    return { blob, miniatura: c.toDataURL('image/jpeg', 0.5) };
+  } finally { URL.revokeObjectURL(url); }
+}
+function wireBoleta(p, form, events) {
+  const btn = document.getElementById(`${p}-boleta-btn`);
+  const file = document.getElementById(`${p}-boleta-file`);
+  const estado = document.getElementById(`${p}-boleta-estado`);
+  if (!btn || !file) return;
+  estado.style.display = 'none';
+  const poner = (name, v) => { const el = form.elements[name]; if (el && v !== undefined && v !== null && v !== '') { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } };
+  btn.addEventListener('click', () => file.click());
+  file.addEventListener('change', async () => {
+    const f = file.files && file.files[0];
+    file.value = '';
+    if (!f) return;
+    btn.disabled = true;
+    const textoBtn = btn.innerHTML;
+    btn.innerHTML = 'Leyendo la boleta…';
+    try {
+      const { blob, miniatura } = await achicarFoto(f);
+      const fd = new FormData(); fd.append('foto', blob, 'boleta.jpg');
+      const headers = state.token ? { Authorization: `Bearer ${state.token}` } : {};
+      const r = await fetch(API + '/budget/boleta', { method: 'POST', headers, body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+      estado.style.display = 'flex';
+      if (!j.legible) {
+        estado.innerHTML = `<img src="${miniatura}" alt="" style="width:42px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0;" /><span>No pude leer el total de esta boleta. Prueba con otra foto (bien iluminada y derecha) o escribe los datos a mano.</span>`;
+        return;
+      }
+      poner('amount', j.monto);
+      const desc = [j.descripcion, j.comercio ? `(${j.comercio})` : ''].filter(Boolean).join(' ');
+      poner('description', desc.slice(0, 120));
+      if (j.fecha) {
+        poner('date', j.fecha);
+        const sel = form.elements.eventId;
+        const mismoDia = (events || []).find((ev) => ev.date === j.fecha);
+        if (sel && !sel.value && mismoDia) poner('eventId', String(mismoDia.id));
+      }
+      const fechaTxt = j.fecha ? fmtDateHuman(j.fecha) : 'sin fecha';
+      estado.innerHTML = `<img src="${miniatura}" alt="" style="width:42px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0;" /><span><strong style="color:var(--ink)">$${Number(j.monto).toLocaleString('es-CL')}</strong> · ${esc(fechaTxt)}${j.comercio ? ` · ${esc(j.comercio)}` : ''}<br>Revisa los datos antes de guardar.</span>`;
+    } catch (e) {
+      estado.style.display = 'flex';
+      estado.innerHTML = `<span class="error-msg" style="margin:0">${esc(e.message)}</span>`;
+    } finally {
+      btn.disabled = false; btn.innerHTML = textoBtn;
+    }
+  });
+}
+
 async function openBudgetExpenseModal(cat, existing = null) {
   const isEdit = !!existing;
   let events = [];
@@ -6239,6 +6313,7 @@ async function openBudgetExpenseModal(cat, existing = null) {
         <div class="modal-header"><h3>${isEdit ? 'Editar gasto' : 'Registrar gasto'} — ${esc(cat.categoryName)}</h3><button class="modal-close" id="be-modal-close">×</button></div>
         <div class="modal-body">
           <div id="be-error"></div>
+          ${isEdit ? '' : boletaBoxHtml('be')}
           <form id="be-form">
             <div class="field">
               <label>Monto</label>
@@ -6280,6 +6355,7 @@ async function openBudgetExpenseModal(cat, existing = null) {
     catch (e) { toast(e.message, 'error'); }
   });
   const form = document.getElementById('be-form');
+  if (!isEdit) wireBoleta('be', form, events);
   document.getElementById('be-save').addEventListener('click', async () => {
     if (!form.reportValidity()) return;
     const fd = new FormData(form);
@@ -6389,6 +6465,7 @@ async function openExpenseRequestModal(cat) {
         <div class="modal-body">
           <div id="ber-error"></div>
           <div class="hint-box" style="margin-top:0;">El Manual General pide obtener la aprobación del Obispo antes de gastar dinero para actividades (20.2.6). Esta solicitud llega al Obispado/Administrador, que la aprueba o la rechaza — recién ahí queda registrada como gasto.</div>
+          ${boletaBoxHtml('ber')}
           <form id="ber-form">
             <div class="field">
               <label>Monto</label>
@@ -6425,6 +6502,7 @@ async function openExpenseRequestModal(cat) {
   document.getElementById('ber-cancel').addEventListener('click', berGuardedClose);
   document.getElementById('ber-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ber-modal-backdrop') berGuardedClose(); });
   const berForm = document.getElementById('ber-form');
+  wireBoleta('ber', berForm, events);
   document.getElementById('ber-save').addEventListener('click', async () => {
     if (!berForm.reportValidity()) return;
     const fd = new FormData(berForm);

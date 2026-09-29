@@ -224,6 +224,8 @@
       S.datos = $('af-datos').checked; S.qr = $('af-qr').checked;
       $('af-resumen').textContent = resumenMas();
     };
+    // Dictado por voz en la idea (el mismo micrófono de los demás campos de la app).
+    try { if ((window.SpeechRecognition || window.webkitSpeechRecognition) && typeof wireDictation === 'function') wireDictation($('af-idea')); } catch (x) { /* sin dictado */ }
     raiz().querySelectorAll('.af-chip').forEach((b) => b.addEventListener('click', () => {
       o[b.dataset.g] = b.dataset.k;
       b.parentElement.querySelectorAll('.af-chip').forEach((x) => x.classList.toggle('on', x === b));
