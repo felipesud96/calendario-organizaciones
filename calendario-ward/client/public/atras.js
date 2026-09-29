@@ -23,10 +23,10 @@
     const er = document.getElementById('escucha-root');
     return !!(er && er.querySelector('.modal-backdrop'));
   };
-  const aficheAbierto = () => {
-    const ar = document.getElementById('afiche-root');
-    return !!(ar && ar.querySelector('.modal-backdrop'));
-  };
+  // Ventanas que se abren encima de todo (afiche, preparativos, ficha de organización).
+  const ENCIMA = ['afiche-root', 'prep-root', 'orgf-root'];
+  const raizEncima = () => ENCIMA.map((id) => document.getElementById(id)).find((r) => r && r.querySelector('.modal-backdrop')) || null;
+  const aficheAbierto = () => !!raizEncima();
   const chatAbierto = () => {
     const cw = document.getElementById('chat-window');
     return !!(cw && cw.style.display !== 'none');
@@ -59,7 +59,7 @@
   window.addEventListener('popstate', () => {
     if (ignorarPop) { ignorarPop = false; return; }
     armado = false;
-    if (aficheAbierto()) cerrarVentana(document.getElementById('afiche-root'));
+    if (aficheAbierto()) cerrarVentana(raizEncima());
     else if (escuchaAbierta()) cerrarVentana(document.getElementById('escucha-root'));
     else if (modalAbierto()) cerrarVentana(document.getElementById('modal-root'));
     else if (chatAbierto()) { const b = document.getElementById('chat-close-btn'); if (b) b.click(); }

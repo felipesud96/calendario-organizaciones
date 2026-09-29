@@ -2707,7 +2707,7 @@ function wireMobileFab() {
 // Resume lo que a esta persona le toca hoy y los próximos 7 días, sacado
 // de GET /api/mi-semana (server/src/semana.js), con los mismos permisos de
 // cada módulo. Cada elemento lleva a la pestaña donde se gestiona.
-const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹' };
+const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹', preparativo: '☑️' };
 
 function puedeVerFichasCliente() {
   return !!state.user && ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(state.user.role);
@@ -2775,14 +2775,15 @@ async function renderHomeView() {
 
   // Línea de tiempo: todo junto, agrupado por día.
   const todo = [...r.compromisos.filter((c) => c.atrasado).map((c) => ({ ...c, fechaGrupo: 'atrasado' })),
-    ...r.entrevistas, ...r.compromisos.filter((c) => !c.atrasado), ...r.actividades, ...(r.aseo || [])]
+    ...(r.preparativos || []).filter((c) => c.atrasado).map((c) => ({ ...c, fechaGrupo: 'atrasado' })),
+    ...r.entrevistas, ...r.compromisos.filter((c) => !c.atrasado), ...(r.preparativos || []).filter((c) => !c.atrasado), ...r.actividades, ...(r.aseo || [])]
     .map((x) => ({ ...x, fechaGrupo: x.fechaGrupo || (x.atrasado ? 'atrasado' : x.fecha) }));
   const grupos = new Map();
   for (const x of todo) { if (!grupos.has(x.fechaGrupo)) grupos.set(x.fechaGrupo, []); grupos.get(x.fechaGrupo).push(x); }
   const orden = [...grupos.keys()].sort((a, b) => (a === 'atrasado' ? -1 : b === 'atrasado' ? 1 : a.localeCompare(b)));
   const etiquetaDia = (k) => (k === 'atrasado' ? '⚠️ Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : fmtDateHuman(k));
   const itemHtml = (x) => `
-    <button type="button" class="home-item" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} style="--c:${/^#[0-9a-f]{3,6}$/i.test(x.color || '') ? x.color : 'var(--celeste)'}">
+    <button type="button" class="home-item" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${/^#[0-9a-f]{3,6}$/i.test(x.color || '') ? x.color : 'var(--celeste)'}">
       <span class="home-item-bar"></span>
       <span class="home-item-hora">${esc(x.hora || '')}</span>
       <span class="home-item-main"><span class="home-item-t">${TIPO_ICONO[x.tipo] || ''} ${esc(x.titulo)}</span><span class="home-item-s">${esc(x.org || '')}</span></span>
@@ -2796,20 +2797,25 @@ async function renderHomeView() {
       <div><h2>Hola, ${esc(nombre)} 👋</h2><p>Tu semana: ${esc(fmtDateHuman(r.desde))} al ${esc(fmtDateHuman(r.hasta))}</p></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         ${puedeVerFichasCliente() ? '<button class="btn btn-secondary" id="home-buscar-persona">🔎 Buscar persona</button>' : ''}
+        ${puedeVerFichaOrganizacion() ? `<button class="btn btn-secondary" id="home-mi-org">${icon('users')} Mi organización</button>` : ''}
         <button class="btn btn-primary btn-deseret" id="home-deseret"><img src="/deseret.svg" alt="" width="22" height="22" /> Preguntarle a Deseret</button>
       </div>
     </div>
     ${primerosPasosHtml(r.primerosPasos)}
+    ${accesosRapidosHtml()}
     <div class="home-kpis">${kpis}</div>
     <div id="home-sugerencias"></div>
     ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">📥 Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
     <div class="card home-card"><div class="home-card-t">🗓️ Tu semana</div>${timeline}</div>`;
 
   container.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => {
+    if (el.dataset.prepEv && typeof window.abrirPreparativos === 'function') { window.abrirPreparativos(Number(el.dataset.prepEv)); return; }
     state.view = el.dataset.view;
     if (state.view === 'interviews') state.interviewsSubtab = el.dataset.sub || 'pending';
     renderCurrentView();
   }));
+  document.getElementById('home-mi-org')?.addEventListener('click', () => { if (typeof window.abrirFichaOrganizacion === 'function') window.abrirFichaOrganizacion(miOrgParaFicha()); });
+  wireAccesosRapidos();
   const b1 = document.getElementById('home-buscar-persona');
   if (b1) b1.addEventListener('click', () => abrirBuscadorPersonas());
   wirePrimerosPasos();
@@ -2818,6 +2824,75 @@ async function renderHomeView() {
   document.getElementById('home-deseret').addEventListener('click', () => {
     const logo = document.querySelector('.topbar-logo');
     if (logo) logo.click();
+  });
+}
+
+// Ficha de organización (organizar.js): no es un módulo nuevo, se abre
+// desde Inicio. El líder ve la suya; Obispado/Admin/Secretario pueden
+// cambiar de organización dentro de la misma ventana.
+function puedeVerFichaOrganizacion() {
+  const u = state.user;
+  if (!u) return false;
+  if (u.role === 'admin' || u.role === 'ward_clerk' || isObispadoUser()) return true;
+  return ['leader', 'executive_secretary'].includes(u.role) && !!u.organizationId;
+}
+function miOrgParaFicha() {
+  const u = state.user;
+  if (u.organizationId && !(isObispadoUser() || u.role === 'admin')) return Number(u.organizationId);
+  const primera = state.organizations.find((o) => !/obispado|estaca/i.test(o.name)) || state.organizations[0];
+  return u.organizationId && !isObispadoUser() ? Number(u.organizationId) : primera?.id;
+}
+
+// Punto 7: accesos rápidos en Inicio. Se aprende de las pestañas que más
+// usa cada persona (en este dispositivo) y se pueden fijar favoritas.
+const CLAVE_USO = 'accesos_uso_v1';
+const CLAVE_FIJOS = 'accesos_fijos_v1';
+const leerJSON = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) || def; } catch (e) { return def; } };
+const guardarJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* sin almacenamiento */ } };
+function registrarAcceso(view) {
+  if (!view || view === 'home' || !TAB_DEFS[view]) return;
+  const uso = leerJSON(CLAVE_USO, {});
+  uso[view] = (uso[view] || 0) + 1;
+  guardarJSON(CLAVE_USO, uso);
+}
+function accesosVisibles() {
+  return tabOrderFor().filter((k) => k !== 'home' && TAB_DEFS[k] && TAB_DEFS[k].visible());
+}
+function misAccesos() {
+  const visibles = new Set(accesosVisibles());
+  const fijos = leerJSON(CLAVE_FIJOS, []).filter((k) => visibles.has(k));
+  const uso = leerJSON(CLAVE_USO, {});
+  const usados = Object.entries(uso).filter(([k, n]) => n >= 2 && visibles.has(k) && !fijos.includes(k)).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  return { fijos, lista: [...fijos, ...usados].slice(0, 5) };
+}
+const nombreAcceso = (k) => String(TAB_DEFS[k].navLabel || TAB_DEFS[k].label).replace(/^\p{Extended_Pictographic}\s*/u, '');
+function accesosRapidosHtml() {
+  const { fijos, lista } = misAccesos();
+  if (!lista.length) return '';
+  return `<div class="home-accesos"><span class="home-accesos-t">Tus accesos</span>
+    ${lista.map((k) => `<button type="button" class="home-acceso ${fijos.includes(k) ? 'fijo' : ''}" data-acceso="${k}">${esc(nombreAcceso(k))}</button>`).join('')}
+    <button type="button" class="home-acceso-editar" id="home-accesos-editar" title="Elegir accesos fijos">${icon('edit', 14)}</button></div>`;
+}
+function wireAccesosRapidos() {
+  document.querySelectorAll('[data-acceso]').forEach((b) => b.addEventListener('click', () => { state.view = b.dataset.acceso; renderCurrentView(); }));
+  document.getElementById('home-accesos-editar')?.addEventListener('click', abrirEditorAccesos);
+}
+function abrirEditorAccesos() {
+  const fijos = new Set(leerJSON(CLAVE_FIJOS, []));
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `<div class="modal-backdrop" id="acc-fondo"><div class="modal">
+    <div class="modal-header"><h3>Tus accesos rápidos</h3><button class="modal-close" id="acc-cerrar">×</button></div>
+    <div class="modal-body"><p style="font-size:13px;color:var(--ink-soft);margin:0 0 10px">Marca las secciones que quieres siempre a mano en Inicio. Las demás aparecen solas según lo que más usas.</p>
+      ${accesosVisibles().map((k) => `<label class="acc-op"><input type="checkbox" value="${k}" ${fijos.has(k) ? 'checked' : ''}/> ${esc(nombreAcceso(k))}</label>`).join('')}
+    </div>
+    <div class="modal-footer" style="justify-content:flex-end"><button class="btn btn-ghost" id="acc-limpiar">Olvidar lo que más uso</button><button class="btn btn-primary" id="acc-ok">Listo</button></div></div></div>`;
+  const cerrar = () => { closeModal(); if (state.view === 'home') renderHomeView(); };
+  document.getElementById('acc-cerrar').addEventListener('click', cerrar);
+  document.getElementById('acc-fondo').addEventListener('click', (e) => { if (e.target.id === 'acc-fondo') cerrar(); });
+  document.getElementById('acc-limpiar').addEventListener('click', () => { guardarJSON(CLAVE_USO, {}); toast('Listo: se reinició el aprendizaje de accesos'); });
+  document.getElementById('acc-ok').addEventListener('click', () => {
+    guardarJSON(CLAVE_FIJOS, [...modalRoot.querySelectorAll('.acc-op input:checked')].map((i) => i.value).slice(0, 5));
+    cerrar();
   });
 }
 
@@ -2970,6 +3045,7 @@ function renderCurrentView() {
     viewRoot.classList.add('view-fade-in');
   }
   if (!TAB_DEFS[state.view] && state.view !== 'bishopricPanel') state.view = 'home';
+  registrarAcceso(state.view);
   if (state.view === 'home') renderHomeView();
   else if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'bishopricPanel') renderBishopricPanelView();
@@ -3711,7 +3787,7 @@ function openDayModal(iso) {
                 <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                  <div class="lc-sub">${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                  <div class="lc-sub">${it.kind === 'event' ? prepPillHtml(it) : ''}${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : emptyStateHtml('Sin actividades este día', canManageAnyEvents() ? { id: 'day-empty-new', label: '+ Agendar este día' } : null, '📆')}
@@ -3730,6 +3806,13 @@ function openDayModal(iso) {
 }
 
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+// Pastilla "Preparación 60%" / "Lista" para actividades con preparativos.
+function prepPillHtml(it) {
+  const l = Array.isArray(it.preparativos) ? it.preparativos : [];
+  if (!l.length) return '';
+  const pct = Math.round((l.filter((x) => x.hecho).length / l.length) * 100);
+  return `<span class="status-pill ${pct === 100 ? 'status-green' : 'status-blue'}" style="margin-right:6px">${pct === 100 ? 'Lista' : `Preparación ${pct}%`}</span>`;
+}
 
 // Reemplaza al confirm() nativo del navegador (que se ve distinto en cada
 // sistema operativo y no se puede estilizar) por un modal propio, con el
@@ -3991,6 +4074,7 @@ function openReadOnlyModal(item, kind) {
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">${phoneWithWhatsAppHtml(item.memberPhone, '📞 ' + esc(item.memberPhone))}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
+          ${kind === 'event' && !item.isMeeting ? '<div id="prep-caja"></div>' : ''}
           ${kind === 'event' && item.supervisingAdults && item.supervisingAdults.length ? `<div class="ro-detail-row">🧑‍🤝‍🧑 Adultos supervisores: ${item.supervisingAdults.map(esc).join(', ')}</div>` : ''}
           ${kind === 'stake' ? `<div class="hint-box" style="margin-top:10px;">🔗 Sincronizada automáticamente desde el calendario de Estaca — no se puede editar aquí. ${item.blocking === false ? 'Es informativa: no bloquea que se agende algo encima.' : 'Tiene prioridad: no se puede agendar algo encima sin autorización del líder de Obispado.'}</div>` : ''}
           ${rsvpApplies(item, kind) ? rsvpSectionHtml(item) : ''}
@@ -4007,6 +4091,7 @@ function openReadOnlyModal(item, kind) {
   document.getElementById('ro-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ro-modal-backdrop') closeModal(); });
   const roAddCal = document.getElementById('ro-add-calendar');
   if (roAddCal) roAddCal.addEventListener('click', () => downloadEventIcs(item.id, item.title));
+  if (kind === 'event' && !item.isMeeting && typeof window.pintarPreparativosEn === 'function') window.pintarPreparativosEn(document.getElementById('prep-caja'), item);
   const roAfiche = document.getElementById('ro-afiche');
   if (roAfiche) roAfiche.addEventListener('click', () => { if (typeof window.abrirAfiche === 'function') window.abrirAfiche(item); });
   if (rsvpApplies(item, kind)) wireRsvpButtons(item);
@@ -4844,6 +4929,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
             </div>
             <div id="ev-monday-warning"></div>
           </form>
+          ${isEdit && !existing.isMeeting ? '<div id="prep-caja"></div>' : ''}
         </div>
         <div class="modal-footer" style="flex-wrap:wrap;">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -4874,6 +4960,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
   let evFormDirtyForDuplicate = false;
   document.getElementById('ev-form').addEventListener('input', () => { evFormDirtyForDuplicate = true; });
   document.getElementById('ev-form').addEventListener('change', () => { evFormDirtyForDuplicate = true; });
+  if (isEdit && !existing.isMeeting && typeof window.pintarPreparativosEn === 'function') window.pintarPreparativosEn(document.getElementById('prep-caja'), existing);
   const evAficheBtn = document.getElementById('ev-afiche');
   if (evAficheBtn) evAficheBtn.addEventListener('click', () => { if (typeof window.abrirAfiche === 'function') window.abrirAfiche(existing); });
   const duplicateBtn = document.getElementById('ev-duplicate');

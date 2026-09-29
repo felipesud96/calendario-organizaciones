@@ -14,6 +14,7 @@ import { canScheduleOrg, orgSeesAllInterviews } from './routes/interviews.js';
 import { canSeeMeeting } from './routes/events.js';
 import { sendUserPush } from './webpush.js';
 import { notifEnabled } from './notifications.js';
+import { preparativosDe } from './routes/preparativos.js';
 
 const ZONA = process.env.TZ_APP || 'America/Santiago';
 function ahoraChile() {
@@ -87,11 +88,14 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
     .filter((s) => s.date >= ini || s.status === 'scheduled')
     .map((s) => ({ tipo: 'aseo', fecha: s.date, hora: '', titulo: s.familyName, org: s.date < hoy ? 'Sin confirmar' : 'Aseo del edificio', color: null, atrasado: s.date < hoy, vista: 'cleaning' })) : [];
 
+  // Preparativos de actividades asignados a esta persona (tenga el rol que tenga).
+  const preparativos = preparativosDe(user, data, fin);
+
   const atrasados = compromisos.filter((c) => c.atrasado).length;
   return {
     desde: ini, hasta: fin, hoy,
     totales: { entrevistas: entrevistas.length, solicitudes: solicitudes.length, compromisos: compromisos.length, atrasados, actividades: actividades.length, sinMarcar },
-    entrevistas, solicitudes, compromisos, actividades: actividades.slice(0, 20), aseo,
+    entrevistas, solicitudes, compromisos, actividades: actividades.slice(0, 20), aseo, preparativos,
   };
 }
 

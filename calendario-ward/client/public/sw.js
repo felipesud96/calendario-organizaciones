@@ -17,7 +17,7 @@
 // Al cerrar sesión, app.js borra la caché de datos (CACHE_DATOS).
 const CACHE_APP = 'organizasion-app-v1';
 const CACHE_DATOS = 'organizasion-datos-v1';
-const APP_SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/chatWidget.js', '/escucha.js', '/atras.js', '/afiche.js', '/deseret.svg', '/logo-bee.png', '/manifest.json', '/icon-192.png', '/vendor/qrcode.js'];
+const APP_SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/chatWidget.js', '/escucha.js', '/atras.js', '/afiche.js', '/organizar.js', '/deseret.svg', '/logo-bee.png', '/manifest.json', '/icon-192.png', '/vendor/qrcode.js'];
 // Nunca se guardan: el chat, la voz, la sesión, datos públicos del enlace y archivos.
 // (/api/auth/me sí se guarda: sin él, la app no sabría quién eres al abrirla sin internet.)
 const SIN_CACHE = /^\/api\/(chat|tts|escucha|afiches|auth\/(?!me$)|push|public|deseret|backups|admin-backup)|\/(export|download|pdf|ics)\b/;

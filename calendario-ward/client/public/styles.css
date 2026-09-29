@@ -1578,3 +1578,15 @@ html[data-movimiento="reducido"] *, html[data-movimiento="reducido"] *::before, 
 .tb-lectura-cab .btn { margin-left: auto; }
 .tb-lectura-txt { font-size: 14px; line-height: 1.55; color: var(--ink); }
 .tb-sug { display: inline-block; margin-top: 6px; font-weight: 600; color: var(--celeste-dark); }
+
+/* ---------- Punto 7: accesos rápidos en Inicio ---------- */
+.home-accesos { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
+.home-accesos-t { font-size: 12.5px; color: var(--ink-soft); margin-right: 2px; }
+.home-acceso { border: 1px solid var(--border); background: var(--white); color: var(--ink); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.home-acceso:hover { border-color: var(--celeste); background: var(--celeste-lighter); }
+.home-acceso.fijo { border-color: var(--celeste-dark); color: var(--celeste-dark); font-weight: 600; }
+.home-acceso-editar { border: 0; background: none; color: var(--ink-soft); cursor: pointer; padding: 6px; border-radius: 8px; display: grid; place-items: center; }
+.home-acceso-editar:hover { background: var(--celeste-lighter); }
+.acc-op { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; cursor: pointer; }
+.acc-op:first-of-type { border-top: 0; }
+.acc-op input { width: 18px; height: 18px; accent-color: var(--celeste-dark); }
