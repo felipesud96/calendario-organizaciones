@@ -108,38 +108,46 @@ function promptBasico(o) {
 // Deseret redacta con Gemini; si Gemini está saturado (503) se reintenta una
 // vez y, si sigue fallando, se usa Groq (si hay clave). Sin ninguno, se arma
 // un prompt básico con las opciones elegidas.
-async function preguntarGemini(sistema, texto, temperatura = 0.7) {
-  const g = clienteGemini();
-  if (g) {
-    for (let intento = 0; intento < 2; intento += 1) {
-      try {
-        const r = await g.models.generateContent({
-          model: GEMINI_MODEL(),
-          contents: [{ role: 'user', parts: [{ text: texto }] }],
-          config: { systemInstruction: sistema, temperature: temperatura },
-        });
-        const t = String(r?.text || '').trim();
-        if (t) return t;
-      } catch (e) {
-        console.warn('[afiches] Gemini:', String(e.message).slice(0, 160));
-        if (!/503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(String(e.message)) || intento) break;
-        await new Promise((ok) => setTimeout(ok, 1500));
-      }
-    }
+const conTope = (promesa, ms, que) => Promise.race([promesa, new Promise((_, mal) => setTimeout(() => mal(new Error(`${que}: sin respuesta en ${ms / 1000} s`)), ms))]);
+
+// Redactar el prompt: primero Groq (responde en ~1 s), y si no hay clave o
+// falla, Gemini (con tope de 10 s y un reintento si está saturado). Sin
+// ninguno, se arma un prompt básico con las opciones elegidas.
+async function preguntarGroq(sistema, texto, temperatura) {
+  if (!process.env.GROQ_API_KEY) return null;
+  try {
+    const r = await fetch(process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', temperature: temperatura, messages: [{ role: 'system', content: sistema }, { role: 'user', content: texto }] }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+    return String(j?.choices?.[0]?.message?.content || '').trim() || null;
+  } catch (e) {
+    console.warn('[afiches] Groq:', String(e.message).slice(0, 160));
+    return null;
   }
-  if (process.env.GROQ_API_KEY) {
+}
+async function preguntarGemini(sistema, texto, temperatura = 0.7) {
+  const rapido = await preguntarGroq(sistema, texto, temperatura);
+  if (rapido) return rapido;
+  const g = clienteGemini();
+  if (!g) return null;
+  for (let intento = 0; intento < 2; intento += 1) {
     try {
-      const r = await fetch(process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', temperature: temperatura, messages: [{ role: 'system', content: sistema }, { role: 'user', content: texto }] }),
-        signal: AbortSignal.timeout(20_000),
-      });
-      const j = await r.json();
-      const t = String(j?.choices?.[0]?.message?.content || '').trim();
+      const r = await conTope(g.models.generateContent({
+        model: GEMINI_MODEL(),
+        contents: [{ role: 'user', parts: [{ text: texto }] }],
+        config: { systemInstruction: sistema, temperature: temperatura },
+      }), 10_000, 'Gemini');
+      const t = String(r?.text || '').trim();
       if (t) return t;
     } catch (e) {
-      console.warn('[afiches] Groq:', String(e.message).slice(0, 160));
+      console.warn('[afiches] Gemini:', String(e.message).slice(0, 160));
+      if (!/503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(String(e.message)) || intento) break;
+      await new Promise((ok) => setTimeout(ok, 1500));
     }
   }
   return null;
@@ -177,7 +185,7 @@ async function pintar(prompt) {
     headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json' },
     // (FLUX schnell en Cloudflare no acepta "seed": cada pedido ya sale distinto.)
     body: JSON.stringify({ prompt, steps: 4 }),
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(45_000),
   });
   let j = null;
   try { j = await r.json(); } catch (e) { /* nada */ }
@@ -243,12 +251,16 @@ export function registerAfichesRoutes(router) {
     const devolverCupo = () => withDb((db) => { if (db.afichesUso?.fecha === hoy() && db.afichesUso.n > 0) db.afichesUso.n -= 1; }).catch(() => {});
     try {
       // "Otra versión" (sin cambios) reutiliza el mismo prompt con otra semilla.
+      const t0 = Date.now();
+      console.log(`[afiches] ${req.user.name || req.user.id} pide un afiche: "${o.titulo || o.idea.slice(0, 40)}"`);
       const prompt = o.previo && !o.retoques.length && b.mismoPrompt ? o.previo : await construirPrompt(o);
+      console.log(`[afiches] prompt listo en ${((Date.now() - t0) / 1000).toFixed(1)} s; pintando en Cloudflare…`);
       // Para que "Otra versión" no se parezca demasiado, se varía un poco el encuadre.
       const VARIANTES = ['wide shot', 'medium shot', 'slightly different angle', 'soft morning light', 'warm golden hour light', 'gentle depth of field', 'from a low angle'];
       const extra = b.mismoPrompt ? VARIANTES[Math.floor(Math.random() * VARIANTES.length)] : '';
       const seed = null;
       const img = await pintar(extra ? `${prompt} ${extra}.` : prompt);
+      console.log(`[afiches] imagen lista (${Math.round(img.length / 1024)} KB) en ${((Date.now() - t0) / 1000).toFixed(1)} s`);
       fs.mkdirSync(DIR, { recursive: true });
       const afiche = await withDb((db) => {
         db.afiches = db.afiches || [];
@@ -278,6 +290,7 @@ export function registerAfichesRoutes(router) {
       const msg = e.status === 429 ? 'Se agotó la cuota gratis de Cloudflare por hoy. Mañana se renueva.'
         : (e.status === 401 || e.status === 403) ? 'Cloudflare rechazó la clave: revisa CLOUDFLARE_ACCOUNT_ID y CLOUDFLARE_API_TOKEN en Render.'
           : /flag|nsfw|safety/i.test(e.message) ? 'La imagen fue bloqueada por el filtro de contenido. Prueba describiéndola de otra forma.'
+            : /timeout|aborted|sin respuesta/i.test(e.message) ? 'Cloudflare tardó demasiado en responder. Inténtalo de nuevo.'
             : 'No se pudo pintar el afiche ahora. Inténtalo de nuevo en un momento.';
       sendJson(res, 502, { error: msg });
     }

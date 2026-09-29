@@ -19,7 +19,13 @@
   const aviso = (m, t) => { try { toast(m, t); } catch (x) { console.log(m); } };
   async function pedir(ruta, opts = {}) {
     const headers = { ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(token() ? { Authorization: `Bearer ${token()}` } : {}) };
-    const r = await fetch('/api' + ruta, { method: opts.method || (opts.json !== undefined || opts.form ? 'POST' : 'GET'), headers, body: opts.form || (opts.json !== undefined ? JSON.stringify(opts.json) : undefined) });
+    // Tope de 100 s: si algo se queda pegado, se avisa en vez de girar para siempre.
+    let r;
+    try {
+      r = await fetch('/api' + ruta, { method: opts.method || (opts.json !== undefined || opts.form ? 'POST' : 'GET'), headers, body: opts.form || (opts.json !== undefined ? JSON.stringify(opts.json) : undefined), signal: AbortSignal.timeout ? AbortSignal.timeout(100_000) : undefined });
+    } catch (x) {
+      throw new Error(x && x.name === 'TimeoutError' ? 'El servidor tardó demasiado. Inténtalo de nuevo en un momento.' : 'Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.');
+    }
     if (opts.blob && r.ok) return r.blob();
     let j = null; try { j = await r.json(); } catch (x) { /* sin cuerpo */ }
     if (!r.ok) throw new Error((j && j.error) || `Error ${r.status}`);
