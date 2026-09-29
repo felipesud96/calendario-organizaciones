@@ -105,20 +105,44 @@ function promptBasico(o) {
   return partes.filter(Boolean).join(', ').slice(0, 1900);
 }
 
+// Deseret redacta con Gemini; si Gemini está saturado (503) se reintenta una
+// vez y, si sigue fallando, se usa Groq (si hay clave). Sin ninguno, se arma
+// un prompt básico con las opciones elegidas.
 async function preguntarGemini(sistema, texto, temperatura = 0.7) {
   const g = clienteGemini();
-  if (!g) return null;
-  try {
-    const r = await g.models.generateContent({
-      model: GEMINI_MODEL(),
-      contents: [{ role: 'user', parts: [{ text: texto }] }],
-      config: { systemInstruction: sistema, temperature: temperatura },
-    });
-    return String(r?.text || '').trim() || null;
-  } catch (e) {
-    console.warn('[afiches] Gemini:', e.message);
-    return null;
+  if (g) {
+    for (let intento = 0; intento < 2; intento += 1) {
+      try {
+        const r = await g.models.generateContent({
+          model: GEMINI_MODEL(),
+          contents: [{ role: 'user', parts: [{ text: texto }] }],
+          config: { systemInstruction: sistema, temperature: temperatura },
+        });
+        const t = String(r?.text || '').trim();
+        if (t) return t;
+      } catch (e) {
+        console.warn('[afiches] Gemini:', String(e.message).slice(0, 160));
+        if (!/503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(String(e.message)) || intento) break;
+        await new Promise((ok) => setTimeout(ok, 1500));
+      }
+    }
   }
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const r = await fetch(process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', temperature: temperatura, messages: [{ role: 'system', content: sistema }, { role: 'user', content: texto }] }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const j = await r.json();
+      const t = String(j?.choices?.[0]?.message?.content || '').trim();
+      if (t) return t;
+    } catch (e) {
+      console.warn('[afiches] Groq:', String(e.message).slice(0, 160));
+    }
+  }
+  return null;
 }
 
 const SISTEMA_PROMPT = `You write prompts for the FLUX image model to illustrate posters for activities of a local congregation (ward) of The Church of Jesus Christ of Latter-day Saints in Chile.
@@ -145,13 +169,14 @@ async function construirPrompt(o) {
 }
 
 // ---------------- Cloudflare ----------------
-async function pintar(prompt, seed) {
+async function pintar(prompt) {
   const c = config();
   const url = c.url || `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(c.cuenta)}/ai/run/${MODELO}`;
   const r = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, seed, steps: 4 }),
+    // (FLUX schnell en Cloudflare no acepta "seed": cada pedido ya sale distinto.)
+    body: JSON.stringify({ prompt, steps: 4 }),
     signal: AbortSignal.timeout(60_000),
   });
   let j = null;
@@ -219,8 +244,11 @@ export function registerAfichesRoutes(router) {
     try {
       // "Otra versión" (sin cambios) reutiliza el mismo prompt con otra semilla.
       const prompt = o.previo && !o.retoques.length && b.mismoPrompt ? o.previo : await construirPrompt(o);
-      const seed = Math.floor(Math.random() * 2_000_000_000) + 1;
-      const img = await pintar(prompt, seed);
+      // Para que "Otra versión" no se parezca demasiado, se varía un poco el encuadre.
+      const VARIANTES = ['wide shot', 'medium shot', 'slightly different angle', 'soft morning light', 'warm golden hour light', 'gentle depth of field', 'from a low angle'];
+      const extra = b.mismoPrompt ? VARIANTES[Math.floor(Math.random() * VARIANTES.length)] : '';
+      const seed = null;
+      const img = await pintar(extra ? `${prompt} ${extra}.` : prompt);
       fs.mkdirSync(DIR, { recursive: true });
       const afiche = await withDb((db) => {
         db.afiches = db.afiches || [];
