@@ -207,6 +207,7 @@ const ICON_PATHS = {
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   sun: '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
   moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
 };
 function icon(name, size = 16) {
   const paths = ICON_PATHS[name];
@@ -3858,6 +3859,7 @@ function openReadOnlyModal(item, kind) {
         </div>
         <div class="modal-footer" style="justify-content:flex-end;">
           ${kind === 'event' ? `<button type="button" class="btn btn-secondary" id="ro-add-calendar">📅 Agregar a mi calendario</button>` : ''}
+          ${kind === 'event' && !item.isMeeting && (item.posterId || state.user.role !== 'member') ? `<button type="button" class="btn btn-secondary" id="ro-afiche">${icon('image')} ${item.posterId ? 'Ver afiche' : 'Crear afiche'}</button>` : ''}
           <button class="btn btn-secondary" id="ro-modal-close2">Cerrar</button>
         </div>
       </div>
@@ -3867,6 +3869,8 @@ function openReadOnlyModal(item, kind) {
   document.getElementById('ro-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'ro-modal-backdrop') closeModal(); });
   const roAddCal = document.getElementById('ro-add-calendar');
   if (roAddCal) roAddCal.addEventListener('click', () => downloadEventIcs(item.id, item.title));
+  const roAfiche = document.getElementById('ro-afiche');
+  if (roAfiche) roAfiche.addEventListener('click', () => { if (typeof window.abrirAfiche === 'function') window.abrirAfiche(item); });
   if (rsvpApplies(item, kind)) wireRsvpButtons(item);
 }
 
@@ -4703,11 +4707,12 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
             <div id="ev-monday-warning"></div>
           </form>
         </div>
-        <div class="modal-footer">
-          <div style="display:flex; gap:8px;">
+        <div class="modal-footer" style="flex-wrap:wrap;">
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
             ${isEdit ? `<button class="btn btn-danger" id="ev-delete">Eliminar</button>` : ''}
             ${isEdit ? `<button type="button" class="btn btn-secondary" id="ev-duplicate">${icon('copy')} Duplicar</button>` : ''}
             ${isEdit ? `<button type="button" class="btn btn-secondary" id="ev-add-calendar">📅 Agregar a mi calendario</button>` : ''}
+            ${isEdit && !existing.isMeeting ? `<button type="button" class="btn btn-secondary" id="ev-afiche" title="${existing.posterId ? 'Ver el afiche de la actividad' : 'Crear un afiche para compartir'}">${icon('image')} Afiche</button>` : ''}
           </div>
           <div style="display:flex; gap:8px;">
             <button class="btn btn-secondary" id="ev-cancel">Cancelar</button>
@@ -4731,6 +4736,8 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
   let evFormDirtyForDuplicate = false;
   document.getElementById('ev-form').addEventListener('input', () => { evFormDirtyForDuplicate = true; });
   document.getElementById('ev-form').addEventListener('change', () => { evFormDirtyForDuplicate = true; });
+  const evAficheBtn = document.getElementById('ev-afiche');
+  if (evAficheBtn) evAficheBtn.addEventListener('click', () => { if (typeof window.abrirAfiche === 'function') window.abrirAfiche(existing); });
   const duplicateBtn = document.getElementById('ev-duplicate');
   if (duplicateBtn) duplicateBtn.addEventListener('click', async () => {
     if (evFormDirtyForDuplicate) {

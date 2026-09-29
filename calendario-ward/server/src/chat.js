@@ -528,6 +528,7 @@ async function guardarActividad(d, usuario, data) {
   vaciarCache();
   return resp(`✅ **¡Listo! Actividad agendada:** **${evento.title}**, ${fechaLegible(evento.date)} a las ${evento.startTime} (${org?.name || ''}).\n\n_Ya aparece en el calendario._`, {
     items: [{ tipo: 'actividad', titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null }],
+    ...(usuario.role !== 'member' ? { opciones: [{ label: 'Crear un afiche', value: 'afiche', afiche: { eventId: evento.id, titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null } }] } : {}),
   });
 }
 

@@ -23,12 +23,16 @@
     const er = document.getElementById('escucha-root');
     return !!(er && er.querySelector('.modal-backdrop'));
   };
+  const aficheAbierto = () => {
+    const ar = document.getElementById('afiche-root');
+    return !!(ar && ar.querySelector('.modal-backdrop'));
+  };
   const chatAbierto = () => {
     const cw = document.getElementById('chat-window');
     return !!(cw && cw.style.display !== 'none');
   };
   const conSesion = () => { try { return !!state.user; } catch (e) { return false; } };
-  const hayAlgoAtras = () => conSesion() && (escuchaAbierta() || modalAbierto() || chatAbierto() || (vista() && vista() !== 'home'));
+  const hayAlgoAtras = () => conSesion() && (aficheAbierto() || escuchaAbierta() || modalAbierto() || chatAbierto() || (vista() && vista() !== 'home'));
 
   function cerrarVentana(root) {
     const fondos = root.querySelectorAll('.modal-backdrop');
@@ -55,7 +59,8 @@
   window.addEventListener('popstate', () => {
     if (ignorarPop) { ignorarPop = false; return; }
     armado = false;
-    if (escuchaAbierta()) cerrarVentana(document.getElementById('escucha-root'));
+    if (aficheAbierto()) cerrarVentana(document.getElementById('afiche-root'));
+    else if (escuchaAbierta()) cerrarVentana(document.getElementById('escucha-root'));
     else if (modalAbierto()) cerrarVentana(document.getElementById('modal-root'));
     else if (chatAbierto()) { const b = document.getElementById('chat-close-btn'); if (b) b.click(); }
     else if (conSesion() && vista() !== 'home') {

@@ -520,6 +520,15 @@ export function initChatWidget() {
               window.abrirFichaPersona(o.ficha);
             });
           }
+          else if (o.afiche && typeof window.abrirAfiche === 'function') {
+            b.addEventListener('click', () => {
+              chatWindow.style.display = 'none';
+              callar();
+              const a = o.afiche;
+              const enApp = (() => { try { return state.events.find((x) => x.id === a.eventId); } catch (x) { return null; } })();
+              window.abrirAfiche(enApp || { datos: { id: a.eventId, titulo: a.titulo, fecha: a.fecha, hora: a.hora, org: a.org, color: a.color } });
+            });
+          }
           else b.addEventListener('click', () => enviar(o.value, o.label));
           chips.appendChild(b);
         });
@@ -850,6 +859,17 @@ export function initChatWidget() {
     // "Deseret, comienza la reunión (de presidencia)" / "termina la reunión".
     const comienza = tn.match(/^(deseret,?\s*)?(comienza|comenzamos|comencemos|empieza|empezamos|empecemos|inicia|iniciamos|iniciemos|partamos|partimos|arranca|arrancamos|da inicio a)\s+(con\s+)?(la|una|nuestra|esta)?\s*reunion\b\s*(.*)$/);
     const termina = /^(deseret,?\s*)?(termina|terminamos|terminemos|finaliza|finalizamos|cierra|cerramos|concluye|da por terminada|fin de)\s+(la\s+|esta\s+)?reunion\b/.test(tn);
+    // "Hazme un afiche para la noche de hogar" → abre el generador de afiches.
+    const pideAfiche = /\b(afiche|afiches|poster|flyer|volante|invitacion (grafica|visual))\b/.test(tn) && /\b(haz\w*|crea\w*|genera\w*|disena\w*|diseñ\w*|prepara\w*|arma\w*|quiero|necesito|puedes|podrias|dibuja\w*|un afiche|nuevo)\b/.test(tn);
+    if (pideAfiche && typeof window.abrirAfiche === 'function') {
+      enviando = false; sendBtn.disabled = false; chatInput.value = '';
+      messagesDiv.querySelector('.deseret-bienvenida')?.remove();
+      estado.msgs.push({ role: 'user', texto: text }); pintarMensaje(estado.msgs.at(-1));
+      estado.msgs.push({ role: 'bot', texto: 'Te abro el generador de afiches. Revisa la idea y toca **Crear afiche**.' }); pintarMensaje(estado.msgs.at(-1)); guardar();
+      chatWindow.style.display = 'none'; callar();
+      window.abrirAfiche({ buscar: text });
+      return;
+    }
     if ((comienza || termina) && typeof window.escucharYa === 'function') {
       enviando = false; sendBtn.disabled = false; chatInput.value = '';
       messagesDiv.querySelector('.deseret-bienvenida')?.remove();
