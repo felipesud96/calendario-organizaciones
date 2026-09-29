@@ -134,7 +134,7 @@
   const APARECE = [['', 'Lo que calce'], ['personas', 'Personas'], ['paisaje', 'Paisaje'], ['objetos', 'Objetos'], ['sinpersonas', 'Sin personas']];
   const ESTILOS = [['auto', 'Automático'], ['acuarela', 'Acuarela'], ['realista', 'Realista'], ['moderno', 'Moderno'], ['infantil', 'Infantil'], ['elegante', 'Elegante'], ['animado', 'Dibujo animado'], ['libre', 'Escribir mi estilo…']];
   const FORMATOS = { historia: { w: 1080, h: 1920, n: 'Historia / WhatsApp', i: 'width:13px;height:22px' }, cuadrado: { w: 1080, h: 1080, n: 'Cuadrado', i: 'width:19px;height:19px' }, carta: { w: 1275, h: 1650, n: 'Hoja carta', i: 'width:16px;height:21px' } };
-  const RETOQUES = [['otra', 'Otra versión'], ['colorido', 'Más colorido'], ['sobrio', 'Más sobrio'], ['luz', 'Más luz'], ['sinpersonas', 'Sin personas'], ['fondo', 'Otro fondo'], ['idea', 'Cambiar la idea']];
+  const RETOQUES = [['otra', 'Otra versión'], ['colorido', 'Más colorido'], ['sobrio', 'Más sobrio'], ['luz', 'Más luz'], ['sinpersonas', 'Sin personas'], ['fondo', 'Otro fondo']];
   const nombre = (lista, k) => (lista.find((x) => x[0] === k) || [k, k])[1];
 
   const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
@@ -160,6 +160,7 @@
       opts: { idea: p.idea, publico: p.publico, ambiente: p.ambiente, aparece: '', estilo: p.estilo, estiloLibre: '', formato: 'historia' },
       textos: { org: ev.org ? `${ev.org}` : '', titulo: ev.titulo || '', lema: p.lema, fecha: fechaLarga(ev.fecha), lugar: [ev.hora ? `${ev.hora} hrs` : '', ev.lugar || ''].filter(Boolean).join('  ·  ') },
       diseno: 'arriba', datos: true, qr: false, qrUrl: location.origin,
+      pos: { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }, tam: { titulo: 1, datos: 1 },
       versiones: [], actual: -1, tab: 'imagen', pintando: false,
     };
   }
@@ -259,7 +260,7 @@
   }
 
   // ---------------- generar ----------------
-  async function generar({ retoques = [], mismoPrompt = false, cantidad = 1 }) {
+  async function generar({ retoques = [], mismoPrompt = false, cantidad = 1, nueva = false }) {
     if (S.pintando) return;
     S.pintando = true; pintarEstado();
     const o = S.opts;
@@ -268,7 +269,7 @@
       eventId: S.ev.id || null, titulo: S.ev.titulo, descripcion: S.ev.descripcion, organizacion: S.ev.org,
       idea: o.idea, publico: o.publico, ambiente: o.ambiente, aparece: o.aparece,
       estilo: o.estilo === 'auto' || o.estilo === 'libre' ? '' : o.estilo, estiloLibre: o.estilo === 'libre' ? o.estiloLibre : '',
-      formato: o.formato, retoques, promptPrevio: base ? base.prompt : '', mismoPrompt,
+      formato: o.formato, retoques, promptPrevio: base && !nueva ? base.prompt : '', mismoPrompt,
     };
     try {
       const pedidos = Array.from({ length: cantidad }, () => pedir('/afiches/generar', { json: cuerpo }));
@@ -339,54 +340,69 @@
     // bloque de título
     const bloque = [];
     if (sesion.datos) {
-      if (T.org) bloque.push({ t: T.org.toUpperCase(), font: `600 ${Math.round(W * 0.026)}px ${sans}`, esp: 0.18, gap: W * 0.03 });
+      const kT = (sesion.tam && sesion.tam.titulo) || 1; const kD = (sesion.tam && sesion.tam.datos) || 1;
+      if (T.org) bloque.push({ t: T.org.toUpperCase(), font: `600 ${Math.round(W * 0.026 * kT)}px ${sans}`, esp: 0.18, gap: W * 0.03 * kT });
       // título: el tamaño más grande que quepa en 3 líneas
-      let tam = W * 0.12; let lineas;
-      do { ctx.font = `700 ${Math.round(tam)}px ${serif}`; lineas = envolver(ctx, T.titulo, W - pad * 2); tam *= 0.93; } while ((lineas.length > 3 || lineas.some((l) => ctx.measureText(l).width > W - pad * 2)) && tam > W * 0.05);
+      let tam = W * 0.12 * kT; let lineas;
+      do { ctx.font = `700 ${Math.round(tam)}px ${serif}`; lineas = envolver(ctx, T.titulo, W - pad * 2); tam *= 0.93; } while ((lineas.length > (kT > 1.5 ? 5 : kT > 1.15 ? 4 : 3) || lineas.some((l) => ctx.measureText(l).width > W - pad * 2)) && tam > W * 0.04);
       tam /= 0.93;
-      lineas.forEach((l, i) => bloque.push({ t: l, font: `700 ${Math.round(tam)}px ${serif}`, alto: tam * 1.08, gap: i === lineas.length - 1 ? W * 0.025 : 0 }));
-      if (T.lema) bloque.push({ t: T.lema, font: `italic ${Math.round(W * 0.042)}px ${serif}`, alto: W * 0.05, gap: 0 });
+      lineas.forEach((l, i) => bloque.push({ t: l, font: `700 ${Math.round(tam)}px ${serif}`, alto: tam * 1.08, gap: i === lineas.length - 1 ? W * 0.025 * kT : 0 }));
+      if (T.lema) bloque.push({ t: T.lema, font: `italic ${Math.round(W * 0.042 * kT)}px ${serif}`, alto: W * 0.05 * kT, gap: 0 });
     }
     const altoDe = (b) => b.alto || parseFloat(/\d+px/.exec(b.font)[0]) * 1.2;
     const altoBloque = bloque.reduce((s, b) => s + altoDe(b) + (b.gap || 0), 0);
     // caja de datos (fecha / lugar) + QR
-    const qrLado = sesion.qr ? W * 0.2 : 0;
+    const kD2 = (sesion.tam && sesion.tam.datos) || 1;
+    const qrLado = sesion.qr ? W * 0.2 * kD2 : 0;
     const hayCaja = sesion.datos && (T.fecha || T.lugar);
-    const cajaAlto = hayCaja ? W * 0.155 : 0;
+    const cajaAlto = hayCaja ? W * 0.155 * kD2 : 0;
     const altoPie = Math.max(cajaAlto, qrLado ? qrLado + W * 0.045 : 0);
     let yPie = H - pad - altoPie;
     let y;
     if (dis === 'arriba' || !sesion.datos) y = H * 0.075;
     else if (dis === 'abajo') y = yPie - W * 0.05 - altoBloque;
     else y = (H - altoBloque - altoPie - W * 0.06) / 2;
+    // Posición elegida arrastrando (se suma a la del diseño elegido).
+    const pos = sesion.pos || { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } };
+    const yBase = y; const cx = W / 2 + pos.titulo.x;
+    y += pos.titulo.y;
+    const y0Titulo = y; let anchoTitulo = 0;
     for (const b of bloque) {
       ctx.font = b.font;
       const h = altoDe(b);
       y += h * 0.82;
-      if (b.esp) { ctx.save(); try { ctx.letterSpacing = `${Math.round(W * 0.026 * b.esp)}px`; } catch (x) { /* navegadores antiguos */ } ctx.fillText(b.t, W / 2, y); ctx.restore(); ctx.fillStyle = '#fff'; }
-      else ctx.fillText(b.t, W / 2, y);
+      anchoTitulo = Math.max(anchoTitulo, ctx.measureText(b.t).width);
+      if (b.esp) { ctx.save(); try { ctx.letterSpacing = `${Math.round(W * 0.026 * b.esp)}px`; } catch (x) { /* navegadores antiguos */ } ctx.fillText(b.t, cx, y); ctx.restore(); ctx.fillStyle = '#fff'; }
+      else ctx.fillText(b.t, cx, y);
       y += h * 0.18 + (b.gap || 0);
     }
-    if (dis === 'centro' && sesion.datos) yPie = y + W * 0.06;
+    const cajas = {};
+    if (bloque.length) cajas.titulo = { x0: cx - anchoTitulo / 2 - W * 0.02, y0: y0Titulo - W * 0.01, x1: cx + anchoTitulo / 2 + W * 0.02, y1: y };
+    if (dis === 'centro' && sesion.datos) yPie = yBase + altoBloque + W * 0.06;
+    yPie += pos.datos.y; const dx = pos.datos.x;
     ctx.shadowBlur = 0;
-    const cajaW = W - pad * 2 - (qrLado ? qrLado + W * 0.03 : 0);
+    const anchoPie = (W - pad * 2) * Math.min(1, 0.55 + 0.45 * kD2);
+    const x0Pie = (W - anchoPie) / 2 + dx;
+    const cajaW = anchoPie - (qrLado ? qrLado + W * 0.03 : 0);
+    if (hayCaja || qrLado) cajas.datos = { x0: x0Pie - W * 0.01, y0: yPie - W * 0.01, x1: x0Pie + anchoPie + W * 0.01, y1: yPie + altoPie + W * 0.01 };
+    sesion._cajas = cajas; sesion._W = W; sesion._H = H;
     if (hayCaja) {
       const cy = yPie + (altoPie - cajaAlto) / 2;
-      rect(ctx, pad, cy, cajaW, cajaAlto, W * 0.025);
+      rect(ctx, x0Pie, cy, cajaW, cajaAlto, W * 0.025);
       ctx.fillStyle = 'rgba(15,10,46,.58)'; ctx.fill();
       ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = W * 0.002; ctx.stroke();
       ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
-      const tx = pad + W * 0.04;
-      ctx.font = `700 ${Math.round(W * 0.044)}px ${sans}`;
+      const tx = x0Pie + W * 0.04 * kD2;
+      ctx.font = `700 ${Math.round(W * 0.044 * kD2)}px ${sans}`;
       ajustarTexto(ctx, T.fecha, tx, cy + cajaAlto * 0.44, cajaW - W * 0.08);
-      ctx.font = `${Math.round(W * 0.036)}px ${sans}`; ctx.globalAlpha = 0.92;
+      ctx.font = `${Math.round(W * 0.036 * kD2)}px ${sans}`; ctx.globalAlpha = 0.92;
       ajustarTexto(ctx, T.lugar, tx, cy + cajaAlto * 0.78, cajaW - W * 0.08);
       ctx.globalAlpha = 1; ctx.textAlign = 'center';
     }
     if (qrLado) {
       const qrcode = await cargarQR();
       if (qrcode) {
-        const qx = W - pad - qrLado; const qy = yPie + (altoPie - qrLado - W * 0.045) / 2;
+        const qx = x0Pie + anchoPie - qrLado; const qy = yPie + (altoPie - qrLado - W * 0.045) / 2;
         rect(ctx, qx, qy, qrLado, qrLado + W * 0.045, W * 0.02); ctx.fillStyle = '#fff'; ctx.fill();
         const qr = qrcode(0, 'M'); qr.addData(sesion.qrUrl || location.origin); qr.make();
         const n = qr.getModuleCount(); const m = qrLado * 0.1; const cel = (qrLado - m * 2) / n;
@@ -396,6 +412,86 @@
         ctx.fillText('Escanéame', qx + qrLado / 2, qy + qrLado + W * 0.028);
       }
     }
+  }
+  function marcar(canvas, caja) {
+    if (!caja) return;
+    const ctx = canvas.getContext('2d'); const W = canvas.width;
+    ctx.save(); ctx.setLineDash([W * 0.012, W * 0.008]); ctx.lineWidth = W * 0.003; ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    rect(ctx, caja.x0, caja.y0, caja.x1 - caja.x0, caja.y1 - caja.y0, W * 0.015); ctx.stroke(); ctx.restore();
+  }
+  // Arrastrar el título o la caja de fecha/lugar sobre el afiche, y
+  // agrandarlos/achicarlos "como en Instagram": pellizcando con dos dedos
+  // (en el computador, con la rueda del mouse encima del texto).
+  const LIMITES = { titulo: [0.5, 2], datos: [0.6, 1.6] };
+  const acotar = (k, v) => Math.max(LIMITES[k][0], Math.min(LIMITES[k][1], v));
+  function activarArrastre(canvas) {
+    let drag = null; let pinch = null; let pendiente = false;
+    const dedos = new Map();
+    canvas.style.touchAction = 'none';
+    const aLienzo = (ev) => { const r = canvas.getBoundingClientRect(); return { x: (ev.clientX - r.left) * canvas.width / r.width, y: (ev.clientY - r.top) * canvas.height / r.height }; };
+    const dentro = (c, p) => c && p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1;
+    const cual = (p) => { const c = S._cajas || {}; return dentro(c.datos, p) ? 'datos' : dentro(c.titulo, p) ? 'titulo' : null; };
+    const distancia = () => { const [a2, b2] = [...dedos.values()]; return Math.hypot(a2.x - b2.x, a2.y - b2.y) || 1; };
+    const sincronizarBarras = () => { const t1 = $('af-t-tam1'); const t2 = $('af-t-tam2'); if (t1) t1.value = Math.round(S.tam.titulo * 100); if (t2) t2.value = Math.round(S.tam.datos * 100); };
+    const redibujar = () => {
+      if (pendiente) return; pendiente = true;
+      requestAnimationFrame(async () => { pendiente = false; if (S.actual < 0) return; await dibujar(canvas, S.versiones[S.actual].img, S); const k = (pinch && pinch.k) || (drag && drag.k); if (k) marcar(canvas, (S._cajas || {})[k]); });
+    };
+    const puede = () => !(S.pintando || S.actual < 0 || !(S.datos || S.qr));
+    canvas.addEventListener('pointerdown', (ev) => {
+      if (!puede()) return;
+      const p = aLienzo(ev);
+      dedos.set(ev.pointerId, p);
+      try { canvas.setPointerCapture(ev.pointerId); } catch (x) { /* nada */ }
+      if (dedos.size === 2) {
+        // Segundo dedo: pellizco sobre el bloque que se tocó primero (o el que queda entre los dos dedos).
+        const [a2, b2] = [...dedos.values()];
+        const k = (drag && drag.k) || cual({ x: (a2.x + b2.x) / 2, y: (a2.y + b2.y) / 2 }) || cual(a2) || cual(b2);
+        if (k) { ev.preventDefault(); pinch = { k, d0: distancia(), t0: S.tam[k] }; drag = null; redibujar(); }
+        return;
+      }
+      const k = cual(p);
+      if (!k) return;
+      ev.preventDefault();
+      drag = { k, id: ev.pointerId, sx: p.x, sy: p.y, ox: S.pos[k].x, oy: S.pos[k].y };
+      canvas.style.cursor = 'grabbing';
+      redibujar();
+    });
+    canvas.addEventListener('pointermove', (ev) => {
+      const p = aLienzo(ev);
+      if (dedos.has(ev.pointerId)) dedos.set(ev.pointerId, p);
+      if (pinch && dedos.size >= 2) {
+        S.tam[pinch.k] = acotar(pinch.k, pinch.t0 * distancia() / pinch.d0);
+        sincronizarBarras(); redibujar(); return;
+      }
+      if (!drag) { if (ev.pointerType === 'mouse') canvas.style.cursor = cual(p) ? 'grab' : 'default'; return; }
+      if (ev.pointerId !== drag.id) return;
+      const W = canvas.width; const H = canvas.height;
+      S.pos[drag.k].x = Math.max(-W * 0.45, Math.min(W * 0.45, drag.ox + p.x - drag.sx));
+      S.pos[drag.k].y = Math.max(-H * 0.85, Math.min(H * 0.85, drag.oy + p.y - drag.sy));
+      redibujar();
+    });
+    const soltar = (ev) => {
+      dedos.delete(ev.pointerId);
+      if (pinch) {
+        // Al levantar un dedo, se sigue arrastrando con el otro sin saltos.
+        const k = pinch.k; pinch = null;
+        const resto = [...dedos.entries()][0];
+        drag = resto ? { k, id: resto[0], sx: resto[1].x, sy: resto[1].y, ox: S.pos[k].x, oy: S.pos[k].y } : null;
+        redibujar(); return;
+      }
+      if (drag && ev.pointerId === drag.id) { drag = null; canvas.style.cursor = 'grab'; redibujar(); }
+    };
+    canvas.addEventListener('pointerup', soltar);
+    canvas.addEventListener('pointercancel', soltar);
+    canvas.addEventListener('wheel', (ev) => {
+      if (!puede()) return;
+      const k = cual(aLienzo(ev));
+      if (!k) return;
+      ev.preventDefault();
+      S.tam[k] = acotar(k, S.tam[k] * (1 - Math.sign(ev.deltaY) * 0.06));
+      sincronizarBarras(); redibujar();
+    }, { passive: false });
   }
   function ajustarTexto(ctx, t, x, y, max) {
     let s = String(t || '');
@@ -410,6 +506,7 @@
   function pantallaResultado() {
     modal('Tu afiche', `
       <div class="af-lienzo"><canvas id="af-canvas" width="1080" height="1920"></canvas><div class="af-pintando" id="af-pintando" style="display:none"><div class="af-spin"></div>Pintando tu afiche…<small>Suele tardar 5 a 15 segundos</small></div></div>
+      <div class="af-nota" id="af-arrastra" style="justify-content:center;margin-top:8px">Arrastra el texto para moverlo · pellizca con dos dedos para agrandarlo</div>
       <div class="af-vers" id="af-vers"></div>
       <div class="af-tabs" role="tablist">
         <button type="button" data-tab="imagen">Imagen</button><button type="button" data-tab="texto">Texto</button><button type="button" data-tab="formato">Formato</button>
@@ -421,6 +518,7 @@
        <button class="btn af-wa" id="af-compartir">${ico('compartir')} Compartir</button>
      </div>`);
     raiz().querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { S.tab = b.dataset.tab; pintarPanel(); }));
+    activarArrastre($('af-canvas'));
     $('af-bajar').addEventListener('click', descargar);
     $('af-compartir').addEventListener('click', compartir);
     $('af-mas-btn').addEventListener('click', (x) => { x.stopPropagation(); const m = $('af-menu'); m.style.display = m.style.display === 'none' ? '' : 'none'; if (m.style.display === '') pintarMenu(); });
@@ -443,6 +541,7 @@
   async function pintarEstado() {
     if (!$('af-canvas')) return;
     $('af-pintando').style.display = S.pintando ? '' : 'none';
+    if ($('af-arrastra')) $('af-arrastra').style.display = (S.datos || S.qr) && S.actual >= 0 && !S.pintando ? '' : 'none';
     ['af-bajar', 'af-compartir'].forEach((id) => { $(id).disabled = S.pintando || S.actual < 0; });
     const v = $('af-vers');
     v.innerHTML = S.versiones.map((x, i) => `<button type="button" class="${i === S.actual ? 'on' : ''}" data-v="${i}" style="background-image:url('${x.img.dataset.url}')" aria-label="Versión ${i + 1}"></button>`).join('')
@@ -456,11 +555,23 @@
     raiz().querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
     const p = $('af-panel'); const T = S.textos;
     if (S.tab === 'imagen') {
-      p.innerHTML = `<div class="af-chips scroll">${RETOQUES.map(([k, n]) => `<button type="button" class="af-chip" data-r="${k}">${n}</button>`).join('')}</div>
+      // Primero la idea (el "prompt"), editable ahí mismo; después los retoques rápidos.
+      p.innerHTML = `<p class="af-lbl" style="margin-top:2px">Idea de la imagen <button type="button" id="af-r-mas">Más opciones</button></p>
+        <textarea id="af-r-idea" maxlength="500" rows="2" style="min-height:62px" placeholder="Describe lo que quieres ver">${e(S.opts.idea)}</textarea>
+        <button type="button" class="btn btn-primary" id="af-r-pintar" style="width:100%;justify-content:center;margin:8px 0 12px">${ico('pincel')} Pintar con esta idea</button>
+        <p class="af-lbl">Retoques rápidos</p>
+        <div class="af-chips scroll">${RETOQUES.map(([k, n]) => `<button type="button" class="af-chip" data-r="${k}">${n}</button>`).join('')}</div>
         <div class="af-nota" style="margin-top:4px"><i></i>${estado && estado.disponible ? `Gratis · quedan ${estado.quedanHoy} hoy en el barrio` : 'Gratis'}</div>`;
+      try { if ((window.SpeechRecognition || window.webkitSpeechRecognition) && typeof wireDictation === 'function') wireDictation($('af-r-idea')); } catch (x) { /* sin dictado */ }
+      $('af-r-idea').addEventListener('input', (x) => { S.opts.idea = x.target.value; });
+      $('af-r-pintar').addEventListener('click', () => {
+        S.opts.idea = $('af-r-idea').value.trim();
+        if (!S.opts.idea && !S.ev.titulo) { aviso('Escribe una idea para la imagen', 'error'); return; }
+        generar({ nueva: true });
+      });
+      $('af-r-mas').addEventListener('click', () => pantallaCrear());
       p.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => {
         const k = b.dataset.r;
-        if (k === 'idea') return pantallaCrear();
         if (k === 'otra') return generar({ mismoPrompt: true });
         generar({ retoques: [k] });
       }));
@@ -472,22 +583,30 @@
           <input class="af-in" data-t="lema" maxlength="80" placeholder="Frase (ej: ¡Trae a tu familia!)" value="${e(T.lema)}" />
           <div class="af-fila"><input class="af-in" data-t="fecha" maxlength="60" placeholder="Fecha" value="${e(T.fecha)}" /><input class="af-in" data-t="lugar" maxlength="80" placeholder="Hora y lugar" value="${e(T.lugar)}" /></div>
           <input class="af-in" data-t="org" maxlength="60" placeholder="Organización (arriba, pequeño)" value="${e(T.org)}" />
-          <p class="af-lbl" style="margin-top:4px">Posición del texto</p>
+          <p class="af-lbl" style="margin-top:4px">Posición del texto <button type="button" id="af-t-reset">Restablecer</button></p>
           ${chips([['arriba', 'Arriba'], ['centro', 'Al centro'], ['abajo', 'Abajo']], S.diseno, 'diseno')}
+          <div class="af-fila" style="margin-bottom:6px">
+            <label style="font-size:12.5px;color:var(--ink-soft)">Tamaño del título<input type="range" id="af-t-tam1" min="50" max="200" step="5" value="${Math.round(S.tam.titulo * 100)}" style="width:100%"></label>
+            <label style="font-size:12.5px;color:var(--ink-soft)">Tamaño de fecha y lugar<input type="range" id="af-t-tam2" min="60" max="160" step="5" value="${Math.round(S.tam.datos * 100)}" style="width:100%"></label>
+          </div>
+          <div class="af-nota" style="margin:0 0 6px">También puedes moverlo arrastrando y agrandarlo pellizcando con dos dedos sobre el afiche.</div>
         </div>
         <label class="af-sw"><span>Código QR<small>Lleva a la app o a un enlace que pegues</small></span><input type="checkbox" id="af-t-qr" ${S.qr ? 'checked' : ''}/><i class="af-tog"></i></label>
         <input class="af-in" id="af-t-qrurl" style="${S.qr ? '' : 'display:none'}" placeholder="https://…" value="${e(S.qrUrl)}" />`;
       let t = null;
       const redibujar = () => { clearTimeout(t); t = setTimeout(pintarEstado, 150); };
       p.querySelectorAll('[data-t]').forEach((i) => i.addEventListener('input', () => { T[i.dataset.t] = i.value; redibujar(); }));
-      p.querySelectorAll('.af-chip[data-g="diseno"]').forEach((b) => b.addEventListener('click', () => { S.diseno = b.dataset.k; p.querySelectorAll('.af-chip[data-g="diseno"]').forEach((x) => x.classList.toggle('on', x === b)); pintarEstado(); }));
+      $('af-t-tam1').addEventListener('input', (x) => { S.tam.titulo = Number(x.target.value) / 100; redibujar(); });
+      $('af-t-tam2').addEventListener('input', (x) => { S.tam.datos = Number(x.target.value) / 100; redibujar(); });
+      $('af-t-reset').addEventListener('click', () => { S.pos = { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }; S.tam = { titulo: 1, datos: 1 }; $('af-t-tam1').value = 100; $('af-t-tam2').value = 100; pintarEstado(); });
+      p.querySelectorAll('.af-chip[data-g="diseno"]').forEach((b) => b.addEventListener('click', () => { S.pos = { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }; S.diseno = b.dataset.k; p.querySelectorAll('.af-chip[data-g="diseno"]').forEach((x) => x.classList.toggle('on', x === b)); pintarEstado(); }));
       $('af-t-datos').addEventListener('change', (x) => { S.datos = x.target.checked; $('af-t-campos').style.display = S.datos ? '' : 'none'; pintarEstado(); });
       $('af-t-qr').addEventListener('change', (x) => { S.qr = x.target.checked; $('af-t-qrurl').style.display = S.qr ? '' : 'none'; pintarEstado(); });
       $('af-t-qrurl').addEventListener('input', (x) => { S.qrUrl = x.target.value.trim() || location.origin; redibujar(); });
     } else {
       p.innerHTML = `<div class="af-fmt">${Object.entries(FORMATOS).map(([k, f]) => `<button type="button" data-fmt="${k}" class="${S.opts.formato === k ? 'on' : ''}"><i style="${f.i}"></i>${f.n}</button>`).join('')}</div>
         <div class="af-nota" style="margin-top:0">Cambiar el formato no gasta un afiche nuevo: se reacomoda la misma imagen.</div>`;
-      p.querySelectorAll('[data-fmt]').forEach((b) => b.addEventListener('click', () => { S.opts.formato = b.dataset.fmt; pintarPanel(); pintarEstado(); }));
+      p.querySelectorAll('[data-fmt]').forEach((b) => b.addEventListener('click', () => { S.opts.formato = b.dataset.fmt; S.pos = { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }; pintarPanel(); pintarEstado(); }));
     }
   }
 
