@@ -73,6 +73,6 @@ export function publicUser(user) {
   // hace con `passwordHash`.
   // `publicBookingToken` (enlace público para pedir entrevista) solo lo
   // entrega GET /api/public-booking/my-link a su dueño.
-  const { passwordHash, passwordReset, publicBookingToken, ...rest } = user;
-  return rest;
+  const { passwordHash, passwordReset, publicBookingToken, passkeys, ...rest } = user;
+  return { ...rest, huellaActiva: Array.isArray(passkeys) && passkeys.length > 0 };
 }

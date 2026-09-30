@@ -928,7 +928,9 @@ export function initChatWidget() {
 
   // ---------------- Envío ----------------
   let enviando = false;
+  let escribiendoConTeclado = false;
   async function enviar(textoAEnviar, textoVisible) {
+    escribiendoConTeclado = document.activeElement === chatInput;
     const text = String(textoAEnviar ?? chatInput.value).trim();
     if (text.startsWith('__guia')) { manejarGuia(text); return; }
     if (!text || enviando) return;
@@ -1048,7 +1050,8 @@ export function initChatWidget() {
     }
     enviando = false;
     sendBtn.disabled = false;
-    chatInput.focus();
+    // En el celular solo se vuelve al campo si la persona estaba escribiendo (no al tocar botones).
+    if (escribiendoConTeclado || (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches)) chatInput.focus();
   }
 
   sendBtn.addEventListener('click', () => enviar());
@@ -1061,7 +1064,8 @@ export function initChatWidget() {
     const abrir = chatWindow.style.display === 'none';
     chatWindow.style.display = abrir ? 'flex' : 'none';
     if (abrir) {
-      scrollAbajo(); chatInput.focus();
+      // En el celular no se abre el teclado solo: la persona toca el campo si quiere escribir.
+      scrollAbajo(); if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) chatInput.focus();
       mostrarAvisos();
       if (conduccion) setTimeout(() => { if (!micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click(); }, 400);
     } else callar();

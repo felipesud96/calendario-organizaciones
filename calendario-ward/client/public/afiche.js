@@ -52,6 +52,10 @@
   .af-act b { display:block; font-size:14px; } .af-act small { color:var(--ink-soft); font-size:12.5px; }
   .af-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
   .af-lbl { font-size:13px; font-weight:600; margin:0 0 6px; display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .af-sug { display: flex; gap: 10px; align-items: flex-start; margin-top: 6px; padding: 8px 10px; border-radius: 10px; background: var(--celeste-lighter); font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
+  .af-sug > span { flex: 1; }
+  .af-sug b { color: var(--ink); font-weight: 600; }
+  .af-sug button { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--celeste-dark); cursor: pointer; white-space: nowrap; }
   .af-lbl button { background:none; border:0; padding:0; font:inherit; font-weight:500; font-size:12.5px; color:var(--celeste-dark); cursor:pointer; white-space:nowrap; }
   .af-in, #afiche-root textarea, #afiche-root select { width:100%; border:1px solid var(--border); border-radius:10px; padding:10px 12px; font:inherit; font-size:14px; background:var(--white); color:var(--ink); }
   #afiche-root textarea { min-height:78px; line-height:1.4; resize:vertical; }
@@ -157,7 +161,8 @@
     const p = plantillaDe(`${ev.titulo} ${ev.descripcion || ''} ${ev.org || ''}`);
     return {
       ev,
-      opts: { idea: p.idea, publico: p.publico, ambiente: p.ambiente, aparece: '', estilo: p.estilo, estiloLibre: '', formato: 'historia' },
+      sugerencia: p.idea,
+      opts: { idea: '', publico: p.publico, ambiente: p.ambiente, aparece: '', estilo: p.estilo, estiloLibre: '', formato: 'historia' },
       textos: { org: ev.org ? `${ev.org}` : '', titulo: ev.titulo || '', lema: p.lema, fecha: fechaLarga(ev.fecha), lugar: [ev.hora ? `${ev.hora} hrs` : '', ev.lugar || ''].filter(Boolean).join('  ·  ') },
       diseno: 'arriba', datos: true, qr: false, qrUrl: location.origin,
       pos: { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }, tam: { titulo: 1, datos: 1 },
@@ -200,8 +205,9 @@
       ${S.ev.id || S.ev.titulo ? tarjetaAct(S.ev) : ''}
       ${S.eleccion ? `<p class="af-lbl">¿Para qué actividad?</p><select id="af-elige" style="margin-bottom:14px"><option value="">— Elige una actividad —</option>${S.eleccion.map((x) => `<option value="${x.id}" ${S.ev.id === x.id ? 'selected' : ''}>${e(x.title)} · ${e(fechaLarga(x.date))}</option>`).join('')}<option value="otra">Otra (escribir el título)</option></select>` : ''}
       ${(sinAct && !S.eleccion) || S.ev.libre ? `<p class="af-lbl">Título del afiche</p><input class="af-in" id="af-tit" maxlength="80" placeholder="Ej: Noche de talentos" value="${e(S.ev.titulo || '')}" style="margin-bottom:14px" />` : ''}
-      <p class="af-lbl">¿Cómo lo imaginas? <button type="button" id="af-sugerir">${ico('chispa', 14)} Sugerir otra idea</button></p>
-      <textarea id="af-idea" maxlength="500" placeholder="Descríbelo con tus palabras. Ej: niños jugando en un parque al atardecer">${e(o.idea)}</textarea>
+      <p class="af-lbl">¿Cómo lo imaginas? <button type="button" id="af-sugerir">${ico('chispa', 14)} Otra sugerencia</button></p>
+      <textarea id="af-idea" maxlength="500" placeholder="${S.sugerencia ? 'Escribe tu idea, o déjalo vacío y uso la sugerencia de abajo' : 'Descríbelo con tus palabras. Ej: niños jugando en un parque al atardecer'}">${e(o.idea)}</textarea>
+      <div class="af-sug" id="af-sug" style="${S.sugerencia ? '' : 'display:none'}"><span><b>Sugerencia:</b> <span id="af-sug-t">${e(S.sugerencia || '')}</span></span><button type="button" id="af-sug-usar">Editarla</button></div>
       <div class="af-fila" style="margin-top:12px">
         <div><p class="af-lbl">Para</p><select id="af-publico">${PUBLICO.map(([k, n]) => `<option value="${k}" ${o.publico === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
         <div><p class="af-lbl">Ambiente</p><select id="af-ambiente">${AMBIENTE.map(([k, n]) => `<option value="${k}" ${o.ambiente === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
@@ -244,13 +250,16 @@
     $('af-sugerir').addEventListener('click', async () => {
       leer();
       const b = $('af-sugerir'); b.textContent = 'Pensando…'; b.disabled = true;
-      try { const r = await pedir('/afiches/idea', { json: { titulo: S.ev.titulo, descripcion: S.ev.descripcion, anterior: o.idea } }); o.idea = r.idea; $('af-idea').value = r.idea; }
+      try { const r = await pedir('/afiches/idea', { json: { titulo: S.ev.titulo, descripcion: S.ev.descripcion, anterior: S.sugerencia || o.idea } }); S.sugerencia = r.idea; $('af-sug-t').textContent = r.idea; $('af-sug').style.display = ''; }
       catch (x) { aviso(x.message, 'error'); }
-      b.innerHTML = `${ico('chispa', 14)} Sugerir otra idea`; b.disabled = false;
+      b.innerHTML = `${ico('chispa', 14)} Otra sugerencia`; b.disabled = false;
     });
+    // "Editarla": pasa la sugerencia al cuadro para cambiar solo lo que haga falta.
+    $('af-sug-usar').addEventListener('click', () => { const t = $('af-idea'); t.value = S.sugerencia || ''; o.idea = t.value; t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
     $('af-galeria').addEventListener('click', () => { leer(); abrirGaleria(); });
     $('af-crear').addEventListener('click', () => {
       leer();
+      if (!o.idea && S.sugerencia) o.idea = S.sugerencia; // cuadro vacío = usar la sugerencia
       if (!S.ev.titulo && !o.idea) { aviso('Escribe un título o una idea para el afiche', 'error'); return; }
       if (o.estilo === 'libre' && !o.estiloLibre) { aviso('Escribe el estilo que quieres (o elige otro)', 'error'); $('af-mas').open = true; $('af-libre').focus(); return; }
       S.versiones = []; S.actual = -1;

@@ -69,7 +69,7 @@ const root = document.getElementById('app');
 // Punto 16: una barra fina arriba mientras hay pedidos en curso (solo si
 // tardan más de 300 ms) y, al guardar, el botón tocado queda "ocupado" hasta
 // que responde el servidor (evita el doble clic y se nota que algo pasa).
-let cargasEnCurso = 0; let barraTimer = null;
+let cargasEnCurso = 0; let barraTimer = null; let ultimoFallo = null;
 function barraCarga(delta) {
   cargasEnCurso = Math.max(0, cargasEnCurso + delta);
   let b = document.getElementById('barra-carga');
@@ -84,6 +84,14 @@ async function api(path, opts = {}) {
   if (boton) { boton.disabled = true; boton.classList.add('btn-ocupado'); }
   barraCarga(1);
   try { return await apiBase(path, opts); }
+  catch (e) {
+    // Si falló por la señal o por el servidor, el aviso de error ofrece "Reintentar".
+    if (e.sinConexion || (e.status && e.status >= 500)) {
+      const b = boton;
+      ultimoFallo = { t: Date.now(), reintentar: b ? () => b.isConnected && b.click() : (metodo === 'GET' ? () => renderCurrentView() : null) };
+    }
+    throw e;
+  }
   finally {
     barraCarga(-1);
     if (boton) { boton.disabled = false; boton.classList.remove('btn-ocupado'); }
@@ -103,15 +111,24 @@ async function apiBase(path, { method = 'GET', body } = {}) {
     // A2: sin conexión. Las lecturas ya intentaron la copia guardada (sw.js);
     // las escrituras no se guardan para después: se avisa claramente.
     marcarSinConexion(true);
-    throw new Error(method === 'GET'
-      ? 'Sin conexión y sin datos guardados para esta pantalla.'
-      : 'Sin conexión: no se pudo guardar. Inténtalo de nuevo cuando vuelva internet.');
+    const sinRed = new Error(method === 'GET'
+      ? 'No hay conexión y esta pantalla no estaba guardada en el teléfono. Revisa tu internet.'
+      : 'No se pudo guardar: no hay conexión. Revisa tu internet y reintenta.');
+    sinRed.sinConexion = true;
+    throw sinRed;
   }
   marcarSinConexion(res.headers.get('X-Sin-Conexion') === '1' || !navigator.onLine);
   let data = null;
   try { data = await res.json(); } catch (e) { /* sin cuerpo */ }
   if (!res.ok) {
-    const err = new Error((data && data.error) || `Error ${res.status}`);
+    // Punto 19: mensajes que se entienden, en vez de "Error 500".
+    let msg = data && data.error;
+    if (res.status >= 500) msg = 'Algo falló en el servidor. Espera un momento y reintenta.';
+    else if (res.status === 401 && (!msg || /no autenticado/i.test(msg))) msg = 'Tu sesión expiró. Vuelve a entrar.';
+    else if (res.status === 404 && (!msg || /^error/i.test(msg))) msg = 'No se encontró: quizás alguien ya lo borró. Actualiza la pantalla.';
+    else if (res.status === 413) msg = 'El archivo o el texto es demasiado grande.';
+    else if (!msg) msg = 'No se pudo completar. Reintenta en un momento.';
+    const err = new Error(msg);
     err.status = res.status;
     err.data = data; // ej: { stakeConflicts, canOverride, conflictDate } — ver openEventModal
     throw err;
@@ -328,8 +345,17 @@ function toast(message, type = 'success') {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
   el.textContent = message;
+  let dura = 3200;
+  // Error recién ocurrido por la señal o el servidor: botón "Reintentar".
+  if (type === 'error' && ultimoFallo && Date.now() - ultimoFallo.t < 4000 && ultimoFallo.reintentar) {
+    const reintentar = ultimoFallo.reintentar; ultimoFallo = null;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'toast-accion'; b.textContent = 'Reintentar';
+    b.addEventListener('click', () => { el.remove(); reintentar(); });
+    el.appendChild(b); dura = 7000;
+  }
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3200);
+  setTimeout(() => el.remove(), dura);
 }
 
 // ---------------- Fechas ----------------
@@ -1568,6 +1594,14 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
               ${isObispadoUser() ? notificationPrefFieldHtml('dailyDigest', '📰 Resumen diario del Obispado') : ''}
               ${(u.role === 'leader' || u.role === 'admin') ? notificationPrefFieldHtml('eventConflicts', '⚠️ Choque de horario cuando otra organización agenda encima de una actividad mía') : ''}
               ${notificationPushFieldHtml()}
+            </div>
+            <div class="field" id="prof-huella-box" style="display:none">
+              <label>Entrar con huella o rostro</label>
+              <div class="hint-box" style="margin:4px 0 8px;">${u.huellaActiva ? 'Activado en al menos un dispositivo.' : 'Entra sin escribir la contraseña. La huella o el rostro nunca salen de tu teléfono.'}</div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" id="prof-huella-on">Activar en este dispositivo</button>
+                ${u.huellaActiva ? '<button type="button" class="btn btn-ghost btn-sm" id="prof-huella-off">Quitar de todos mis dispositivos</button>' : ''}
+              </div>
             </div>`}
           </form>
         </div>
@@ -1654,6 +1688,15 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
       document.getElementById('prof-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
     }
   });
+  const huellaBox = document.getElementById('prof-huella-box');
+  if (huellaBox) {
+    huellaDisponibleEnEquipo().then((si) => { if (si) huellaBox.style.display = ''; });
+    document.getElementById('prof-huella-on').addEventListener('click', async () => { try { await activarHuella(); } catch (e) { toast(e.message, 'error'); } });
+    document.getElementById('prof-huella-off')?.addEventListener('click', async () => {
+      if (!(await confirmModal('¿Quitar la entrada con huella o rostro de todos tus dispositivos? Tendrás que entrar con tu contraseña.', { title: 'Quitar huella', confirmText: 'Quitar', danger: true }))) return;
+      try { await api('/auth/passkey', { method: 'DELETE' }); state.user.huellaActiva = false; try { localStorage.removeItem('huella_activa'); } catch (e) { /* nada */ } toast('Listo, se quitó'); document.getElementById('prof-huella-off')?.remove(); } catch (e) { toast(e.message, 'error'); }
+    });
+  }
   const waTestBtn = document.getElementById('prof-whatsapp-test');
   if (waTestBtn) waTestBtn.addEventListener('click', async () => {
     waTestBtn.disabled = true;
@@ -1919,6 +1962,63 @@ async function logout() {
 }
 
 // ---------------- Login ----------------
+// ---------------- Entrar con huella o rostro (passkeys) ----------------
+// La huella o el rostro nunca salen del teléfono: el dispositivo guarda una
+// llave y firma un desafío del servidor (server/src/routes/passkeys.js).
+const huellaSoportada = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+const aB64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const deB64u = (s) => { const b = atob(String(s).replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((String(s).length + 3) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+async function huellaDisponibleEnEquipo() {
+  if (!huellaSoportada()) return false;
+  try { return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) { return false; }
+}
+function nombreDispositivo() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone'; if (/iPad/.test(ua)) return 'iPad'; if (/Android/.test(ua)) return 'Celular Android';
+  if (/Mac/.test(ua)) return 'Mac'; if (/Windows/.test(ua)) return 'Computador Windows'; return 'Dispositivo';
+}
+async function activarHuella() {
+  const o = await api('/auth/passkey/registro/opciones', { method: 'POST', body: {} });
+  let cred;
+  try {
+    cred = await navigator.credentials.create({ publicKey: {
+      ...o, challenge: deB64u(o.challenge), user: { ...o.user, id: deB64u(o.user.id) },
+      excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: deB64u(c.id) })),
+    } });
+  } catch (e) {
+    if (e && e.name === 'InvalidStateError') { toast('Este dispositivo ya tiene la huella o el rostro activado'); return true; }
+    throw new Error('Se canceló o el dispositivo no permitió usar la huella o el rostro.');
+  }
+  await api('/auth/passkey/registro', { method: 'POST', body: {
+    challenge: o.challenge, dispositivo: nombreDispositivo(),
+    clientDataJSON: aB64u(cred.response.clientDataJSON), attestationObject: aB64u(cred.response.attestationObject),
+  } });
+  try { localStorage.setItem('huella_activa', '1'); } catch (e) { /* nada */ }
+  if (state.user) state.user.huellaActiva = true;
+  toast('Listo: la próxima vez entra con tu huella o rostro');
+  return true;
+}
+async function entrarConHuella() {
+  const o = await api('/auth/passkey/login/opciones', { method: 'POST', body: {} });
+  let cred;
+  try {
+    cred = await navigator.credentials.get({ publicKey: { challenge: deB64u(o.challenge), rpId: o.rpId, userVerification: 'required', timeout: o.timeout, allowCredentials: [] } });
+  } catch (e) { throw new Error('Se canceló. Puedes intentarlo de nuevo o entrar con tu contraseña.'); }
+  const r = await api('/auth/passkey/login', { method: 'POST', body: {
+    challenge: o.challenge, id: cred.id,
+    clientDataJSON: aB64u(cred.response.clientDataJSON), authenticatorData: aB64u(cred.response.authenticatorData), signature: aB64u(cred.response.signature),
+  } });
+  return r.token;
+}
+// Después de entrar con contraseña: se ofrece una sola vez por dispositivo.
+async function ofrecerHuella() {
+  try { if (localStorage.getItem('huella_ofrecida') || localStorage.getItem('huella_activa')) return; localStorage.setItem('huella_ofrecida', '1'); } catch (e) { return; }
+  if (!(await huellaDisponibleEnEquipo())) return;
+  const ok = await confirmModal('¿Quieres entrar la próxima vez con tu huella o rostro, sin escribir la contraseña? La huella no sale de tu teléfono.', { title: 'Entrar más rápido', confirmText: 'Activar', cancelText: 'Ahora no' });
+  if (!ok) return;
+  try { await activarHuella(); } catch (e) { toast(e.message, 'error'); }
+}
+
 function renderLogin() {
   root.innerHTML = `
     <div class="login-wrap">
@@ -1939,6 +2039,7 @@ function renderLogin() {
           </div>
           <button class="btn btn-primary btn-block" type="submit">Ingresar</button>
         </form>
+        <button type="button" class="btn btn-secondary btn-block" id="login-huella" style="margin-top:10px; display:none; justify-content:center; gap:8px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 11c0 3.5-1 6.5-3 9"/><path d="M8 7.5A5 5 0 0 1 17 11c0 2.5-.3 5-1.2 7.4"/><path d="M5 10a7 7 0 0 1 12.9-3.8"/><path d="M12 11c0 2.2-.4 4.3-1.2 6.2"/><path d="M19.5 14.5c-.2 1.7-.6 3.3-1.2 4.8"/></svg> Entrar con huella o rostro</button>
         <div class="hint-box" style="margin-top:0;">
           <a href="#" id="go-forgot-password">¿Olvidaste tu contraseña?</a>
         </div>
@@ -1957,10 +2058,18 @@ function renderLogin() {
       const { token } = await api('/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
       setToken(token);
       await boot();
+      setTimeout(ofrecerHuella, 1500);
     } catch (err) {
       document.getElementById('login-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`;
       btn.disabled = false; btn.textContent = 'Ingresar';
     }
+  });
+  const huellaBtn = document.getElementById('login-huella');
+  huellaDisponibleEnEquipo().then((si) => { if (si) huellaBtn.style.display = 'flex'; });
+  huellaBtn.addEventListener('click', async () => {
+    huellaBtn.disabled = true;
+    try { const token = await entrarConHuella(); setToken(token); await boot(); }
+    catch (err) { document.getElementById('login-error').innerHTML = `<div class="error-msg">${esc(err.message)}</div>`; huellaBtn.disabled = false; }
   });
   document.getElementById('go-register').addEventListener('click', (e) => { e.preventDefault(); renderRegister(); });
   document.getElementById('go-forgot-password').addEventListener('click', (e) => { e.preventDefault(); renderForgotPassword(); });

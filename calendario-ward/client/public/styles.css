@@ -1590,3 +1590,8 @@ html[data-movimiento="reducido"] *, html[data-movimiento="reducido"] *::before, 
 .acc-op { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; cursor: pointer; }
 .acc-op:first-of-type { border-top: 0; }
 .acc-op input { width: 18px; height: 18px; accent-color: var(--celeste-dark); }
+
+/* ---------- Punto 19: botón "Reintentar" dentro del aviso ---------- */
+.toast .toast-accion { margin-left: 12px; border: 1px solid rgba(255,255,255,.7); background: transparent; color: inherit; border-radius: 8px; padding: 4px 10px; font: inherit; font-weight: 600; cursor: pointer; pointer-events: auto; }
+.toast:has(.toast-accion) { pointer-events: auto; display: flex; align-items: center; gap: 4px; width: max-content; max-width: calc(100vw - 32px); }
+.toast .toast-accion { flex-shrink: 0; }
