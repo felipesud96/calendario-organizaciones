@@ -3787,7 +3787,7 @@ function openDayModal(iso) {
                 <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
-                  <div class="lc-sub">${it.kind === 'event' ? prepPillHtml(it) : ''}${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}</div>
+                  <div class="lc-sub">${it.kind === 'event' ? prepPillHtml(it) : ''}${it.kind === 'stake' ? '<span class="status-pill status-stake">🏛️ Estaca</span>' : esc(it.organizationName)}${it.location ? ` · <span class="lc-location">📍 ${esc(locationDisplay(it))}</span>` : ''}${it.kind === 'interview' && it.interviewerName ? ` · 🧑‍💼 ${esc(it.interviewerName)}` : ''}${it.kind === 'event' ? involvedOrgsBadgesHtml(it) : ''}${it.kind === 'event' && it.createdAt ? `<span class="lc-agendada"> · agendada el ${esc(fmtDateHuman(toISODate(new Date(it.createdAt))))}</span>` : ''}</div>
                 </div>
                 <div class="lc-when">${it.kind === 'stake' && it.allDay ? 'Todo el día' : esc(fmtTime(it.startTime))}${it.endTime ? ' - ' + esc(fmtTime(it.endTime)) : ''}</div>
               </div>`).join('') : emptyStateHtml('Sin actividades este día', canManageAnyEvents() ? { id: 'day-empty-new', label: '+ Agendar este día' } : null, '📆')}
@@ -3806,6 +3806,14 @@ function openDayModal(iso) {
 }
 
 function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+// Fecha en que se agendó la actividad (y quién): así, si dos chocan, se ve cuál fue primero.
+function agendadaHtml(item) {
+  if (!item || !item.createdAt) return '';
+  const d = new Date(item.createdAt);
+  if (isNaN(d)) return '';
+  const hora = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `<div class="ro-detail-row" style="font-size:12.5px;color:var(--ink-soft)">Agendada el ${esc(fmtDateHuman(toISODate(d)))} a las ${hora}${item.creadoPorNombre ? ` por ${esc(item.creadoPorNombre)}` : ''}</div>`;
+}
 // Pastilla "Preparación 60%" / "Lista" para actividades con preparativos.
 function prepPillHtml(it) {
   const l = Array.isArray(it.preparativos) ? it.preparativos : [];
@@ -4074,6 +4082,7 @@ function openReadOnlyModal(item, kind) {
           ${kind === 'interview' && item.memberPhone ? `<div class="ro-detail-row">${phoneWithWhatsAppHtml(item.memberPhone, '📞 ' + esc(item.memberPhone))}</div>` : ''}
           ${kind === 'interview' && item.memberEmail ? `<div class="ro-detail-row">✉️ ${esc(item.memberEmail)}</div>` : ''}
           ${item.description ? `<div class="ro-detail-row ro-desc">${esc(item.description)}</div>` : ''}
+          ${kind === 'event' ? agendadaHtml(item) : ''}
           ${kind === 'event' && !item.isMeeting ? '<div id="prep-caja"></div>' : ''}
           ${kind === 'event' && item.supervisingAdults && item.supervisingAdults.length ? `<div class="ro-detail-row">🧑‍🤝‍🧑 Adultos supervisores: ${item.supervisingAdults.map(esc).join(', ')}</div>` : ''}
           ${kind === 'stake' ? `<div class="hint-box" style="margin-top:10px;">🔗 Sincronizada automáticamente desde el calendario de Estaca — no se puede editar aquí. ${item.blocking === false ? 'Es informativa: no bloquea que se agende algo encima.' : 'Tiene prioridad: no se puede agendar algo encima sin autorización del líder de Obispado.'}</div>` : ''}
@@ -4929,6 +4938,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
             </div>
             <div id="ev-monday-warning"></div>
           </form>
+          ${isEdit ? agendadaHtml(existing) : ''}
           ${isEdit && !existing.isMeeting ? '<div id="prep-caja"></div>' : ''}
         </div>
         <div class="modal-footer" style="flex-wrap:wrap;">

@@ -287,7 +287,7 @@ export function registerEventRoutes(router) {
     if (query.organizationId) items = items.filter((e) => String(e.organizationId) === String(query.organizationId));
     items = items
       .filter((e) => canSeeMeeting(req.user, e))
-      .map((e) => withOrgInfo(e, data.organizations, req.user.id))
+      .map((e) => ({ ...withOrgInfo(e, data.organizations, req.user.id), creadoPorNombre: data.users.find((u) => u.id === Number(e.createdBy))?.name || '' }))
       .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
     sendJson(res, 200, items);
   }));
