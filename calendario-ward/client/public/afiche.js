@@ -206,7 +206,7 @@
       ${S.eleccion ? `<p class="af-lbl">¿Para qué actividad?</p><select id="af-elige" style="margin-bottom:14px"><option value="">— Elige una actividad —</option>${S.eleccion.map((x) => `<option value="${x.id}" ${S.ev.id === x.id ? 'selected' : ''}>${e(x.title)} · ${e(fechaLarga(x.date))}</option>`).join('')}<option value="otra">Otra (escribir el título)</option></select>` : ''}
       ${(sinAct && !S.eleccion) || S.ev.libre ? `<p class="af-lbl">Título del afiche</p><input class="af-in" id="af-tit" maxlength="80" placeholder="Ej: Noche de talentos" value="${e(S.ev.titulo || '')}" style="margin-bottom:14px" />` : ''}
       <p class="af-lbl">¿Cómo lo imaginas? <button type="button" id="af-sugerir">${ico('chispa', 14)} Otra sugerencia</button></p>
-      <textarea id="af-idea" maxlength="500" placeholder="${S.sugerencia ? 'Escribe tu idea, o déjalo vacío y uso la sugerencia de abajo' : 'Descríbelo con tus palabras. Ej: niños jugando en un parque al atardecer'}">${e(o.idea)}</textarea>
+      <textarea id="af-idea" maxlength="1500" placeholder="${S.sugerencia ? 'Escribe tu idea, o déjalo vacío y uso la sugerencia de abajo' : 'Descríbelo con tus palabras. Ej: niños jugando en un parque al atardecer'}">${e(o.idea)}</textarea>
       <div class="af-sug" id="af-sug" style="${S.sugerencia ? '' : 'display:none'}"><span><b>Sugerencia:</b> <span id="af-sug-t">${e(S.sugerencia || '')}</span></span><button type="button" id="af-sug-usar">Editarla</button></div>
       <div class="af-fila" style="margin-top:12px">
         <div><p class="af-lbl">Para</p><select id="af-publico">${PUBLICO.map(([k, n]) => `<option value="${k}" ${o.publico === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
@@ -566,7 +566,7 @@
     if (S.tab === 'imagen') {
       // Primero la idea (el "prompt"), editable ahí mismo; después los retoques rápidos.
       p.innerHTML = `<p class="af-lbl" style="margin-top:2px">Idea de la imagen <button type="button" id="af-r-mas">Más opciones</button></p>
-        <textarea id="af-r-idea" maxlength="500" rows="2" style="min-height:62px" placeholder="Describe lo que quieres ver">${e(S.opts.idea)}</textarea>
+        <textarea id="af-r-idea" maxlength="1500" rows="2" style="min-height:62px" placeholder="Describe lo que quieres ver">${e(S.opts.idea)}</textarea>
         <button type="button" class="btn btn-primary" id="af-r-pintar" style="width:100%;justify-content:center;margin:8px 0 12px">${ico('pincel')} Pintar con esta idea</button>
         <p class="af-lbl">Retoques rápidos</p>
         <div class="af-chips scroll">${RETOQUES.map(([k, n]) => `<button type="button" class="af-chip" data-r="${k}">${n}</button>`).join('')}</div>

@@ -155,11 +155,12 @@ async function preguntarGemini(sistema, texto, temperatura = 0.7) {
 }
 
 const SISTEMA_PROMPT = `You write prompts for the FLUX image model to illustrate posters for activities of a local congregation (ward) of The Church of Jesus Christ of Latter-day Saints in Chile.
-Return ONLY the prompt, in English, 60-120 words, one paragraph, no quotes.
+Return ONLY the prompt, in English, 60-150 words (never more: the image model ignores what comes after ~180 words), one paragraph, no quotes.
 
 THE PERSON'S OWN DESCRIPTION IS THE MOST IMPORTANT THING:
 - Translate it faithfully and COMPLETELY, and put it in the FIRST sentence (the image model pays most attention to the beginning).
 - Keep EVERY concrete detail they mention: how many people, ages, genders, clothing and its colors, actions, objects, place, weather, time of day, colors of the scene. Never drop, soften or replace a detail.
+- If the description is long or detailed (it may already be in English), condense it WITHOUT losing details: number of people and each person's outfit and colors first, written compactly (e.g. "man 1: navy polo, beige shorts; man 2: red plaid flannel, dark jeans"), then the action, then the place and background, then camera/style.
 - Only ADD what is missing (lighting, background, composition, camera angle). Audience, mood and style options are secondary hints: use them only if they do not contradict the description.
 
 When people appear and the person did not specify otherwise: make them clearly different from each other — varied ages, body types, hairstyles, poses, and each person wearing DIFFERENT everyday clothing in different colors and styles (no uniforms, no matching outfits). People of Latin American appearance.
@@ -240,7 +241,7 @@ export function registerAfichesRoutes(router) {
     const txt = (v, n) => String(v || '').trim().slice(0, n);
     const o = {
       titulo: txt(b.titulo, 120), descripcion: txt(b.descripcion, 300), organizacion: txt(b.organizacion, 80),
-      idea: txt(b.idea, 500), publico: txt(b.publico, 20), ambiente: txt(b.ambiente, 20), aparece: txt(b.aparece, 20),
+      idea: txt(b.idea, 1500), publico: txt(b.publico, 20), ambiente: txt(b.ambiente, 20), aparece: txt(b.aparece, 20),
       estilo: txt(b.estilo, 20), estiloLibre: txt(b.estiloLibre, 200), formato: ['historia', 'cuadrado', 'carta'].includes(b.formato) ? b.formato : 'historia',
       retoques: (Array.isArray(b.retoques) ? b.retoques : []).map((r) => txt(r, 20)).filter((r) => MAPA.retoque[r]).slice(0, 5),
       previo: txt(b.promptPrevio, 1900),
