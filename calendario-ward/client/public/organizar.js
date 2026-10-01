@@ -49,9 +49,14 @@
   .prep-ed input[type=checkbox] { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--celeste-dark); }
   .prep-ed input[type=text], .prep-ed select, .prep-ed input[type=date] { box-sizing: border-box; width: 100% !important; min-width: 0; padding: 8px 10px; font-size: 13.5px; border: 1px solid var(--border); border-radius: 8px; background: var(--white); color: var(--ink); margin: 0; }
   .prep-ed .r2 { padding-left: 26px; }
-  .prep-ed .r2 select { flex: 1 1 auto; }
+  .prep-ed .r2 .prep-quien-box { flex: 1 1 auto; position: relative; min-width: 0; }
+  .prep-ed .prep-fecha { cursor: pointer; }
+  .prep-sug { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; background: var(--white); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); max-height: 220px; overflow-y: auto; padding: 4px; }
+  .prep-sug button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 7px; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+  .prep-sug button:hover, .prep-sug button.activo { background: var(--celeste-lighter); }
+  .prep-sug small { color: var(--ink-soft); margin-left: 4px; }
+  .prep-sug .libre { color: var(--ink-soft); font-size: 12.5px; }
   .prep-ed .r2 .prep-fecha { flex: 0 0 150px; width: 150px !important; }
-  .prep-ed .prep-nombre { margin-left: 26px !important; width: calc(100% - 26px) !important; }
   .prep-ed .prep-quitar { border: 0; background: none; color: var(--ink-soft); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
   @media (max-width: 420px) { .prep-ed .r2 { flex-wrap: wrap; } .prep-ed .r2 .prep-fecha { flex: 1 1 100%; width: 100% !important; } }
   #orgf-root .modal { max-width: 620px; }
@@ -133,7 +138,8 @@
   function abrirEditor(ev, d, alGuardar) {
     let items = (d.items || []).map((x) => ({ ...x }));
     const personas = d.personas || [];
-    const opciones = (sel) => `<option value="">Sin responsable</option>${personas.map((p) => `<option value="${p.id}" ${Number(sel) === p.id ? 'selected' : ''}>${e(p.nombre)}${p.org ? ` · ${e(p.org)}` : ''}</option>`).join('')}<option value="otro" ${!sel && items.length ? '' : ''}>Otra persona (escribir nombre)…</option>`;
+    const norm = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const nombreDe = (x) => (x.responsableId ? (personas.find((p) => Number(p.id) === Number(x.responsableId)) || {}).nombre : '') || x.responsableNombre || '';
     const { cerrar } = modal('prep-root', `Preparativos · ${ev.title || ev.titulo || ''}`, `
       <p class="prep-vacio" style="margin:0 0 10px">Las personas con cuenta verán su tarea en <b>Mi semana</b> y recibirán un aviso.</p>
       <div id="prep-lista"></div>
@@ -146,27 +152,56 @@
     const lista = $('prep-lista');
     const leer = () => {
       items = [...lista.querySelectorAll('.prep-ed')].map((row) => {
-        const sel = row.querySelector('select').value;
+        const q = row.querySelector('.prep-quien');
+        const nombre = q.value.trim();
+        const p = q.dataset.uid ? personas.find((x) => String(x.id) === q.dataset.uid) : personas.find((x) => norm(x.nombre) === norm(nombre));
+        const uid = nombre && p ? Number(p.id) : null;
         return {
           id: row.dataset.id ? Number(row.dataset.id) : undefined,
           texto: row.querySelector('.prep-texto').value,
-          responsableId: sel && sel !== 'otro' ? Number(sel) : null,
-          responsableNombre: sel === 'otro' ? row.querySelector('.prep-nombre').value : '',
+          responsableId: uid,
+          responsableNombre: uid ? '' : nombre,
           fecha: row.querySelector('.prep-fecha').value || null,
           hecho: row.querySelector('input[type=checkbox]').checked,
         };
       });
     };
+    // Buscador de responsable: al escribir muestra solo las personas que coinciden;
+    // si no hay ninguna, queda el nombre escrito tal cual (persona sin cuenta).
+    const buscador = (inp) => {
+      const box = inp.parentElement; let menu = null; let act = -1; let lista2 = [];
+      const cerrarMenu = () => { if (menu) { menu.remove(); menu = null; } act = -1; };
+      const elegir = (p) => { inp.value = p.nombre; inp.dataset.uid = String(p.id); cerrarMenu(); };
+      const mostrar = () => {
+        const q = norm(inp.value);
+        lista2 = personas.filter((p) => !q || norm(p.nombre).includes(q) || norm(p.org).includes(q)).slice(0, 8);
+        if (!q && !lista2.length) return cerrarMenu();
+        if (!menu) { menu = document.createElement('div'); menu.className = 'prep-sug'; box.appendChild(menu); }
+        menu.innerHTML = lista2.map((p, i) => `<button type="button" data-i="${i}" class="${i === act ? 'activo' : ''}">${e(p.nombre)}${p.org ? `<small>· ${e(p.org)}</small>` : ''}</button>`).join('')
+          + (q && !lista2.some((p) => norm(p.nombre) === q) ? `<div class="libre" style="padding:6px 10px">Sin cuenta: se guarda como «${e(inp.value.trim())}»</div>` : '');
+        menu.querySelectorAll('button').forEach((b) => b.addEventListener('mousedown', (x) => { x.preventDefault(); elegir(lista2[Number(b.dataset.i)]); }));
+      };
+      inp.addEventListener('focus', mostrar);
+      inp.addEventListener('input', () => { inp.dataset.uid = ''; act = -1; mostrar(); });
+      inp.addEventListener('blur', () => setTimeout(cerrarMenu, 120));
+      inp.addEventListener('keydown', (x) => {
+        if (!menu || !lista2.length) return;
+        if (x.key === 'ArrowDown') { act = Math.min(lista2.length - 1, act + 1); mostrar(); x.preventDefault(); }
+        else if (x.key === 'ArrowUp') { act = Math.max(0, act - 1); mostrar(); x.preventDefault(); }
+        else if (x.key === 'Enter' && act >= 0) { elegir(lista2[act]); x.preventDefault(); }
+        else if (x.key === 'Escape') { cerrarMenu(); x.stopPropagation(); }
+      });
+    };
     const pintar = () => {
       lista.innerHTML = items.length ? items.map((x) => `<div class="prep-ed" data-id="${x.id || ''}">
         <div class="r1"><input type="checkbox" ${x.hecho ? 'checked' : ''} aria-label="Hecho" /><input type="text" class="prep-texto" maxlength="120" placeholder="Qué hay que hacer" value="${e(x.texto)}" /><button type="button" class="prep-quitar" aria-label="Quitar">×</button></div>
-        <div class="r2"><select aria-label="Responsable">${opciones(x.responsableId)}</select><input type="date" class="prep-fecha" value="${e(x.fecha || '')}" max="${e(ev.date || '')}" title="Hasta cuándo" aria-label="Hasta cuándo" /></div>
-        <input type="text" class="prep-nombre" maxlength="60" placeholder="Nombre de la persona" value="${e(x.responsableNombre || '')}" style="${!x.responsableId && x.responsableNombre ? '' : 'display:none'}" />
+        <div class="r2"><div class="prep-quien-box"><input type="text" class="prep-quien" maxlength="60" autocomplete="off" placeholder="Responsable (escribe un nombre)" aria-label="Responsable" value="${e(nombreDe(x))}" data-uid="${x.responsableId || ''}" /></div><input type="date" class="prep-fecha" value="${e(x.fecha || '')}" max="${e(ev.date || '')}" title="Hasta cuándo" aria-label="Hasta cuándo" /></div>
         </div>`).join('') : '<p class="prep-vacio">Aún no hay tareas. Agrega una o usa "Sugerir lista".</p>';
       lista.querySelectorAll('.prep-ed').forEach((row, i) => {
-        const sel = row.querySelector('select');
-        if (!items[i].responsableId && items[i].responsableNombre) sel.value = 'otro';
-        sel.addEventListener('change', () => { row.querySelector('.prep-nombre').style.display = sel.value === 'otro' ? '' : 'none'; if (sel.value === 'otro') row.querySelector('.prep-nombre').focus(); });
+        buscador(row.querySelector('.prep-quien'));
+        // Tocar la fecha abre el mini calendario (no solo el iconito).
+        const f = row.querySelector('.prep-fecha');
+        f.addEventListener('click', () => { try { f.showPicker(); } catch (x) { /* navegadores antiguos */ } });
         row.querySelector('.prep-quitar').addEventListener('click', () => { leer(); items.splice(i, 1); pintar(); });
       });
     };
