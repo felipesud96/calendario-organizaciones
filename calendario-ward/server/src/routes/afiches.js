@@ -2,18 +2,19 @@
 // GENERADOR DE AFICHES para actividades — imágenes con IA, gratis.
 // ----------------------------------------------------------------------
 // La ilustración la pinta FLUX.1 [schnell] en Cloudflare Workers AI (nivel
-// gratuito diario: 10.000 "neurons", y cada imagen de 1024x1024 usa ~58, o
-// sea ~170 imágenes al día). El texto (título, fecha, lugar, QR) NO lo
+// gratuito diario: 10.000 "neurons"; con 8 pasos cada imagen de 1024x1024
+// usa ~96, o sea ~100 imágenes al día). El texto (título, fecha, lugar, QR) NO lo
 // escribe la IA: lo dibuja la app encima, así sale sin faltas.
 //
 // Deseret (Gemini) traduce la idea de la persona —en español, simple— a un
 // buen prompt en inglés, con reglas fijas de contenido (sin texto, sin
-// logos, sin figuras sagradas ni templos, ropa modesta).
+// logos, sin figuras sagradas ni templos, apto para todo público).
 //
 // Variables de entorno (Render → Environment):
 //   CLOUDFLARE_ACCOUNT_ID   ID de la cuenta de Cloudflare (obligatoria)
 //   CLOUDFLARE_API_TOKEN    token con permiso "Workers AI" (obligatoria)
-//   AFICHES_POR_DIA         opcional, tope diario del barrio (por defecto 120)
+//   AFICHES_POR_DIA         opcional, tope diario del barrio (por defecto 90)
+//   AFICHES_PASOS           opcional, pasos de FLUX 1-8 (por defecto 8: más fiel al texto)
 //
 // Las imágenes se guardan como .jpg en una carpeta junto a la base de datos
 // (no dentro de db.json). Se conservan las últimas ~80 del barrio, más las
@@ -47,7 +48,7 @@ const config = () => ({
   url: process.env.CLOUDFLARE_AI_URL || '',
 });
 export const afichesDisponible = () => { const c = config(); return !!(c.cuenta && c.token); };
-const topeDiario = () => Math.max(1, Number(process.env.AFICHES_POR_DIA) || 120);
+const topeDiario = () => Math.max(1, Number(process.env.AFICHES_POR_DIA) || 90);
 const hoy = () => new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TZ_APP || 'America/Santiago' }).format(new Date());
 const puedeCrear = (u) => !!u && u.role !== 'member';
 
@@ -84,7 +85,7 @@ const MAPA = {
     fondo: 'a different background setting',
   },
 };
-const REGLAS_EN = 'No text, no letters, no words, no numbers, no logos, no watermarks. Modest clothing (covered shoulders, knee-length or longer). Family-friendly.';
+const REGLAS_EN = 'Each person wearing different everyday clothes in different colors and styles. No text, no letters, no words, no numbers, no logos, no watermarks. Family-friendly.';
 const FORMATO_EN = {
   historia: 'vertical composition with the main subject in the center, calm areas at the top and bottom',
   cuadrado: 'centered square composition',
@@ -154,17 +155,23 @@ async function preguntarGemini(sistema, texto, temperatura = 0.7) {
 }
 
 const SISTEMA_PROMPT = `You write prompts for the FLUX image model to illustrate posters for activities of a local congregation (ward) of The Church of Jesus Christ of Latter-day Saints in Chile.
-Return ONLY the prompt, in English, 50-110 words, one paragraph, no quotes.
-Always: describe a concrete scene, lighting, colors, composition and the requested art style.
-Hard rules (always add them): no text, letters, words or numbers in the image; no logos; do NOT depict Jesus Christ, God, angels, prophets, temples, church buildings with steeples, scriptures with visible text or sacred ordinances — use symbolic, everyday scenes instead (families, nature, light, service, friendship); modest clothing (covered shoulders, knee-length or longer); family-friendly; people of Latin American appearance when people appear.
+Return ONLY the prompt, in English, 60-120 words, one paragraph, no quotes.
+
+THE PERSON'S OWN DESCRIPTION IS THE MOST IMPORTANT THING:
+- Translate it faithfully and COMPLETELY, and put it in the FIRST sentence (the image model pays most attention to the beginning).
+- Keep EVERY concrete detail they mention: how many people, ages, genders, clothing and its colors, actions, objects, place, weather, time of day, colors of the scene. Never drop, soften or replace a detail.
+- Only ADD what is missing (lighting, background, composition, camera angle). Audience, mood and style options are secondary hints: use them only if they do not contradict the description.
+
+When people appear and the person did not specify otherwise: make them clearly different from each other — varied ages, body types, hairstyles, poses, and each person wearing DIFFERENT everyday clothing in different colors and styles (no uniforms, no matching outfits). People of Latin American appearance.
+Hard rules (add them briefly at the end): no text, letters or numbers in the image; no logos; family-friendly; do NOT depict Jesus Christ, God, angels, prophets, temples, church buildings with steeples or sacred ordinances — use everyday scenes instead.
 If a previous prompt is given with requested changes, keep everything else and apply only the changes.`;
 
 async function construirPrompt(o) {
   const pedido = [
     `Activity: ${o.titulo || '(none)'}${o.descripcion ? ` — ${o.descripcion}` : ''}${o.organizacion ? ` (organized by: ${o.organizacion})` : ''}`,
-    o.idea ? `What the person imagines (Spanish): ${o.idea}` : 'The person gave no idea: propose a fitting scene.',
-    o.publico ? `Audience: ${MAPA.publico[o.publico] || o.publico}` : '',
-    o.ambiente ? `Mood: ${MAPA.ambiente[o.ambiente] || o.ambiente}` : '',
+    o.idea ? `THE PERSON'S DESCRIPTION (Spanish, follow it exactly): ${o.idea}` : 'The person gave no idea: propose a fitting scene.',
+    o.publico ? `Audience (secondary hint): ${MAPA.publico[o.publico] || o.publico}` : '',
+    o.ambiente ? `Mood (secondary hint): ${MAPA.ambiente[o.ambiente] || o.ambiente}` : '',
     o.aparece ? `Subject: ${MAPA.aparece[o.aparece] || o.aparece}` : '',
     `Art style: ${o.estiloLibre ? `(the person wrote, in Spanish) ${o.estiloLibre}` : (MAPA.estilo[o.estilo] || 'choose the style that best fits')}`,
     `Composition: ${FORMATO_EN[o.formato] || FORMATO_EN.historia}`,
@@ -184,7 +191,7 @@ async function pintar(prompt) {
     method: 'POST',
     headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json' },
     // (FLUX schnell en Cloudflare no acepta "seed": cada pedido ya sale distinto.)
-    body: JSON.stringify({ prompt, steps: 4 }),
+    body: JSON.stringify({ prompt, steps: Math.min(8, Math.max(1, Number(process.env.AFICHES_PASOS) || 8)) }),
     signal: AbortSignal.timeout(45_000),
   });
   let j = null;
@@ -256,7 +263,7 @@ export function registerAfichesRoutes(router) {
       const prompt = o.previo && !o.retoques.length && b.mismoPrompt ? o.previo : await construirPrompt(o);
       console.log(`[afiches] prompt listo en ${((Date.now() - t0) / 1000).toFixed(1)} s; pintando en Cloudflare…`);
       // Para que "Otra versión" no se parezca demasiado, se varía un poco el encuadre.
-      const VARIANTES = ['wide shot', 'medium shot', 'slightly different angle', 'soft morning light', 'warm golden hour light', 'gentle depth of field', 'from a low angle'];
+      const VARIANTES = ['wide shot, different people with different clothes', 'medium shot, new faces and outfits', 'slightly different angle, varied clothing colors', 'soft morning light, different outfits', 'warm golden hour light, people dressed differently', 'gentle depth of field, varied people', 'from a low angle, different clothing styles'];
       const extra = b.mismoPrompt ? VARIANTES[Math.floor(Math.random() * VARIANTES.length)] : '';
       const seed = null;
       const img = await pintar(extra ? `${prompt} ${extra}.` : prompt);
