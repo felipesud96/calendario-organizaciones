@@ -92,10 +92,15 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
   const preparativos = preparativosDe(user, data, fin);
 
   const atrasados = compromisos.filter((c) => c.atrasado).length;
+  // Recordatorios personales que le pediste a Deseret ("recuérdame…").
+  const recordatorios = (data.recordatorios || [])
+    .filter((r) => Number(r.userId) === Number(user.id) && !r.enviado && r.fecha >= ini && r.fecha <= fin)
+    .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`))
+    .map((r) => ({ tipo: 'recordatorio', fecha: r.fecha, hora: r.hora || '', titulo: r.texto, org: 'Recordatorio', color: null, vista: 'home' }));
   return {
     desde: ini, hasta: fin, hoy,
     totales: { entrevistas: entrevistas.length, solicitudes: solicitudes.length, compromisos: compromisos.length, atrasados, actividades: actividades.length, sinMarcar },
-    entrevistas, solicitudes, compromisos, actividades: actividades.slice(0, 20), aseo, preparativos,
+    entrevistas, solicitudes, compromisos, actividades: actividades.slice(0, 20), aseo, preparativos, recordatorios,
   };
 }
 

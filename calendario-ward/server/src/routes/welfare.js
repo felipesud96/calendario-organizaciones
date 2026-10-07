@@ -141,7 +141,7 @@ function addMonthsISO(fromDateStr, months) {
 function createWelfareReviewCommitment(data, welfareCase, assignee, dueDate) {
   const commitment = {
     id: nextId(data, 'commitments'),
-    description: `Evaluar seguimiento de un caso de Bienestar (categoría: ${(welfareCase.categories || ['otro']).map(WELFARE_CATEGORY_LABEL_ES).join(', ')}) — ¿se extiende la ayuda o se da por solucionado? Ver el caso en el módulo de Bienestar.`,
+    description: textoEvaluacion(welfareCase),
     dueDate,
     assignedToUserId: assignee.id,
     confidential: true,
@@ -166,6 +166,13 @@ function createWelfareReviewCommitment(data, welfareCase, assignee, dueDate) {
     councilPrepReminderSent: false,
   });
   return commitment;
+}
+// Texto del compromiso de evaluación: incluye el nombre de la persona o
+// familia (el compromiso es confidencial: solo lo ven el Obispado, quien lo
+// creó y el responsable).
+function textoEvaluacion(c) {
+  const quien = String(c.memberName || '').trim();
+  return `Evaluar seguimiento de Bienestar${quien ? ` de ${quien}` : ''} (categoría: ${(c.categories || ['otro']).map(WELFARE_CATEGORY_LABEL_ES).join(', ')}) — ¿se extiende la ayuda o se da por solucionado? Ver el caso en el módulo de Bienestar.`;
 }
 function WELFARE_CATEGORY_LABEL_ES(cat) {
   return { alimento: 'alimento', vivienda: 'vivienda', empleo: 'empleo', medico: 'médico', otro: 'otro' }[cat] || cat;
@@ -276,6 +283,9 @@ export function registerWelfareRoutes(router) {
     const updated = await withDb((data) => {
       const c = data.welfareCases.find((x) => x.id === id);
       Object.assign(c, { memberName, categories, description, updatedAt: new Date().toISOString() });
+      // Si cambió el nombre o la categoría, la evaluación pendiente se actualiza.
+      const ev = c.reviewCommitmentId ? findMeetingWithCommitment(data, c.reviewCommitmentId) : null;
+      if (ev && ev.commitment.status !== 'completed') ev.commitment.description = textoEvaluacion(c);
       if (closingNow) closeWelfareCase(data, c, req.user, body.closureChecklist, 'Cerrado manualmente desde la edición del caso');
       else if (reopeningNow) { reopenWelfareCase(data, c, req.user); c.status = status; }
       else c.status = status;

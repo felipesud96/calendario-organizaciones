@@ -78,14 +78,26 @@ self.addEventListener('push', (event) => {
   } catch (err) {
     // el payload no era JSON válido — se muestra igual con el texto por defecto
   }
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'OrganizaSion', {
-      body: data.body || '',
+  // Avisos agrupados: si todavía hay avisos sin abrir de la app, se juntan
+  // en uno solo ("3 novedades") en vez de llenar la barra de notificaciones.
+  event.waitUntil((async () => {
+    const nuevo = { title: data.title || 'OrganizaSion', body: data.body || '', url: data.url || '/' };
+    let previos = [];
+    try {
+      const abiertas = await self.registration.getNotifications({ tag: 'organizasion' });
+      abiertas.forEach((n) => { previos = previos.concat((n.data && n.data.items) || []); });
+    } catch (err) { /* navegador sin getNotifications */ }
+    const items = [nuevo, ...previos].slice(0, 20);
+    const varios = items.length > 1;
+    await self.registration.showNotification(varios ? `${items.length} novedades en OrganizaSion` : nuevo.title, {
+      body: varios ? items.slice(0, 4).map((x) => `• ${x.title}`).join('\n') + (items.length > 4 ? `\n…y ${items.length - 4} más` : '') : nuevo.body,
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      data: { url: data.url || '/' },
-    })
-  );
+      tag: 'organizasion',
+      renotify: true,
+      data: { url: varios ? '/' : nuevo.url, items },
+    });
+  })());
 });
 
 // Al tocar la notificación: si ya hay una pestaña de la app abierta, la

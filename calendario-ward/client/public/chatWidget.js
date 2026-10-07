@@ -181,6 +181,18 @@ const ESTILOS = `
   .deseret-id .estado { font-size: 12px; color: var(--d-muted); display: flex; align-items: center; gap: 6px; margin-top: 2px; }
   .deseret-id .estado::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
   .deseret-botones { display: flex; gap: 2px; flex: none; }
+  #chat-header .deseret-botones > #chat-manos-btn.auto-on { background: var(--d-brand); color: #fff; }
+  .deseret-hist { padding: 4px 2px; }
+  .deseret-hist .dh-cab { display: flex; align-items: center; justify-content: space-between; margin: 2px 2px 10px; }
+  .deseret-hist .dh-cab b { font-size: 14px; color: var(--d-ink); }
+  .deseret-hist button.dh-volver, .deseret-hist button.dh-borrar { border: 0; background: none; color: var(--d-brand); font-weight: 600; cursor: pointer; font-size: 13px; padding: 6px; }
+  .deseret-hist button.dh-borrar { color: var(--d-muted); display: block; margin: 10px auto 0; font-weight: 500; }
+  .deseret-hist .dh-item { display: block; width: 100%; text-align: left; border: 1px solid var(--d-line, #e5e7eb); background: var(--d-bg, #fff); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; color: var(--d-ink); }
+  .deseret-hist .dh-item:hover { background: var(--d-soft); }
+  .deseret-hist .dh-item.dh-actual { border-color: var(--d-brand); }
+  .deseret-hist .dh-t { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deseret-hist small { color: var(--d-muted); font-size: 12px; }
+  .deseret-hist .dh-vacio { color: var(--d-muted); font-size: 13px; text-align: center; margin: 24px 0; }
   #chat-header .deseret-botones > button { background: transparent; border: 0; color: var(--d-muted); cursor: pointer; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; }
   #chat-header .deseret-botones > button:hover, #chat-header .deseret-botones > button[aria-expanded="true"] { background: var(--d-soft); color: var(--d-ink); }
 
@@ -352,6 +364,7 @@ export function initChatWidget() {
               <div><div class="nombre">Deseret</div><div class="estado">Asistente del barrio</div></div>
             </div>
             <div class="deseret-botones">
+              <button id="chat-manos-btn" type="button" title="Manos libres: conversar por voz" aria-label="Manos libres: conversar por voz" aria-pressed="false">${ICONOS.oido}</button>
               <button id="chat-menu-btn" type="button" title="Opciones" aria-label="Opciones de Deseret" aria-haspopup="menu" aria-expanded="false">${ICONOS.mas}</button>
               <button id="chat-close-btn" type="button" title="Cerrar" aria-label="Cerrar">${ICONOS.cerrar}</button>
             </div>
@@ -359,14 +372,15 @@ export function initChatWidget() {
               <button id="chat-voice-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.vozOn}<span>Leer respuestas en voz alta</span><i class="dm-sw"></i></button>
               <div class="deseret-voz-barra" role="radiogroup" aria-label="Voz de Deseret"><button type="button" role="radio" data-voz="femenina">Voz femenina</button><button type="button" role="radio" data-voz="masculina">Voz masculina</button></div>
               <button id="chat-hey-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false" style="display:none">${ICONOS.mic}<span>“Hey Deseret”</span><i class="dm-sw"></i></button>
-              <button id="chat-auto-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.auto}<span>Modo conducción</span><i class="dm-sw"></i></button>
+              <button id="chat-auto-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.auto}<span>Manos libres (conversar por voz)</span><i class="dm-sw"></i></button>
               <div class="dm-sep"></div>
               <button id="chat-escucha-btn" type="button" class="dm-item" role="menuitem">${ICONOS.mic}<span>Escuchar una reunión</span></button>
               <button id="chat-guia-btn" type="button" class="dm-item" role="menuitem">${ICONOS.guia}<span>Guía rápida</span></button>
               <button id="chat-reset-btn" type="button" class="dm-item" role="menuitem">${ICONOS.reiniciar}<span>Nueva conversación</span></button>
+              <button id="chat-hist-btn" type="button" class="dm-item" role="menuitem">${ICONOS.reloj}<span>Conversaciones anteriores</span></button>
             </div>
           </div>
-          <div class="deseret-auto-aviso">Modo conducción: háblame y te respondo en voz, corto. No mires la pantalla mientras manejas.</div>
+          <div class="deseret-auto-aviso">Manos libres: háblame y te respondo en voz, corto. Di "terminar" o toca el oído para salir. Si vas manejando, no mires la pantalla.</div>
           <div id="chat-messages" aria-live="polite"></div>
           <div id="chat-input-area">
             <div class="d-campo">
@@ -409,10 +423,22 @@ export function initChatWidget() {
   // ---------------- Punto 11: la conversación sobrevive a una recarga ----------------
   // Se guarda en sessionStorage (solo esta pestaña; se borra al cerrar sesión).
   let estado = store.get('sessionStorage', CLAVE_CHAT) || { msgs: [], historial: [] };
+  // Conversaciones anteriores (en este dispositivo, por usuario): cada
+  // conversación queda guardada con su tema (la primera pregunta) para
+  // volver a ella después. Se borran al cerrar sesión.
+  const claveHist = () => { let u = ''; try { u = (typeof state !== 'undefined' && state.user && state.user.id) || ''; } catch { u = ''; } return `deseret_hist_${u}`; };
+  const leerHist = () => (Array.isArray(store.get('localStorage', claveHist())) ? store.get('localStorage', claveHist()) : []);
   const guardar = () => {
     estado.msgs = estado.msgs.slice(-40);
     estado.historial = estado.historial.slice(-3);
     store.set('sessionStorage', CLAVE_CHAT, estado);
+    const primera = estado.msgs.find((m) => m.role === 'user' && !String(m.texto || '').startsWith('__'));
+    if (!primera) return;
+    if (!estado.id) { estado.id = Date.now(); store.set('sessionStorage', CLAVE_CHAT, estado); }
+    const hist = leerHist().filter((h) => h.id !== estado.id);
+    hist.unshift({ id: estado.id, titulo: String(primera.texto).replace(/\s+/g, ' ').slice(0, 70), fecha: new Date().toISOString(), n: estado.msgs.filter((m) => m.role === 'user').length,
+      msgs: estado.msgs.map((m) => { const c = { ...m }; if (c.extra) { c.extra = { ...c.extra }; delete c.extra.opciones; } return c; }), historial: estado.historial });
+    store.set('localStorage', claveHist(), hist.slice(0, 15));
   };
 
   const scrollAbajo = () => { messagesDiv.scrollTop = messagesDiv.scrollHeight; };
@@ -526,6 +552,9 @@ export function initChatWidget() {
               callar();
               window.abrirFichaPersona(o.ficha);
             });
+          }
+          else if (o.ir && typeof window.irAPantalla === 'function') {
+            b.addEventListener('click', () => { chatWindow.style.display = 'none'; callar(); window.irAPantalla(o.ir); });
           }
           else if (o.afiche && typeof window.abrirAfiche === 'function') {
             b.addEventListener('click', () => {
@@ -942,6 +971,13 @@ export function initChatWidget() {
     store.set('localStorage', 'deseret_usado', true); // A17: "Pregúntale algo a Deseret" ✓
     // Comandos que se resuelven aquí mismo (sin ir al servidor).
     const tn = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Manos libres: "terminar", "eso es todo", "gracias, chao" → sale del modo.
+    if (conduccion && /^(deseret,?\s*)?(terminar|termina|terminamos|salir|sal|eso es todo|chao|adios|gracias,? (eso es todo|chao|adios)|listo,? gracias|apaga\w* (el )?manos libres|sal\w* de manos libres)[\s.!]*$/.test(tn)) {
+      enviando = false; sendBtn.disabled = false; chatInput.value = '';
+      window.__deseretSalirManos();
+      hablar('Listo. Cuando me necesites, aquí estoy.');
+      return;
+    }
     const cambioVoz = /\b(voz|habla\w*|hablame)\b.*\b(masculin\w*|de hombre|hombre|varon)\b/.test(tn) ? 'masculina'
       : /\b(voz|habla\w*|hablame)\b.*\b(femenin\w*|de mujer|mujer)\b/.test(tn) ? 'femenina' : null;
     const escucharReunion = /^(deseret,?\s*)?(escucha|graba|grabar|escuchar|toma (nota|notas|el acta) de)\s+(la|esta|mi|una)?\s*reunion\b|\bmodo oyente\b/.test(tn);
@@ -956,7 +992,7 @@ export function initChatWidget() {
       estado.msgs.push({ role: 'user', texto: text }); pintarMensaje(estado.msgs.at(-1));
       estado.msgs.push({ role: 'bot', texto: 'Te abro el generador de afiches. Revisa la idea y toca **Crear afiche**.' }); pintarMensaje(estado.msgs.at(-1)); guardar();
       chatWindow.style.display = 'none'; callar();
-      window.abrirAfiche({ buscar: text });
+      window.abrirAfiche(/\bsemana(l)?\b/.test(tn) ? { semana: true } : { buscar: text });
       return;
     }
     if ((comienza || termina) && typeof window.escucharYa === 'function') {
@@ -1108,15 +1144,19 @@ export function initChatWidget() {
     chatWindow.classList.toggle('conduccion', conduccion);
     autoBtn.classList.toggle('auto-on', conduccion);
     autoBtn.setAttribute('aria-pressed', String(conduccion));
-    autoBtn.title = conduccion ? 'Modo conducción activado — toca para salir' : 'Modo conducción (solo voz, respuestas cortas)';
+    autoBtn.title = conduccion ? 'Manos libres activado — toca para salir' : 'Manos libres (solo voz, respuestas cortas)';
+    const mb = document.getElementById('chat-manos-btn');
+    if (mb) { mb.classList.toggle('auto-on', conduccion); mb.setAttribute('aria-pressed', String(conduccion)); }
   };
   pintarAuto();
+  document.getElementById('chat-manos-btn').addEventListener('click', () => autoBtn.click());
+  window.__deseretSalirManos = () => { if (conduccion) autoBtn.click(); };
   autoBtn.addEventListener('click', () => {
     conduccion = !conduccion;
     store.set('localStorage', CLAVE_AUTO, conduccion);
     pintarAuto();
     if (conduccion) {
-      hablar('Modo conducción activado. Te escucho.', () => { if (!micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click(); });
+      hablar('Manos libres activado. Te escucho.', () => { if (!micBtn.classList.contains('mic-listening') && micBtn.style.display !== 'none') micBtn.click(); });
     } else callar();
   });
 
@@ -1377,6 +1417,24 @@ export function initChatWidget() {
     });
   }
   document.getElementById('chat-guia-btn').addEventListener('click', () => { cerrarMenu(); pasoGuia(0); });
+  document.getElementById('chat-hist-btn').addEventListener('click', () => { cerrarMenu(); mostrarHistorial(); });
+  function mostrarHistorial() {
+    const hist = leerHist();
+    const cuando = (iso) => { try { const d = new Date(iso); return d.toLocaleDateString('es-CL', { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' + d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+    messagesDiv.innerHTML = `<div class="deseret-hist"><div class="dh-cab"><b>Conversaciones anteriores</b><button type="button" class="dh-volver">Volver</button></div>
+      ${hist.length ? hist.map((h) => `<button type="button" class="dh-item ${h.id === estado.id ? 'dh-actual' : ''}" data-hid="${h.id}"><span class="dh-t">${escapeHtml(h.titulo)}</span><small>${escapeHtml(cuando(h.fecha))} · ${h.n} ${h.n === 1 ? 'pregunta' : 'preguntas'}${h.id === estado.id ? ' · actual' : ''}</small></button>`).join('') : '<p class="dh-vacio">Aún no hay conversaciones guardadas en este dispositivo.</p>'}
+      ${hist.length ? '<button type="button" class="dh-borrar">Borrar historial</button>' : ''}</div>`;
+    messagesDiv.scrollTop = 0;
+    messagesDiv.querySelector('.dh-volver').addEventListener('click', () => { repintarTodo(); scrollAbajo(); });
+    messagesDiv.querySelector('.dh-borrar')?.addEventListener('click', () => { store.del('localStorage', claveHist()); mostrarHistorial(); });
+    messagesDiv.querySelectorAll('[data-hid]').forEach((b) => b.addEventListener('click', () => {
+      const h = leerHist().find((x) => String(x.id) === b.dataset.hid);
+      if (!h) return;
+      estado = { id: h.id, msgs: h.msgs || [], historial: h.historial || [] };
+      store.set('sessionStorage', CLAVE_CHAT, estado);
+      repintarTodo(); scrollAbajo();
+    }));
+  }
   document.getElementById('chat-reset-btn').addEventListener('click', () => {
     estado = { msgs: [], historial: [] };
     cerrarMenu();
@@ -1410,6 +1468,7 @@ export function initChatWidget() {
       if (chatWindow.style.display !== 'none') chatWindow.style.display = 'none';
       if (document.querySelector('.login-logo') && estado.msgs.length > 1) {
         store.del('sessionStorage', CLAVE_CHAT);
+        try { Object.keys(localStorage).filter((k) => k.startsWith('deseret_hist_')).forEach((k) => localStorage.removeItem(k)); } catch { /* nada */ }
         estado = { msgs: [], historial: [] };
         repintarTodo();
       }

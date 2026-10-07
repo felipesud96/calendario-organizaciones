@@ -64,6 +64,9 @@
   .af-chip { border:1px solid var(--border); background:var(--white); color:var(--ink); border-radius:999px; padding:6px 12px; font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; flex-shrink:0; }
   .af-chip.on { background:var(--celeste-dark); border-color:var(--celeste-dark); color:#fff; }
   .af-fila { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .af-sem { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; max-height:180px; overflow-y:auto; }
+  .af-sem label { display:flex; gap:8px; align-items:flex-start; font-size:13px; }
+  .af-sem input { margin-top:2px; accent-color: var(--celeste-dark); }
   .af-mas { border:1px solid var(--border); border-radius:12px; margin-top:2px; }
   .af-mas > summary { list-style:none; cursor:pointer; padding:11px 12px; display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:600; }
   .af-mas > summary::-webkit-details-marker { display:none; }
@@ -191,7 +194,7 @@
     $('af-fondo').addEventListener('click', (x) => { if (x.target.id === 'af-fondo') cerrar(); });
   }
   const chips = (lista, sel, grupo, extra = '') => `<div class="af-chips ${extra}">${lista.map(([k, n]) => `<button type="button" class="af-chip ${sel === k ? 'on' : ''}" data-g="${grupo}" data-k="${k}">${e(n)}</button>`).join('')}</div>`;
-  const tarjetaAct = (ev) => `<div class="af-act"><span class="af-dot" style="background:${e(ev.color || '#8b5cf6')}"></span><div><b>${e(ev.titulo || 'Afiche')}</b><small>${e([fechaLarga(ev.fecha), ev.hora, ev.lugar, ev.org].filter(Boolean).join(' · '))}</small></div></div>`;
+  const tarjetaAct = (ev) => `<div class="af-act"><span class="af-dot" style="background:${e(ev.color || '#8b5cf6')}"></span><div><b>${e(ev.titulo || 'Afiche')}</b><small>${e(ev.detalle || [fechaLarga(ev.fecha), ev.hora, ev.lugar, ev.org].filter(Boolean).join(' · '))}</small></div></div>`;
 
   // ---------------- pantalla 1: crear ----------------
   function resumenMas() {
@@ -387,6 +390,48 @@
     }
     const cajas = {};
     if (bloque.length) cajas.titulo = { x0: cx - anchoTitulo / 2 - W * 0.02, y0: y0Titulo - W * 0.01, x1: cx + anchoTitulo / 2 + W * 0.02, y1: y };
+    // Afiche "Esta semana en el barrio": lista de actividades en un panel.
+    if (sesion.semana && sesion.datos) {
+      const items = sesion.semana.filter((x) => !x.oculto);
+      ctx.shadowBlur = 0;
+      const k0 = (sesion.tam && sesion.tam.datos) || 1;
+      const disponible = H - pad - (y + W * 0.04);
+      let k = k0;
+      const altoFila = () => W * 0.13 * k;
+      const altoPanel = () => Math.max(1, items.length) * altoFila() + W * 0.05 * k;
+      while (altoPanel() > disponible && k > 0.45) k *= 0.94;
+      const anchoP = (W - pad * 2) * Math.min(1, 0.7 + 0.3 * k0);
+      const px = (W - anchoP) / 2 + sesion.pos.datos.x;
+      const py = (dis === 'abajo' ? H - pad - altoPanel() : dis === 'centro' ? Math.max(y + W * 0.04, (H - altoPanel()) / 2 + W * 0.08) : y + W * 0.04) + sesion.pos.datos.y;
+      rect(ctx, px, py, anchoP, altoPanel(), W * 0.03);
+      ctx.fillStyle = 'rgba(15,10,46,.62)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = W * 0.002; ctx.stroke();
+      if (!items.length) {
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = `${Math.round(W * 0.036 * k)}px ${sans}`;
+        ctx.fillText('Sin actividades esta semana', W / 2 + sesion.pos.datos.x, py + altoPanel() / 2 + W * 0.012);
+      }
+      const DCORTO = ['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'];
+      items.forEach((it, i) => {
+        const fy = py + W * 0.025 * k + i * altoFila();
+        const [yy, mm, dd] = String(it.fecha).split('-').map(Number);
+        const dia = new Date(yy, mm - 1, dd);
+        const bx = px + W * 0.03 * k; const bw = W * 0.115 * k; const bh = altoFila() - W * 0.022 * k;
+        rect(ctx, bx, fy, bw, bh, W * 0.018 * k); ctx.fillStyle = it.color || '#8b5cf6'; ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+        ctx.font = `700 ${Math.round(W * 0.025 * k)}px ${sans}`; ctx.fillText(DCORTO[dia.getDay()], bx + bw / 2, fy + bh * 0.4);
+        ctx.font = `800 ${Math.round(W * 0.046 * k)}px ${sans}`; ctx.fillText(String(dd), bx + bw / 2, fy + bh * 0.84);
+        ctx.textAlign = 'left';
+        const tx = bx + bw + W * 0.03 * k; const maxW = px + anchoP - tx - W * 0.03 * k;
+        ctx.font = `700 ${Math.round(W * 0.043 * k)}px ${sans}`; ajustarTexto(ctx, it.titulo, tx, fy + bh * 0.46, maxW);
+        ctx.font = `${Math.round(W * 0.031 * k)}px ${sans}`; ctx.globalAlpha = 0.88;
+        ajustarTexto(ctx, [it.hora ? `${it.hora} hrs` : '', it.org].filter(Boolean).join('  ·  '), tx, fy + bh * 0.88, maxW);
+        ctx.globalAlpha = 1;
+      });
+      ctx.textAlign = 'center';
+      cajas.datos = { x0: px - W * 0.01, y0: py - W * 0.01, x1: px + anchoP + W * 0.01, y1: py + altoPanel() + W * 0.01 };
+      sesion._cajas = cajas; sesion._W = W; sesion._H = H;
+      return;
+    }
     if (dis === 'centro' && sesion.datos) yPie = yBase + altoBloque + W * 0.06;
     yPie += pos.datos.y; const dx = pos.datos.x;
     ctx.shadowBlur = 0;
@@ -590,13 +635,13 @@
         <div id="af-t-campos" style="${S.datos ? '' : 'display:none'}">
           <input class="af-in" data-t="titulo" maxlength="80" placeholder="Título" value="${e(T.titulo)}" />
           <input class="af-in" data-t="lema" maxlength="80" placeholder="Frase (ej: ¡Trae a tu familia!)" value="${e(T.lema)}" />
-          <div class="af-fila"><input class="af-in" data-t="fecha" maxlength="60" placeholder="Fecha" value="${e(T.fecha)}" /><input class="af-in" data-t="lugar" maxlength="80" placeholder="Hora y lugar" value="${e(T.lugar)}" /></div>
-          <input class="af-in" data-t="org" maxlength="60" placeholder="Organización (arriba, pequeño)" value="${e(T.org)}" />
+          ${S.semana ? `<p class="af-lbl" style="margin-top:4px">Actividades en el afiche</p><div class="af-sem">${S.semana.map((x, i) => `<label><input type="checkbox" data-sem="${i}" ${x.oculto ? '' : 'checked'}/> <span>${e(fechaLarga(x.fecha))}${x.hora ? ` · ${e(x.hora)}` : ''} — <b>${e(x.titulo)}</b></span></label>`).join('') || '<div class="af-nota">No hay actividades esta semana.</div>'}</div>` : `<div class="af-fila"><input class="af-in" data-t="fecha" maxlength="60" placeholder="Fecha" value="${e(T.fecha)}" /><input class="af-in" data-t="lugar" maxlength="80" placeholder="Hora y lugar" value="${e(T.lugar)}" /></div>
+          <input class="af-in" data-t="org" maxlength="60" placeholder="Organización (arriba, pequeño)" value="${e(T.org)}" />`}
           <p class="af-lbl" style="margin-top:4px">Posición del texto <button type="button" id="af-t-reset">Restablecer</button></p>
           ${chips([['arriba', 'Arriba'], ['centro', 'Al centro'], ['abajo', 'Abajo']], S.diseno, 'diseno')}
           <div class="af-fila" style="margin-bottom:6px">
             <label style="font-size:12.5px;color:var(--ink-soft)">Tamaño del título<input type="range" id="af-t-tam1" min="50" max="200" step="5" value="${Math.round(S.tam.titulo * 100)}" style="width:100%"></label>
-            <label style="font-size:12.5px;color:var(--ink-soft)">Tamaño de fecha y lugar<input type="range" id="af-t-tam2" min="60" max="160" step="5" value="${Math.round(S.tam.datos * 100)}" style="width:100%"></label>
+            <label style="font-size:12.5px;color:var(--ink-soft)">${S.semana ? 'Tamaño de la lista' : 'Tamaño de fecha y lugar'}<input type="range" id="af-t-tam2" min="60" max="160" step="5" value="${Math.round(S.tam.datos * 100)}" style="width:100%"></label>
           </div>
           <div class="af-nota" style="margin:0 0 6px">También puedes moverlo arrastrando y agrandarlo pellizcando con dos dedos sobre el afiche.</div>
         </div>
@@ -605,6 +650,7 @@
       let t = null;
       const redibujar = () => { clearTimeout(t); t = setTimeout(pintarEstado, 150); };
       p.querySelectorAll('[data-t]').forEach((i) => i.addEventListener('input', () => { T[i.dataset.t] = i.value; redibujar(); }));
+      p.querySelectorAll('[data-sem]').forEach((c) => c.addEventListener('change', () => { S.semana[Number(c.dataset.sem)].oculto = !c.checked; redibujar(); }));
       $('af-t-tam1').addEventListener('input', (x) => { S.tam.titulo = Number(x.target.value) / 100; redibujar(); });
       $('af-t-tam2').addEventListener('input', (x) => { S.tam.datos = Number(x.target.value) / 100; redibujar(); });
       $('af-t-reset').addEventListener('click', () => { S.pos = { titulo: { x: 0, y: 0 }, datos: { x: 0, y: 0 } }; S.tam = { titulo: 1, datos: 1 }; $('af-t-tam1').value = 100; $('af-t-tam2').value = 100; pintarEstado(); });
@@ -702,6 +748,7 @@
   // abrirAfiche(evento de state.events) | abrirAfiche({ eventId }) | abrirAfiche({ buscar: 'noche de hogar' }) | abrirAfiche({ datos: {...} })
   window.abrirAfiche = async function abrirAfiche(arg = {}) {
     await cargarEstado();
+    if (arg && arg.semana) return abrirSemana();
     let it = null;
     const eventos = (() => { try { return state.events || []; } catch (x) { return []; } })();
     if (arg && arg.title && arg.date) it = arg;
@@ -724,6 +771,32 @@
     }
     pantallaCrear();
   };
+  // Afiche "Esta semana en el barrio": las actividades de los próximos 7 días
+  // (sin reuniones privadas), con una imagen que se ajusta con el prompt.
+  const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  async function abrirSemana() {
+    if (!estado.puedeCrear) { aviso('Solo los líderes y secretarios pueden crear afiches', 'error'); return; }
+    const hoy = new Date(); const fin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + 6);
+    const desde = isoLocal(hoy); const hasta = isoLocal(fin);
+    let lista = [];
+    try { lista = await pedir(`/events?from=${desde}&to=${hasta}`); } catch (x) { aviso(x.message, 'error'); return; }
+    const items = (Array.isArray(lista) ? lista : []).filter((x) => !x.isMeeting)
+      .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')))
+      .map((x) => ({ fecha: x.date, hora: (x.startTime || '').slice(0, 5), titulo: x.title || '', org: x.isWardActivity ? 'Todo el barrio' : (x.organizationName || ''), color: x.organizationColor || '#8b5cf6', oculto: false }));
+    items.forEach((x, i) => { if (i >= 8) x.oculto = true; });
+    const rango = (() => {
+      const a = new Date(hoy); const b = fin;
+      return a.getMonth() === b.getMonth() ? `Del ${a.getDate()} al ${b.getDate()} de ${MESES[b.getMonth()]}` : `Del ${a.getDate()} de ${MESES[a.getMonth()]} al ${b.getDate()} de ${MESES[b.getMonth()]}`;
+    })();
+    S = nuevaSesion({ titulo: 'Esta semana en el barrio', descripcion: `Resumen semanal de actividades: ${items.slice(0, 6).map((x) => x.titulo).join(', ')}`, org: '' });
+    S.semana = items;
+    S.ev.detalle = `${rango} · ${items.length} ${items.length === 1 ? 'actividad' : 'actividades'}`;
+    S.ev.color = '#1d8fbf';
+    S.textos = { org: '', titulo: 'Esta semana en el barrio', lema: rango, fecha: '', lugar: '' };
+    S.sugerencia = 'Familias y amigos de distintas edades compartiendo felices al aire libre al atardecer, luces cálidas y ambiente acogedor de comunidad, con espacio libre en la parte de abajo';
+    S.opts.ambiente = 'alegre'; S.opts.publico = 'todos';
+    pantallaCrear();
+  }
   window.verAficheActividad = (it) => { cargarEstado().then(() => verAdjunto(evDesdeEvento(it))); };
   window.afichesEstado = cargarEstado;
 })();

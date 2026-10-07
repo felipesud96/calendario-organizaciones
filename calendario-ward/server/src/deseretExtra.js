@@ -13,6 +13,7 @@ import { canSeeMeetingRecord } from './routes/meetings.js';
 import { isWelfareCommitteeMember } from './routes/welfare.js';
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
 import { bloquesLibres } from './routes/publicBooking.js';
+import { isBlockingStakeEvent } from './stakeCalendar.js';
 import { resumenSemana, fraseResumen } from './semana.js';
 import { recordatoriosComoItems } from './deseretPlus.js';
 import { puedeVerFichas, buscarPersonas, fichaPersona, fichaComoTexto } from './persona.js';
@@ -23,6 +24,8 @@ import {
 } from './chat.js';
 
 // ---------------- Detección ----------------
+// "¿Cuándo puedo hacer un campamento en noviembre?", "¿qué sábados están libres?"
+const RE_FECHAS = /\b((fechas?|dias?|sabados?|viernes|domingos?|lunes|martes|miercoles|jueves|fin(es)? de semana) (que )?((estan|esta|quedan|queda|hay|tenemos|siguen) )?(libres?|disponibles?|desocupad\w*|sin actividades)|cuando (puedo|podemos|podria|podriamos|conviene|seria bueno|me recomiendas) (hacer|organizar|agendar|realizar|programar|tener)|que (dia|fecha|sabado|viernes) (conviene|esta libre|me recomiendas|recomiendas|sirve))\b/;
 const RE_FICHA = /\b(cuentame|hablame|dime|ficha|informacion|info|historial|que sabes|datos)\b\s+(de|del|sobre|acerca de)\s+/;
 const RE_HORARIOS = /\b(cuando puedo|que horarios?|horarios? (libres?|disponibles?)|mis horarios|tengo (hora|espacio|tiempo)|huecos?|espacios? libres?|disponibilidad para)\b/;
 const RE_PREPARAR = /\b(prepar\w*|arm\w*|sugi\w*|propon\w*|temas? para|agenda para)\b.*\b(consejo|reunion|coordinacion|presidencia|comite|junta)\b/;
@@ -30,10 +33,33 @@ const RE_SEMANA = /\b(mi semana|mi dia|resumen del dia|que tengo|tengo algo|que 
 const RE_TIPOS = /\b(quien puede (hacer|entrevistar|dar|tomar)|quien (hace|da|toma) (la|las|el)|solo (lo|la) (hace|puede hacer) el obispo|solo el obispo|que entrevistas (puede|pueden|hace|hacen)|puede (un|el) consejero|pueden los consejeros|consejeros? (puede|pueden)|le corresponde al obispo)\b/;
 const RE_FEEDBACK = /\b(no supiste|sin respuesta|no respondidas|valoraciones de deseret|feedback de deseret|como le va a deseret)\b/;
 
+// "¿Cómo asigno una tarea?", "¿dónde veo el informe?" → explicación + botón que lleva a la pantalla.
+export const RE_COMO_APP = /\b(como (hago|hacemos|puedo|podemos|se hace|se puede|creo|crear|agrego|agregar|asigno|asignar|registro|registrar|subo|subir|activo|activar|cambio|cambiar|veo|ver|saco|sacar|descargo|descargar|agendo|agendar|anoto|anotar|marco|marcar|edito|editar|uso|usar|funciona)|donde (esta|estan|veo|se ve|se ven|encuentro|puedo|se hace|se registra|se crea)|en que parte|explicame como|ensename a|ensename como)\b/;
+const AYUDA_APP = [
+  { re: /\b(preparativ\w*|tareas?|asign\w*|responsables?)\b/, t: 'Abre la actividad en el **Calendario**, baja a **Preparativos** y toca **Crear lista** (o **Editar lista**). En cada tarea escribe el nombre del responsable: si tiene cuenta, le llega un aviso y la ve en su semana.', b: 'Ir al Calendario', ir: { vista: 'calendar' } },
+  { re: /\b(informe|reporte)\b/, t: 'En **Estadísticas → Tablero** toca **Informe del mes**. Ahí lo descargas en PDF o lo envías por WhatsApp. El día 1 de cada mes el Obispado recibe un aviso cuando está listo.', b: 'Abrir el informe', ir: { vista: 'stats', sub: 'tablero', abrir: 'informe' } },
+  { re: /\b(afiches?|poster|flyer)\b/, t: 'Dentro de cada actividad está el botón **Afiche**; en el **Calendario** también está **Afiche de la semana**. Describes la imagen (o usas la sugerencia), y después mueves y agrandas el texto con los dedos.', b: 'Abrir el generador', ir: { abrir: 'afiche' } },
+  { re: /\b(compromisos?|actas?|minutas?)\b/, t: 'En **Reuniones** abre o crea el acta y agrega el compromiso con su responsable y fecha. También puedes decirme: "anota un compromiso para Pedro: llamar a la familia Soto el viernes".', b: 'Ir a Reuniones', ir: { vista: 'meetings' } },
+  { re: /\bentrevist\w*/, t: 'En **Entrevistas** toca **+ Nueva entrevista**, o dímelo directo: "agenda una entrevista con Jaime Cuenca el jueves a las 19:00".', b: 'Ir a Entrevistas', ir: { vista: 'interviews' } },
+  { re: /\b(gastos?|boletas?|presupuesto|rendicion|reembolso)\b/, t: 'En **Presupuesto** toca **Registrar gasto**. Con **Leer boleta con foto** se llenan solos el monto, la fecha y el comercio.', b: 'Ir a Presupuesto', ir: { vista: 'budget' } },
+  { re: /\b(aseo|limpieza)\b/, t: 'En **Aseo** ves los turnos de cada familia y los confirmas o cambias.', b: 'Ir a Aseo', ir: { vista: 'cleaning' } },
+  { re: /\b(bienestar|ayuda|ayudas)\b/, t: 'En **Bienestar** registras los casos y la ayuda que se entrega; las evaluaciones mensuales te llegan como compromiso.', b: 'Ir a Bienestar', ir: { vista: 'welfare' } },
+  { re: /\b(huella|rostro|notificacion\w*|avisos?|perfil|contrasena|clave|telefono|correo)\b/, t: 'Todo eso está en tu **Perfil** (toca tu nombre arriba): notificaciones, entrar con huella o rostro, teléfono y contraseña.', b: 'Abrir mi perfil', ir: { abrir: 'perfil' } },
+  { re: /\b(buscar|busco|ficha) (a )?(una )?persona|\bdirectorio\b/, t: 'En **Inicio** toca **Buscar persona** para ver la ficha completa; o pregúntame "cuéntame de Jaime Cuenca".', b: 'Ir a Inicio', ir: { vista: 'home' } },
+  { re: /\b(actividad\w*|eventos?|calendario|agend\w*|reserv\w*|capilla|salon|sala)\b/, t: 'Ve a **Calendario** y toca **+ Nueva actividad**. Completa título, fecha, hora y lugar; si ese horario o lugar ya está ocupado, te aviso apenas lo eliges. También puedes pedírmelo: "agenda una noche de hogar el viernes a las 19:30".', b: 'Crear una actividad', ir: { vista: 'calendar', abrir: 'nueva-actividad' } },
+];
+function ayudaApp(norm) {
+  const a = AYUDA_APP.find((x) => x.re.test(norm));
+  if (!a) return null;
+  return resp(a.t, { opciones: [{ label: a.b, value: a.b, ir: a.ir }] });
+}
+
 export function detectarConsultaExtra(norm) {
+  if (RE_COMO_APP.test(norm) && AYUDA_APP.some((x) => x.re.test(norm))) return 'comoapp';
   if (RE_FEEDBACK.test(norm)) return 'feedback';
   if (RE_TIPOS.test(norm)) return 'tipos';
   if (RE_PREPARAR.test(norm)) return 'preparar';
+  if (RE_FECHAS.test(norm) && !/\bentrevist/.test(norm)) return 'fechas';
   if (RE_HORARIOS.test(norm)) return 'horarios';
   if (RE_FICHA.test(norm)) return 'ficha';
   if (RE_SEMANA.test(norm)) return 'semana';
@@ -46,6 +72,8 @@ export async function manejarConsultaExtra(tipo, { mensaje, norm, usuario, hoyOb
   switch (tipo) {
     case 'ficha': return consultaFicha(mensaje, norm, usuario, data, historial);
     case 'horarios': return consultaHorarios(mensaje, usuario, data);
+    case 'fechas': return consultaFechas(norm, data, hoyObj);
+    case 'comoapp': return ayudaApp(norm);
     case 'preparar': return consultaPreparar(mensaje, norm, usuario, data, hoyObj, historial);
     case 'semana': return consultaSemana(norm, usuario, data, hoyObj);
     case 'feedback': return consultaFeedback(usuario, data);
@@ -105,6 +133,52 @@ function consultaHorarios(mensaje, usuario, data) {
       value: `agenda una entrevista${nombre ? ` con ${nombre}` : ''} el ${o.fecha} a las ${o.hora}`,
     })),
   });
+}
+
+// ---------------- Fechas libres para una actividad ----------------
+// Días sin actividades del barrio ni actividades de Estaca que bloqueen.
+const MESES_N = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const DIAS_N = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+const DIAS_C = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+function consultaFechas(norm, data, hoyObj) {
+  const hoy = toISO(hoyObj);
+  let desde = toISO(sumarDias(hoyObj, 1)); let hasta = toISO(sumarDias(hoyObj, 42)); let periodo = 'las próximas 6 semanas';
+  const iMes = MESES_N.findIndex((m) => new RegExp(`\\b${m}\\b`).test(norm));
+  if (iMes >= 0) {
+    const [y, m] = hoy.split('-').map(Number);
+    const anio = iMes + 1 < m ? y + 1 : y;
+    const ini = `${anio}-${String(iMes + 1).padStart(2, '0')}-01`;
+    const fin = toISO(new Date(anio, iMes + 1, 0));
+    desde = ini > desde ? ini : desde; hasta = fin; periodo = MESES_N[iMes];
+  } else if (/\bproxima semana\b/.test(norm)) { desde = toISO(sumarDias(hoyObj, 1)); hasta = toISO(sumarDias(hoyObj, 13)); periodo = 'las próximas 2 semanas'; }
+  else if (/\beste mes\b/.test(norm)) { const [y, m] = hoy.split('-').map(Number); hasta = toISO(new Date(y, m, 0)); periodo = 'lo que queda del mes'; }
+  if (hasta < desde) return resp(`Ya no quedan días de ${periodo} para revisar.`);
+  // Días de la semana pedidos (por defecto: viernes y sábados, los habituales para actividades).
+  let dias = DIAS_N.map((d, i) => (new RegExp(`\\b${d}s?\\b`).test(norm) ? i : -1)).filter((i) => i >= 0);
+  if (/\bfin(es)? de semana\b/.test(norm)) dias = [5, 6];
+  const porDefecto = !dias.length;
+  if (porDefecto) dias = [5, 6];
+  const keywords = data.stakeCalendar?.nonBlockingKeywords;
+  const bloqueaEstaca = (f) => (data.stakeEvents || []).some((s) => s.date === f && isBlockingStakeEvent(s, keywords));
+  const libres = []; const casi = [];
+  const [y0, m0, d0] = desde.split('-').map(Number);
+  for (let d = new Date(y0, m0 - 1, d0); toISO(d) <= hasta; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    if (!dias.includes(d.getDay())) continue;
+    const f = toISO(d);
+    if (bloqueaEstaca(f)) continue;
+    const ese = (data.events || []).filter((e) => e.date === f && !e.isMeeting);
+    if (!ese.length) libres.push(f); else if (ese.length === 1) casi.push({ f, t: ese[0].title });
+  }
+  const mAct = norm.match(/\b(hacer|organizar|agendar|realizar|programar|tener) (un|una|el|la) ([a-z ]{3,30}?)(?= (en|para|el|este|esta|de|del)\b|[?.!]|$)/);
+  const que = mAct ? `${/^(una|la)$/.test(mAct[2]) ? 'una' : 'un'} ${mAct[3].trim()}` : 'una actividad';
+  const etiqueta = (f) => { const [y, m, d] = f.split('-').map(Number); const x = new Date(y, m - 1, d); return `${DIAS_C[x.getDay()]} ${d} ${MESES_N[m - 1].slice(0, 3)}`; };
+  const nombresDias = dias.map((i) => ({ 0: 'domingos', 1: 'lunes', 2: 'martes', 3: 'miércoles', 4: 'jueves', 5: 'viernes', 6: 'sábados' }[i])).join(' y ');
+  if (!libres.length && !casi.length) return resp(`📭 En ${periodo} no encontré ${nombresDias} libres: todos tienen actividades del barrio o de Estaca.`);
+  const lista = libres.slice(0, 6);
+  const texto = libres.length
+    ? `🗓️ ${nombresDias.charAt(0).toUpperCase() + nombresDias.slice(1)} libres en ${periodo} (sin actividades del barrio ni de Estaca): **${libres.slice(0, 8).map(etiqueta).join(', ')}**.${casi.length ? `\n\nCon solo una actividad: ${casi.slice(0, 4).map((c) => `${etiqueta(c.f)} (${c.t})`).join(', ')}.` : ''}${porDefecto ? '\n\nRevisé viernes y sábados; si quieres otro día, dime por ejemplo "¿qué jueves están libres?".' : ''}\n\nToca una fecha para agendar ${que}:`
+    : `En ${periodo} no hay ${nombresDias} totalmente libres. Los que tienen solo una actividad: ${casi.slice(0, 6).map((c) => `${etiqueta(c.f)} (${c.t})`).join(', ')}.`;
+  return resp(texto, { opciones: (lista.length ? lista : casi.slice(0, 4).map((c) => c.f)).map((f) => ({ label: etiqueta(f), value: `agenda ${que} el ${f}` })) });
 }
 
 // ---------------- 5. Preparar reuniones ----------------

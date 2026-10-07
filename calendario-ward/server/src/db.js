@@ -310,6 +310,17 @@ export function load() {
     if (!Array.isArray(c.closures)) { c.closures = []; migrated = true; }
     if (!Array.isArray(c.reopenLog)) { c.reopenLog = []; migrated = true; }
   }
+  // migración: la evaluación de Bienestar ahora dice de quién es el caso.
+  for (const c of data.welfareCases) {
+    if (!c.reviewCommitmentId || !c.memberName) continue;
+    for (const m of data.meetings || []) {
+      const k = (m.commitments || []).find((x) => x.id === c.reviewCommitmentId);
+      if (k && typeof k.description === 'string' && k.description.startsWith('Evaluar seguimiento de un caso de Bienestar')) {
+        k.description = k.description.replace('Evaluar seguimiento de un caso de Bienestar', `Evaluar seguimiento de Bienestar de ${String(c.memberName).trim()}`);
+        migrated = true;
+      }
+    }
+  }
   // Vincular por persona, no por nombre (App 5): varias partes de la app
   // cruzaban datos comparando texto ("entrevistador = nombre", "miembro =
   // nombre escrito"), y bastaba una tilde o un espacio distinto para que no

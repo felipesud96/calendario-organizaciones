@@ -9,7 +9,7 @@ import { computeCuadrante, isAdultMale, isAdultFemale, CUADRANTES } from './past
 import { isMinisteringFocusLeaderHombres, isMinisteringFocusLeaderMujeres } from './routes/directory.js';
 import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES, accionPorReferencia } from './deseretAcciones.js';
 import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
-import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta } from './deseretExtra.js';
+import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta, RE_COMO_APP } from './deseretExtra.js';
 import { detectarPlus, manejarPlus } from './deseretPlus.js';
 import { detectarComparar, manejarComparar } from './deseretComparar.js';
 import { consultaLibre, pareceConsultaDeDatos } from './deseretConsulta.js';
@@ -1328,7 +1328,34 @@ export function sinPastoral(texto) {
 
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null, opciones = {}) {
   const r0 = await procesarPreguntaChatSinFiltro(mensaje, historial, usuario, opciones);
-  return r0 && typeof r0.texto === 'string' ? { ...r0, texto: sinPastoral(r0.texto) } : r0;
+  const r1 = r0 && typeof r0.texto === 'string' ? { ...r0, texto: sinPastoral(r0.texto) } : r0;
+  try { return conAccionesSugeridas(r1, mensaje, usuario, opciones); } catch { return r1; }
+}
+
+// Después de una respuesta informativa, botones para pasar a la acción
+// según el tema: agendar, ver fechas libres, crear afiche, anotar compromiso.
+function conAccionesSugeridas(r, mensaje, usuario, opciones = {}) {
+  if (!r || !usuario || opciones.breve || typeof r.texto !== 'string') return r;
+  if ((r.opciones && r.opciones.length) || r.tarjeta || (r.items && r.items.length) || r.tabla || leerBorrador(usuario)) return r;
+  if (r.texto.length < 120 || /^\s*(✅|👌|🗑️|⏰|🔒|❌|⚠️)/.test(r.texto)) return r;
+  const n = normalizeSearchText(mensaje);
+  const lider = ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(usuario.role);
+  const chips = [];
+  if (lider && /\b(ideas?|sugerencias?|sugier\w*|propon\w*|que (podemos|podriamos|puedo|podria) hacer|actividad(es)?|noche de hogar|convivencia|proyecto de servicio|servicio|campamento|paseo|taller|celebracion|fiesta|devocional)\b/.test(n)) {
+    chips.push({ label: 'Agendar una actividad', value: 'quiero agendar una actividad' });
+    chips.push({ label: 'Ver fechas libres', value: 'fechas libres para una actividad' });
+    chips.push({ label: 'Crear un afiche', value: 'hazme un afiche' });
+  } else if (lider && /\bentrevist\w*/.test(n) && !/\b(agend|program)\w*/.test(n)) {
+    chips.push({ label: 'Agendar una entrevista', value: 'quiero agendar una entrevista' });
+  }
+  if (chips.length < 3 && lider && /\b(visit\w*|ministr\w*|familias?|herman[oa]s?|necesidad\w*|ayudar|seguimiento)\b/.test(n)) {
+    chips.push({ label: 'Anotar un compromiso', value: 'quiero anotar un compromiso' });
+  }
+  const queTema = n.match(/\b(clase|leccion|discurso)\b/);
+  if (chips.length < 3 && queTema) {
+    chips.push({ label: 'Recordármelo', value: `recuérdame preparar ${queTema[1] === 'discurso' ? 'el discurso' : queTema[1] === 'leccion' ? 'la lección' : 'la clase'}` });
+  }
+  return chips.length ? { ...r, opciones: chips.slice(0, 3) } : r;
 }
 
 async function procesarPreguntaChatSinFiltro(mensaje, historial = [], usuario = null, opciones = {}) {
@@ -1368,7 +1395,7 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     const pedidoNuevo = /^(?:(?:quiero|necesito|puedes|podrias|me|por favor)\s+)*(agend|anot|organiz|program|crea|reserv|agreg|anad)\w*/.test(norm);
     // Una acción explícita ("anota un compromiso…") gana sobre las consultas:
     // "…preparar el discurso, sin reunión" no es "preparar una reunión".
-    const consultaExtra = usuario && detectarAccion(norm) ? null : detectarConsultaExtra(norm);
+    const consultaExtra = usuario && detectarAccion(norm) && !RE_COMO_APP.test(norm) ? null : detectarConsultaExtra(norm);
     // Segunda tanda (deseretPlus.js): deshacer, recordatorios, dictar acta,
     // sugerencias, búsqueda en actas, resumen por organización, Manual.
     // Cuadros comparativos y sugerencias de llamamiento (deseretComparar.js).

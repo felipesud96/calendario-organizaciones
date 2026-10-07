@@ -271,6 +271,118 @@
     }));
   }
 
+  // ---------------- Informe mensual ----------------
+  const cssInf = `
+  #inf-root .modal { max-width: 720px; }
+  .inf-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .inf-hoja { background: #fff; color: #1f2937; border: 1px solid var(--border); border-radius: 12px; padding: 22px 20px; }
+  .inf-hoja h2 { margin: 0; font-size: 20px; color: #0b4f6c; }
+  .inf-hoja .sub { color: #6b7280; font-size: 13px; margin: 2px 0 14px; }
+  .inf-res { background: #f0f8fb; border-left: 3px solid #1d8fbf; padding: 10px 12px; border-radius: 8px; font-size: 14px; line-height: 1.5; margin-bottom: 14px; }
+  .inf-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  .inf-kpi { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; text-align: center; }
+  .inf-kpi b { display: block; font-size: 22px; color: #0b4f6c; }
+  .inf-kpi span { font-size: 11.5px; color: #6b7280; }
+  .inf-sec { margin-top: 14px; }
+  .inf-sec h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #0b4f6c; }
+  .inf-fila { display: flex; gap: 8px; padding: 5px 0; border-top: 1px solid #f1f5f9; font-size: 13.5px; }
+  .inf-fila:first-of-type { border-top: 0; }
+  .inf-fila .f { width: 44px; flex-shrink: 0; color: #6b7280; }
+  .inf-fila .t { flex: 1; min-width: 0; }
+  .inf-fila .t small { color: #6b7280; }
+  .inf-fila .m { font-variant-numeric: tabular-nums; }
+  .inf-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .inf-vacio { color: #6b7280; font-size: 13px; }
+  .inf-acc { display: flex; gap: 8px; justify-content: flex-end; }
+  @media (max-width: 520px) { .inf-acc .btn { flex: 1; padding-left: 8px; padding-right: 8px; } }
+  @media (max-width: 520px) { .inf-kpis { grid-template-columns: repeat(2, 1fr); } .inf-hoja { padding: 16px 14px; } }
+  @media print {
+    body.imprimiendo-informe > *:not(#inf-root) { display: none !important; }
+    body.imprimiendo-informe #inf-root .modal-backdrop { position: static !important; background: none !important; padding: 0 !important; }
+    body.imprimiendo-informe #inf-root .modal { box-shadow: none !important; max-width: none !important; width: 100% !important; max-height: none !important; overflow: visible !important; }
+    body.imprimiendo-informe #inf-root .modal-header, body.imprimiendo-informe #inf-root .modal-footer, body.imprimiendo-informe .inf-nav { display: none !important; }
+    body.imprimiendo-informe #inf-root .modal-body { overflow: visible !important; max-height: none !important; padding: 0 !important; }
+    body.imprimiendo-informe .inf-hoja { border: 0; }
+  }`;
+  const st2 = document.createElement('style'); st2.textContent = cssInf; document.head.appendChild(st2);
+  const peso = (n) => `$${Math.round(Number(n || 0)).toLocaleString('es-CL')}`;
+  const dm = (iso) => { const [, m, d] = String(iso).split('-'); return `${Number(d)}/${Number(m)}`; };
+  const mesMas = (mes, n) => { const [y, m] = mes.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+
+  function hojaInforme(d) {
+    const c = d.compromisos;
+    const kpis = [
+      [d.actividades.length, d.actividades.length === 1 ? 'actividad' : 'actividades'],
+      [d.entrevistas, d.entrevistas === 1 ? 'entrevista' : 'entrevistas'],
+      [c.pct == null ? '—' : `${c.pct}%`, 'compromisos cumplidos'],
+      [peso(d.gastos.total), 'gastado'],
+    ];
+    return `<div class="inf-hoja">
+      <h2>Informe de ${e(d.nombreMes)}</h2>
+      <div class="sub">${e(d.alcance)} · OrganizaSion</div>
+      ${d.resumen ? `<div class="inf-res">${e(d.resumen).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</div>` : ''}
+      <div class="inf-kpis">${kpis.map(([n, l]) => `<div class="inf-kpi"><b>${e(n)}</b><span>${e(l)}</span></div>`).join('')}</div>
+      <div class="inf-sec"><h4>Actividades realizadas</h4>${d.actividades.length ? d.actividades.map((a) => `<div class="inf-fila"><span class="f">${dm(a.fecha)}</span><span class="t"><span class="inf-dot" style="background:${e(a.color || '#94a3b8')}"></span>${e(a.titulo)} <small>· ${e(a.org)}${a.confirmados ? ` · ${a.confirmados} confirmados` : ''}</small></span></div>`).join('') : '<div class="inf-vacio">No hubo actividades este mes.</div>'}</div>
+      <div class="inf-sec"><h4>Entrevistas y compromisos</h4>
+        <div class="inf-fila"><span class="t">Entrevistas realizadas</span><span class="m">${d.entrevistas}</span></div>
+        ${d.entrevistasSinMarcar ? `<div class="inf-fila"><span class="t">Entrevistas pasadas sin marcar</span><span class="m">${d.entrevistasSinMarcar}</span></div>` : ''}
+        <div class="inf-fila"><span class="t">Compromisos que vencían en el mes</span><span class="m">${c.cumplidos} de ${c.total} cumplidos</span></div>
+        ${c.atrasados.map((x) => `<div class="inf-fila"><span class="f">${dm(x.vence)}</span><span class="t">${e(x.texto)} <small>· ${e(x.quien)}</small></span></div>`).join('')}
+        ${c.nAtrasados > c.atrasados.length ? `<div class="inf-vacio">…y ${c.nAtrasados - c.atrasados.length} más pendientes.</div>` : ''}
+        ${d.bienestarAbiertos != null ? `<div class="inf-fila"><span class="t">Casos de Bienestar abiertos</span><span class="m">${d.bienestarAbiertos}</span></div>` : ''}
+      </div>
+      <div class="inf-sec"><h4>Gastos del mes</h4>${d.gastos.porCategoria.length ? d.gastos.porCategoria.map((g) => `<div class="inf-fila"><span class="t">${e(g.nombre)}</span><span class="m">${peso(g.monto)}</span></div>`).join('') + `<div class="inf-fila"><span class="t"><b>Total</b></span><span class="m"><b>${peso(d.gastos.total)}</b></span></div>` : '<div class="inf-vacio">Sin gastos registrados.</div>'}</div>
+      <div class="inf-sec"><h4>Lo que viene en ${e(d.mesSiguiente)}</h4>${d.proximas.length ? d.proximas.map((a) => `<div class="inf-fila"><span class="f">${dm(a.fecha)}</span><span class="t"><span class="inf-dot" style="background:${e(a.color || '#94a3b8')}"></span>${e(a.titulo)} <small>· ${e(a.org)}</small></span></div>`).join('') : '<div class="inf-vacio">Aún no hay actividades agendadas.</div>'}</div>
+    </div>`;
+  }
+  function textoWhatsApp(d) {
+    const c = d.compromisos;
+    return [`*Informe de ${d.nombreMes}* (${d.alcance})`, d.resumen ? `\n${d.resumen.replace(/\*\*(.+?)\*\*/g, '*$1*')}` : '',
+      `\n• Actividades: ${d.actividades.length}`, `• Entrevistas realizadas: ${d.entrevistas}`,
+      `• Compromisos: ${c.cumplidos} de ${c.total} cumplidos`, `• Gastos: ${peso(d.gastos.total)}`,
+      d.proximas.length ? `\n*Próximo mes:*\n${d.proximas.slice(0, 6).map((a) => `- ${dm(a.fecha)} ${a.titulo}`).join('\n')}` : ''].filter(Boolean).join('\n');
+  }
+  async function abrirInforme(mesPedido) {
+    const { r } = modal('inf-root', 'Informe mensual', '<div id="inf-cuerpo"><div class="prep-vacio">Preparando el informe…</div></div>',
+      `<div class="modal-footer inf-acc"><button class="btn btn-secondary" id="inf-wsp" disabled>Enviar por WhatsApp</button><button class="btn btn-primary" id="inf-pdf" disabled>Descargar PDF</button></div>`);
+    let datos = null;
+    const cargar = async (mes) => {
+      const cuerpo = $('inf-cuerpo'); if (!cuerpo) return;
+      cuerpo.innerHTML = '<div class="prep-vacio">Preparando el informe…</div>';
+      try { datos = await pedir(`/informe-mensual${mes ? `?mes=${mes}` : ''}`); }
+      catch (x) { cuerpo.innerHTML = `<p class="prep-vacio">${e(x.message)}</p>`; return; }
+      cuerpo.innerHTML = `<div class="inf-nav"><button class="btn btn-ghost btn-sm" id="inf-ant">‹ Anterior</button><b>${e(datos.nombreMes.charAt(0).toUpperCase() + datos.nombreMes.slice(1))}</b><button class="btn btn-ghost btn-sm" id="inf-sig">Siguiente ›</button></div>${hojaInforme(datos)}`;
+      $('inf-ant').addEventListener('click', () => cargar(mesMas(datos.mes, -1)));
+      $('inf-sig').addEventListener('click', () => cargar(mesMas(datos.mes, 1)));
+      $('inf-wsp').disabled = false; $('inf-pdf').disabled = false;
+    };
+    $('inf-pdf').addEventListener('click', () => {
+      const t = document.title; document.title = `Informe ${datos ? datos.nombreMes : ''}`;
+      document.body.classList.add('imprimiendo-informe');
+      const fin = () => { document.body.classList.remove('imprimiendo-informe'); document.title = t; window.removeEventListener('afterprint', fin); };
+      window.addEventListener('afterprint', fin);
+      window.print();
+      setTimeout(fin, 1500);
+    });
+    $('inf-wsp').addEventListener('click', () => { if (datos) window.open(`https://wa.me/?text=${encodeURIComponent(textoWhatsApp(datos))}`, '_blank'); });
+    await cargar(mesPedido);
+    return r;
+  }
+  window.abrirInforme = abrirInforme;
+  // Al tocar el aviso del día 1 (/?informe=AAAA-MM) se abre directo.
+  (function () {
+    let mes = null;
+    try { mes = new URLSearchParams(location.search).get('informe'); } catch (x) { /* nada */ }
+    if (!mes || !/^\d{4}-\d{2}$/.test(mes)) return;
+    let n = 0;
+    const t = setInterval(() => {
+      n += 1;
+      let listo = false; try { listo = !!state.user; } catch (x) { /* nada */ }
+      if (listo) { clearInterval(t); abrirInforme(mes); try { history.replaceState(history.state, '', location.pathname); } catch (x) { /* nada */ } }
+      else if (n > 40) clearInterval(t);
+    }, 500);
+  })();
+
   window.pintarPreparativosEn = (cont, ev) => pintarCaja(cont, ev);
   window.abrirPreparativos = abrirPreparativos;
   window.abrirFichaOrganizacion = abrirFichaOrganizacion;

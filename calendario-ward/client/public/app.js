@@ -252,6 +252,7 @@ function phoneWithWhatsAppHtml(rawPhone, displayHtml) {
 // `size` en px; hereda color de texto (stroke="currentColor") para que
 // combine con cualquier botón/tema sin tener que declarar un color aparte.
 const ICON_PATHS = {
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
@@ -2816,7 +2817,7 @@ function wireMobileFab() {
 // Resume lo que a esta persona le toca hoy y los próximos 7 días, sacado
 // de GET /api/mi-semana (server/src/semana.js), con los mismos permisos de
 // cada módulo. Cada elemento lleva a la pestaña donde se gestiona.
-const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹', preparativo: '☑️' };
+const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹', preparativo: '☑️', recordatorio: '⏰' };
 
 function puedeVerFichasCliente() {
   return !!state.user && ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(state.user.role);
@@ -2885,12 +2886,18 @@ async function renderHomeView() {
   // Línea de tiempo: todo junto, agrupado por día.
   const todo = [...r.compromisos.filter((c) => c.atrasado).map((c) => ({ ...c, fechaGrupo: 'atrasado' })),
     ...(r.preparativos || []).filter((c) => c.atrasado).map((c) => ({ ...c, fechaGrupo: 'atrasado' })),
-    ...r.entrevistas, ...r.compromisos.filter((c) => !c.atrasado), ...(r.preparativos || []).filter((c) => !c.atrasado), ...r.actividades, ...(r.aseo || [])]
+    ...r.entrevistas, ...r.compromisos.filter((c) => !c.atrasado), ...(r.preparativos || []).filter((c) => !c.atrasado), ...r.actividades, ...(r.aseo || []), ...(r.recordatorios || [])]
     .map((x) => ({ ...x, fechaGrupo: x.fechaGrupo || (x.atrasado ? 'atrasado' : x.fecha) }));
   const grupos = new Map();
   for (const x of todo) { if (!grupos.has(x.fechaGrupo)) grupos.set(x.fechaGrupo, []); grupos.get(x.fechaGrupo).push(x); }
   const orden = [...grupos.keys()].sort((a, b) => (a === 'atrasado' ? -1 : b === 'atrasado' ? 1 : a.localeCompare(b)));
   const etiquetaDia = (k) => (k === 'atrasado' ? '⚠️ Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : fmtDateHuman(k));
+  // Cuenta regresiva: "mañana", "faltan 3 días".
+  const faltan = (k) => {
+    if (k === 'atrasado' || k === r.hoy || !/^\d{4}-\d{2}-\d{2}$/.test(k)) return '';
+    const n = Math.round((new Date(`${k}T12:00:00`) - new Date(`${r.hoy}T12:00:00`)) / 86400000);
+    return n === 1 ? 'mañana' : n > 1 ? `faltan ${n} días` : '';
+  };
   const itemHtml = (x) => `
     <button type="button" class="home-item" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${/^#[0-9a-f]{3,6}$/i.test(x.color || '') ? x.color : 'var(--celeste)'}">
       <span class="home-item-bar"></span>
@@ -2898,7 +2905,7 @@ async function renderHomeView() {
       <span class="home-item-main"><span class="home-item-t">${TIPO_ICONO[x.tipo] || ''} ${esc(x.titulo)}</span><span class="home-item-s">${esc(x.org || '')}</span></span>
     </button>`;
   const timeline = orden.length
-    ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
+    ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}${faltan(k) ? `<span class="home-falta">${faltan(k)}</span>` : ''}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
     : emptyStateHtml('No tienes nada agendado para esta semana', canManageAnyEvents() ? { id: 'home-empty-new', label: '+ Agendar algo' } : null, '🌤️', false, lider ? 'Dame 3 ideas de actividades sencillas para esta semana en mi organización' : null);
 
   container.innerHTML = `
@@ -3120,6 +3127,25 @@ async function abrirFichaPersona(ref) {
 }
 window.abrirFichaPersona = abrirFichaPersona;
 
+// Deseret "te lleva" a una pantalla: { vista, sub, abrir }.
+window.irAPantalla = (ir = {}) => {
+  if (!state.user) return;
+  if (ir.vista) {
+    state.view = ir.vista;
+    if (ir.vista === 'stats' && ir.sub) state.statsSubtab = ir.sub;
+    renderCurrentView();
+    window.scrollTo(0, 0);
+  }
+  const abrir = () => {
+    if (ir.abrir === 'nueva-actividad' && canManageAnyEvents()) openEventModal();
+    else if (ir.abrir === 'perfil') openProfileModal();
+    else if (ir.abrir === 'informe' && typeof window.abrirInforme === 'function') window.abrirInforme();
+    else if (ir.abrir === 'afiche' && typeof window.abrirAfiche === 'function') window.abrirAfiche({});
+    else if (ir.abrir === 'afiche-semana' && typeof window.abrirAfiche === 'function') window.abrirAfiche({ semana: true });
+  };
+  if (ir.abrir) setTimeout(abrir, ir.vista ? 450 : 0);
+};
+
 function renderCurrentView() {
   if (state.view === 'interviews' && !canSeeInterviewsTab()) state.view = 'calendar';
   if (state.view === 'myActivities' && !canSeeMyActivitiesTab()) state.view = 'calendar';
@@ -3314,7 +3340,7 @@ async function renderCalendarView() {
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'agenda' ? 'active' : ''}" id="cal-view-agenda" title="Vista de lista">📋 Agenda</button>
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'rooms' ? 'active' : ''}" id="cal-view-rooms" title="Ocupación de salas">🚪 Salas</button>
       </div>
-      ${canManageAnyEvents() ? `<button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
+      ${canManageAnyEvents() ? `<button class="btn btn-secondary" id="cal-afiche-semana" title="Afiche con las actividades de los próximos 7 días">${icon('image')} Afiche de la semana</button><button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
     </div>
     <div id="mini-cal-panel" class="mini-cal-panel" hidden></div>
     ${await stakeStatusBarHtml()}
@@ -3371,6 +3397,7 @@ async function renderCalendarView() {
     if (state.miniCalOpen) state.miniCalMonth = new Date(state.calMonth);
     renderMiniCalPanel();
   });
+  document.getElementById('cal-afiche-semana')?.addEventListener('click', () => { if (typeof window.abrirAfiche === 'function') window.abrirAfiche({ semana: true }); });
   const newBtn = document.getElementById('cal-new-event');
   if (newBtn) newBtn.addEventListener('click', () => openEventModal());
   container.querySelectorAll('.org-chip').forEach((c) => c.addEventListener('click', () => toggleOrgFilter(c.dataset.org)));
@@ -5046,6 +5073,7 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
               </div>
             </div>
             <div id="ev-monday-warning"></div>
+            <div id="ev-choque-vivo" aria-live="polite"></div>
           </form>
           ${isEdit ? agendadaHtml(existing) : ''}
           ${isEdit && !existing.isMeeting ? '<div id="prep-caja"></div>' : ''}
@@ -5112,6 +5140,32 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
   });
   wireLocationField('ev', resetConflictCheck);
   document.getElementById('ev-location-other-field').querySelector('input').addEventListener('input', resetConflictCheck);
+
+  // Choque en vivo: apenas hay fecha y hora, se revisa si el lugar o el
+  // horario ya están tomados por otra organización, sin esperar a "Crear".
+  let choqueTimer = null; let choqueTurno = 0;
+  const revisarChoqueEnVivo = () => {
+    clearTimeout(choqueTimer);
+    choqueTimer = setTimeout(async () => {
+      const caja = document.getElementById('ev-choque-vivo');
+      if (!caja) return;
+      const fd = new FormData(form);
+      if (!fd.get('date') || !fd.get('startTime')) { caja.innerHTML = ''; return; }
+      const location = computeLocationFromForm(fd);
+      const cand = {
+        date: fd.get('date'), startTime: fd.get('startTime'), endTime: fd.get('endTime'),
+        organizationId: fd.get('organizationId'), location, sala: computeSalaFromForm(fd, location),
+        involvedOrganizationIds: document.getElementById('ev-ward-activity')?.checked ? [] : computeInvolvedOrgIds(fd),
+      };
+      const turno = ++choqueTurno;
+      let lista = [];
+      try { lista = await findConflictingActivities(cand, isEdit ? existing?.id : undefined); } catch (e) { return; }
+      if (turno !== choqueTurno) return;
+      caja.innerHTML = lista.length ? `<div class="choque-vivo">${icon('alert', 15)}<div><b>${lista.length > 1 ? `Hay ${lista.length} actividades` : 'Ya hay una actividad'} en ese horario o lugar</b>${lista.slice(0, 3).map((c) => `<span>${esc(c.organizationName || '')} — ${c.kind === 'interview' ? 'entrevista' : esc(c.title || '')} · ${esc(fmtTime(c.startTime))}${c.endTime ? '–' + esc(fmtTime(c.endTime)) : ''}${c.location ? ' · ' + esc(locationDisplay(c)) : ''}</span>`).join('')}</div></div>` : '';
+    }, 450);
+  };
+  form.addEventListener('change', revisarChoqueEnVivo);
+  if (isEdit) revisarChoqueEnVivo();
 
   // Punto 11: aviso no bloqueante si la actividad cae un lunes en la noche.
   const updateMondayWarning = () => {
@@ -12015,10 +12069,11 @@ async function renderTablero() {
     <tbody>${d.series.map((s) => `<tr><th>${esc(s.titulo)}</th>${s.valores.map((v) => `<td>${fmt(v, s.unidad)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   content.innerHTML = `
     <div class="tb-lectura" id="tb-lectura"><div class="tb-lectura-cab"><img src="/deseret.svg" alt="" width="20" height="20" /> <b>Lo que dicen los números</b><button type="button" class="btn btn-ghost btn-sm" id="tb-lectura-otra" hidden>Actualizar</button></div><div class="tb-lectura-txt"><span class="skeleton-line" style="width:92%;height:11px;display:block"></span><span class="skeleton-line" style="width:78%;height:11px;display:block;margin-top:8px"></span><span class="skeleton-line" style="width:60%;height:11px;display:block;margin-top:8px"></span></div></div>
-    <div class="tb-head"><p>Últimos 6 trimestres · <b>${esc(d.alcance)}</b></p><button class="btn btn-ghost btn-sm" id="tb-tabla-btn">${state.tableroTabla ? '📈 Ver gráficos' : '🔢 Ver tabla'}</button></div>
+    <div class="tb-head"><p>Últimos 6 trimestres · <b>${esc(d.alcance)}</b></p><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" id="tb-informe">${icon('file')} Informe del mes</button><button class="btn btn-ghost btn-sm" id="tb-tabla-btn">${state.tableroTabla ? '📈 Ver gráficos' : '🔢 Ver tabla'}</button></span></div>
     ${state.tableroTabla ? tabla : `<div class="tb-grid">${d.series.map(tile).join('')}</div>`}
     <div class="hint-box" style="margin-top:12px;">Asistencia, recomendaciones y ministración salen de los trimestres cargados en <b>Crecimiento del Barrio</b>; entrevistas, compromisos y actividades se calculan con lo registrado en la app.</div>`;
   document.getElementById('tb-tabla-btn').addEventListener('click', () => { state.tableroTabla = !state.tableroTabla; renderTablero(); });
+  document.getElementById('tb-informe').addEventListener('click', () => { if (typeof window.abrirInforme === 'function') window.abrirInforme(); });
   cargarLecturaTablero(false);
 }
 // Punto 20: Deseret explica el tablero en 2 a 4 frases, con una sugerencia.
