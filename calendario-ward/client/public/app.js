@@ -2985,7 +2985,7 @@ async function renderHomeView() {
   grupos.delete(r.hoy); // lo de hoy va en su propia tarjeta
   for (const [k, l] of grupos) if (k !== 'atrasado') l.sort((x, y) => (x.hora || '99').localeCompare(y.hora || '99'));
   const orden = [...grupos.keys()].sort((a, b) => (a === 'atrasado' ? -1 : b === 'atrasado' ? 1 : a.localeCompare(b)));
-  const etiquetaDia = (k) => (k === 'atrasado' ? 'Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : `${fmtDateHuman(k)}${feriadoDe(k) ? ` · ${feriadoDe(k)}` : ''}`);
+  const etiquetaDia = (k) => (k === 'atrasado' ? 'Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : `${fmtDateHuman(k)}${feriadoDe(k) ? ` · Feriado: ${feriadoDe(k)}` : ''}`);
   // Cuenta regresiva: "mañana", "faltan 3 días".
   const faltan = (k) => {
     if (k === 'atrasado' || k === r.hoy || !/^\d{4}-\d{2}-\d{2}$/.test(k)) return '';
@@ -3006,7 +3006,7 @@ async function renderHomeView() {
   // Hoy: lo de hoy primero, con hora y lugar (punto 2).
   const deHoy = todo.filter((x) => x.fechaGrupo === r.hoy).sort((a, b) => (a.hora || '99').localeCompare(b.hora || '99'));
   const ahoraHM = (() => { const d = new Date(); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })();
-  const hoyHtml = `<div class="card home-card home-hoy"><div class="home-card-t">${icon('sun', 18)} Hoy <span class="home-hoy-f">${esc(fmtDateHuman(r.hoy))}${feriadoDe(r.hoy) ? ` · ${esc(feriadoDe(r.hoy))}` : ''}</span></div>
+  const hoyHtml = `<div class="card home-card home-hoy"><div class="home-card-t">${icon('sun', 18)} Hoy <span class="home-hoy-f">${esc(fmtDateHuman(r.hoy))}${feriadoDe(r.hoy) ? ` · Feriado: ${esc(feriadoDe(r.hoy))}` : ''}</span></div>
     ${deHoy.length ? deHoy.map((x) => itemHtml(x).replace('class="home-item home-item-tipo"', `class="home-item home-item-tipo ${x.hora && (x.fin || x.hora) < ahoraHM ? 'home-item-pasado' : ''}"`)).join('') : '<p class="home-hoy-vacio">Hoy no tienes nada agendado.</p>'}</div>`;
   const timeline = orden.length
     ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}${faltan(k) ? `<span class="home-falta">${faltan(k)}</span>` : ''}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
@@ -3387,8 +3387,8 @@ async function renderCalendarView() {
     const extra = items.length - visible.length;
 
     cellsHtml += `
-      <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
-        <div class="cal-daynum">${cellDate.getDate()}</div>${feriadoDe(iso) ? `<div class="cal-feriado" title="Feriado: ${esc(feriadoDe(iso))}">${esc(feriadoDe(iso))}</div>` : ''}
+      <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''} ${feriadoDe(iso) ? 'es-feriado' : ''}" data-date="${iso}">
+        <div class="cal-daynum">${cellDate.getDate()}</div>${feriadoDe(iso) ? `<div class="cal-feriado" title="Feriado: ${esc(feriadoDe(iso))}"><b>Feriado</b><span>${esc(feriadoDe(iso))}</span></div>` : ''}
         ${visible.map((it) => {
           // Solo se puede arrastrar una actividad real (no entrevistas
           // privadas ni lo sincronizado de Estaca, que es de solo lectura) y

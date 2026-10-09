@@ -325,7 +325,7 @@
         const iso = `${anio}-${p2(m + 1)}-${p2(d)}`;
         const l = porDia.get(iso) || [];
         const colores = [...new Set(l.map((x) => x.organizationColor || '#94a3b8'))].slice(0, 3);
-        html += `<span class="anio-dia ${iso === hoy ? 'hoy' : ''} ${fer(iso) ? 'feriado' : ''}" title="${e([fer(iso), ...l.map((x) => `${x.title} (${x.organizationName || ''})`)].filter(Boolean).join('\n'))}">${d}${colores.length ? `<span class="anio-puntos">${colores.map((c) => `<i style="background:${e(c)}"></i>`).join('')}</span>` : ''}</span>`;
+        html += `<span class="anio-dia ${iso === hoy ? 'hoy' : ''} ${fer(iso) ? 'feriado' : ''}" title="${e([fer(iso) ? `Feriado: ${fer(iso)}` : "", ...l.map((x) => `${x.title} (${x.organizationName || ''})`)].filter(Boolean).join('\n'))}">${d}${colores.length ? `<span class="anio-puntos">${colores.map((c) => `<i style="background:${e(c)}"></i>`).join('')}</span>` : ''}</span>`;
       }
       html += '</div></div>';
     }

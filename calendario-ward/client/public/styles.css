@@ -1645,8 +1645,12 @@ body { font-size: var(--fs-md); line-height: 1.45; -webkit-font-smoothing: antia
 }
 
 /* 15 · Feriados */
-.cal-feriado { font-size: 10px; line-height: 1.2; font-weight: 600; color: #b91c1c; margin: -2px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agenda-feriado { font-size: 11px; font-weight: 600; color: #b91c1c; background: #fee2e2; border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+/* Feriados: sobrio, en gris, con la palabra "Feriado" */
+.cal-cell.es-feriado { background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(100,116,139,.06) 6px 7px); }
+.cal-feriado { display: flex; flex-direction: column; line-height: 1.15; margin: -2px 0 3px; color: var(--ink-soft); min-width: 0; }
+.cal-feriado b { font-size: 9px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.cal-feriado span { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agenda-feriado { font-size: 11px; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin-left: 6px; text-transform: none; letter-spacing: 0; }
 
 /* 59 · Color de la organización más visible en las listas */
 .list-card-org { border-left: 4px solid var(--c) !important; background: linear-gradient(90deg, color-mix(in srgb, var(--c) 7%, var(--white)) 0, var(--white) 40%); }
@@ -1669,7 +1673,7 @@ body { font-size: var(--fs-md); line-height: 1.45; -webkit-font-smoothing: antia
 .anio-dias .dow { color: var(--ink-soft); font-weight: 600; }
 .anio-dia { position: relative; padding: 3px 0 7px; border-radius: 6px; color: var(--ink); }
 .anio-dia.hoy { background: var(--celeste); color: #fff; font-weight: 700; }
-.anio-dia.feriado { color: #b91c1c; font-weight: 700; }
+.anio-dia.feriado { color: var(--ink-soft); font-weight: 700; text-decoration: underline dotted; text-underline-offset: 2px; }
 .anio-puntos { position: absolute; left: 0; right: 0; bottom: 1px; display: flex; justify-content: center; gap: 1px; }
 .anio-puntos i { width: 4px; height: 4px; border-radius: 50%; display: block; }
 .anio-cab { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 10px; }
