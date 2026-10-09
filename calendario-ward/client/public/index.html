@@ -55,22 +55,21 @@
        celular no tiene internet en ese momento, no llega a cargar y el botón
        avisa que no está disponible; el resto de la app sigue funcionando
        normal (los compromisos siempre se pueden escribir a mano). -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <!-- Rasteriza la tarjeta de "Compartir minuta" (ver buildMinutaImageNode en
        app.js) a una imagen PNG prolija para compartir por WhatsApp — corre
        entera en el navegador de la persona, no se sube nada a ningún
        servidor. Si el celular no tiene internet en ese momento, el botón
        cae de vuelta a compartir como texto plano (ver shareMinutaAsImage). -->
-  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="/app.js"></script>
   <!-- "Deseret escucha la reunión": graba, transcribe y propone el acta (ver escucha.js). -->
-  <script src="/escucha.js"></script>
+  <script src="/escucha.js" defer></script>
   <!-- Botón "atrás" del celular: cierra ventanas y vuelve a Inicio en vez de salir (ver atras.js). -->
   <!-- Generador de afiches con IA para las actividades (ver afiche.js). -->
-  <script src="/afiche.js"></script>
+  <script src="/afiche.js" defer></script>
   <!-- Preparativos de actividades y ficha de organización (ver organizar.js). -->
-  <script src="/organizar.js"></script>
-  <script src="/atras.js"></script>
+  <script src="/organizar.js" defer></script>
+  <script src="/agenda.js" defer></script>
+  <script src="/atras.js" defer></script>
   <!-- Deseret, el asistente de IA: se abre tocando el logo de la abeja
        de la barra superior (ver chatWidget.js). -->
   <script type="module">

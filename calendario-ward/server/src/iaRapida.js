@@ -3,7 +3,7 @@
 // del tablero): primero Groq (responde en ~1 s) y, si no hay clave o falla,
 // Gemini con un tope de tiempo, para que nada se quede cargando.
 // ----------------------------------------------------------------------
-import { jsonConIA, redactarConIA } from './chat.js';
+import { jsonConIA, redactarConIA, instruccionTono } from './chat.js';
 
 export const conTope = (promesa, ms, que = 'IA') => Promise.race([
   promesa,
@@ -21,7 +21,7 @@ async function groq(sistema, texto, { json = false, temperatura = 0.3, ms = 12_0
         temperature: temperatura,
         max_tokens: 1500,
         ...(json ? { response_format: { type: 'json_object' } } : {}),
-        messages: [{ role: 'system', content: sistema }, { role: 'user', content: texto }],
+        messages: [{ role: 'system', content: json ? sistema : `${sistema}${instruccionTono()}` }, { role: 'user', content: texto }],
       }),
       signal: AbortSignal.timeout(ms),
     });

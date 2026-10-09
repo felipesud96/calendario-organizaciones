@@ -52,6 +52,7 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
       tipo: 'entrevista', fecha: iv.date, hora: iv.startTime || '',
       titulo: Number(iv.memberUserId) === Number(user.id) ? `Tu entrevista${iv.interviewerName ? ` con ${iv.interviewerName}` : ''}` : iv.memberName,
       org: org(iv.organizationId)?.name || '', color: org(iv.organizationId)?.color || null, vista: 'interviews',
+      lugar: [iv.location, iv.sala].filter(Boolean).join(' · '), fin: iv.endTime || '', id: iv.id,
     }));
 
   // Entrevistas ya pasadas que siguen sin marcar (✅/❌) — solo líderes.
@@ -69,7 +70,7 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
     if (m.status !== 'active') continue;
     for (const c of m.commitments || []) {
       if (c.status !== 'pending' || Number(c.assignedToUserId) !== Number(user.id) || !c.dueDate || c.dueDate > fin) continue;
-      compromisos.push({ tipo: 'compromiso', fecha: c.dueDate, hora: '', titulo: c.description, org: m.title, color: null, atrasado: c.dueDate < hoy, vista: 'meetings' });
+      compromisos.push({ tipo: 'compromiso', fecha: c.dueDate, hora: '', titulo: c.description, org: m.title, color: null, atrasado: c.dueDate < hoy, vista: 'meetings', meetingId: m.id, id: c.id });
     }
   }
   compromisos.sort((a, b) => a.fecha.localeCompare(b.fecha));
@@ -81,7 +82,7 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
     .filter((e) => obispado || e.isWardActivity || Number(e.organizationId) === Number(user.organizationId)
       || (e.involvedOrganizationIds || []).map(Number).includes(Number(user.organizationId)))
     .sort((a, b) => (a.date + (a.startTime || '')).localeCompare(b.date + (b.startTime || '')))
-    .map((e) => ({ tipo: 'actividad', fecha: e.date, hora: e.startTime || '', titulo: e.title, org: org(e.organizationId)?.name || 'Barrio', color: org(e.organizationId)?.color || null, vista: 'calendar' }));
+    .map((e) => ({ tipo: 'actividad', fecha: e.date, hora: e.startTime || '', fin: e.endTime || '', titulo: e.title, org: org(e.organizationId)?.name || 'Barrio', color: org(e.organizationId)?.color || null, vista: 'calendar', lugar: [e.location, e.sala].filter(Boolean).join(' · '), id: e.id, queLlevar: e.queLlevar || '' }));
 
   // Aseo del edificio (Obispado): turnos de la semana y atrasados sin confirmar.
   const aseo = obispado ? (data.cleaningShifts || []).filter((s) => s.date <= fin && (s.date >= ini || s.status === 'scheduled') && s.date >= sumarDias(hoy, -14))
@@ -97,6 +98,17 @@ export function resumenSemana(user, data = load(), { desde = null, dias = 7 } = 
     .filter((r) => Number(r.userId) === Number(user.id) && !r.enviado && r.fecha >= ini && r.fecha <= fin)
     .sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`))
     .map((r) => ({ tipo: 'recordatorio', fecha: r.fecha, hora: r.hora || '', titulo: r.texto, org: 'Recordatorio', color: null, vista: 'home' }));
+  // "La próxima vez que vea a Pedro…": aparece el día que tengas algo con esa persona.
+  const normTxt = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for (const r of data.recordatorios || []) {
+    if (!r.persona || r.enviado || Number(r.userId) !== Number(user.id)) continue;
+    const pal = normTxt(r.persona).split(/\s+/).filter((w) => w.length > 2);
+    const con = [...entrevistas, ...actividades].filter((x) => x.fecha >= hoy).sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`))
+      .find((x) => pal.length && pal.every((w) => normTxt(x.titulo).includes(w)));
+    if (!con) continue;
+    recordatorios.push({ tipo: 'recordatorio', fecha: con.fecha, hora: con.hora || '', titulo: `Con ${r.persona}: ${r.texto}`, org: 'Recordatorio', color: null, vista: 'home' });
+    if (r.mostradoEl !== con.fecha) withDb((db) => { const x = (db.recordatorios || []).find((y) => y.id === r.id); if (x) x.mostradoEl = con.fecha; }).catch(() => {});
+  }
   return {
     desde: ini, hasta: fin, hoy,
     totales: { entrevistas: entrevistas.length, solicitudes: solicitudes.length, compromisos: compromisos.length, atrasados, actividades: actividades.length, sinMarcar },
@@ -125,13 +137,20 @@ async function enviarResumenesSemanales() {
   const data = load();
   const enviados = data.weeklySummarySentFor || {};
   const lunes = sumarDias(ahora.fecha, 1);
-  const destinatarios = data.users.filter((u) => ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(u.role)
+  // Para todos (no solo líderes): el domingo en la noche, lo que viene en la semana.
+  const destinatarios = data.users.filter((u) => u.active !== false
     && enviados[u.id] !== ahora.fecha && notifEnabled(u, 'push') && notifEnabled(u, 'weeklySummary'));
   if (!destinatarios.length) return;
   for (const u of destinatarios) {
     const r = resumenSemana(u, data, { desde: lunes, dias: 7 });
+    const DC = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const dia = (f) => { const [y, m, d] = f.split('-').map(Number); return DC[new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay()]; };
+    const prox = [...r.entrevistas, ...r.actividades, ...(r.recordatorios || []), ...r.compromisos.filter((c) => !c.atrasado)]
+      .sort((a, b) => `${a.fecha} ${a.hora || '99'}`.localeCompare(`${b.fecha} ${b.hora || '99'}`)).slice(0, 4)
+      .map((x) => `• ${dia(x.fecha)}${x.hora ? ` ${x.hora}` : ''}: ${x.titulo}`);
+    if (!prox.length && !r.totales.atrasados) continue;
     try {
-      await sendUserPush(u, { title: 'Tu semana en OrganizaSion', body: `Esta semana: ${fraseResumen(r)}.`, url: '/?vista=home' });
+      await sendUserPush(u, { title: 'Lo que viene esta semana', body: prox.length ? prox.join('\n') : `Tienes ${r.totales.atrasados} compromiso(s) atrasado(s).`, url: '/?vista=home' });
     } catch (e) { /* sin suscripción push: no pasa nada */ }
   }
   await withDb((d) => {

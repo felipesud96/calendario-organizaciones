@@ -39,6 +39,7 @@ import { registerPasskeyRoutes } from './routes/passkeys.js';
 import { registerPlantillasRoutes } from './routes/plantillas.js';
 import { registerTableroRoutes } from './routes/tablero.js';
 import { registerInformeRoutes, iniciarAvisoInforme } from './routes/informe.js';
+import { registerAgendaRoutes, iniciarAvisosAgenda } from './routes/agenda.js';
 import { contextoDeseret } from './db.js';
 import { guardarDeshacer, startRecordatoriosScheduler, avisosDeHoy } from './deseretPlus.js';
 import { startWeeklySummaryScheduler } from './semana.js';
@@ -112,6 +113,7 @@ registerPasskeyRoutes(router);
 registerPlantillasRoutes(router);
 registerTableroRoutes(router);
 registerInformeRoutes(router);
+registerAgendaRoutes(router);
 registerWelfareRoutes(router);
 registerNamesRoutes(router);
 registerWardGrowthRoutes(router);
@@ -264,7 +266,7 @@ const server = http.createServer(async (req, res) => {
         // (botones de respuesta rápida, resumen para confirmar y tarjetas).
         // Todo lo que Deseret escriba en este mensaje queda anotado (ver
         // contextoDeseret en db.js) para poder "deshacer lo último".
-        const ctx = { cambios: [] };
+        const ctx = { cambios: [], tono: ['formal', 'cercano'].includes(parsed.tono) ? parsed.tono : null };
         // Dictar un acta necesita más texto que una pregunta normal.
         const r = await contextoDeseret.run(ctx, () => procesarPreguntaChat(String(parsed.mensaje || '').slice(0, 4000), historial, usuario, { breve: parsed.breve === true }));
         const { texto, ...extra } = typeof r === 'string' ? { texto: r } : r;
@@ -329,4 +331,5 @@ server.listen(PORT, () => {
   startAchievementsScheduler();
   startBackupScheduler();
   iniciarAvisoInforme();
+  iniciarAvisosAgenda();
 });

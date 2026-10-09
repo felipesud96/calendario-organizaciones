@@ -54,13 +54,14 @@ async function ensureConfigured() {
 // aviso futuro. Nunca lanza hacia arriba (mismo criterio que
 // sendUserWhatsApp/sendEmail): si falla, queda en el log del servidor, sin
 // romper el flujo que disparó la notificación.
-export async function sendUserPush(user, { title, body, url }) {
+export async function sendUserPush(user, { title, body, url, acciones }) {
   if (!user) return;
   const data0 = load();
   const subs = (data0.webPush?.subscriptions || []).filter((s) => Number(s.userId) === Number(user.id));
   if (!subs.length) return;
   await ensureConfigured();
-  const payload = JSON.stringify({ title, body: body || '', url: url || '/' });
+  // `acciones`: botones en la notificación (ej. "Hecho"), cada uno con un token firmado (ver routes/agenda.js).
+  const payload = JSON.stringify({ title, body: body || '', url: url || '/', ...(Array.isArray(acciones) && acciones.length ? { acciones } : {}) });
   for (const sub of subs) {
     try {
       await webpush.sendNotification(sub.subscription, payload);

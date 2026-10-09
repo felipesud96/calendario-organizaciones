@@ -256,6 +256,7 @@ function buildEventFields(body, orgs) {
     isMeeting: !!isMeeting,
     purpose: purpose || null,
     supervisingAdults: cleanSupervisingAdults(supervisingAdults),
+    queLlevar: String(body?.queLlevar || '').slice(0, 400),
   };
 }
 
@@ -457,6 +458,7 @@ export function registerEventRoutes(router) {
       Object.assign(ev, {
         title: body.title ?? ev.title,
         description: body.description ?? ev.description,
+        queLlevar: body.queLlevar !== undefined ? String(body.queLlevar || '').slice(0, 400) : (ev.queLlevar || ''),
         location: finalLocation,
         // Igual que al crear: la sala solo aplica cuando el lugar es "Casa
         // Capilla" o "Capilla" — si cambian el lugar a otro, la sala

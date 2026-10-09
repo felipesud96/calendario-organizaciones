@@ -332,6 +332,10 @@ const ESTILOS = `
     70% { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
     100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
   }
+  .mic-largo { background-color: #7c3aed !important; }
+  #chat-window #d-tono { opacity: 1 !important; }
+  #chat-messages .cuerpo.d-corto { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+  .d-vermas { border: 0; background: none; color: var(--d-brand); font-weight: 600; font-size: 13px; padding: 4px 0; cursor: pointer; }
   .mic-listening { background-color: #dc3545 !important; color: white !important; animation: pulse-wave 1.2s infinite ease-out; }
 
   /* En el celular: pantalla completa */
@@ -373,6 +377,7 @@ export function initChatWidget() {
               <div class="deseret-voz-barra" role="radiogroup" aria-label="Voz de Deseret"><button type="button" role="radio" data-voz="femenina">Voz femenina</button><button type="button" role="radio" data-voz="masculina">Voz masculina</button></div>
               <button id="chat-hey-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false" style="display:none">${ICONOS.mic}<span>“Hey Deseret”</span><i class="dm-sw"></i></button>
               <button id="chat-auto-btn" type="button" class="dm-item" role="menuitemcheckbox" aria-pressed="false">${ICONOS.auto}<span>Manos libres (conversar por voz)</span><i class="dm-sw"></i></button>
+              <div class="deseret-voz-barra" role="radiogroup" aria-label="Tono de Deseret" id="d-tono"><button type="button" role="radio" data-tono="cercano">Tono cercano</button><button type="button" role="radio" data-tono="formal">Tono formal</button></div>
               <div class="dm-sep"></div>
               <button id="chat-escucha-btn" type="button" class="dm-item" role="menuitem">${ICONOS.mic}<span>Escuchar una reunión</span></button>
               <button id="chat-guia-btn" type="button" class="dm-item" role="menuitem">${ICONOS.guia}<span>Guía rápida</span></button>
@@ -419,6 +424,14 @@ export function initChatWidget() {
     chatWindow.style.display = 'none';
     window.abrirEscuchaReunion({ onGuardado: () => { if (typeof window.renderMeetingsView === 'function') window.renderMeetingsView(); } });
   });
+
+  // 86: tono de las respuestas (cercano / formal).
+  const pintarTono = () => {
+    const t = store.get('localStorage', 'deseret_tono') || 'cercano';
+    document.querySelectorAll('#d-tono [data-tono]').forEach((b) => { b.setAttribute('aria-checked', String(b.dataset.tono === t)); b.classList.toggle('activa', b.dataset.tono === t); });
+  };
+  document.querySelectorAll('#d-tono [data-tono]').forEach((b) => b.addEventListener('click', (x) => { x.stopPropagation(); store.set('localStorage', 'deseret_tono', b.dataset.tono); pintarTono(); }));
+  pintarTono();
 
   // ---------------- Punto 11: la conversación sobrevive a una recarga ----------------
   // Se guarda en sessionStorage (solo esta pestaña; se borra al cerrar sesión).
@@ -531,6 +544,15 @@ export function initChatWidget() {
         + (Array.isArray(extra.items) && extra.items.length ? htmlItems(extra.items) : '')
         + (extra.tabla?.filas?.length ? htmlTabla(extra.tabla) : '');
       if (extra.tabla?.filas?.length) div.classList.add('con-tabla');
+      // 85: respuestas largas se muestran cortas, con "Ver más".
+      const cuerpoEl = div.querySelector('.cuerpo');
+      if (cuerpoEl && String(m.texto || '').length > 420 && !m.expandido) {
+        cuerpoEl.classList.add('d-corto');
+        const mas = document.createElement('button');
+        mas.type = 'button'; mas.className = 'd-vermas'; mas.textContent = 'Ver más';
+        mas.addEventListener('click', () => { cuerpoEl.classList.remove('d-corto'); mas.remove(); m.expandido = true; guardar(); });
+        cuerpoEl.after(mas);
+      }
       if (Array.isArray(extra.opciones) && extra.opciones.length) {
         const chips = document.createElement('div');
         chips.className = 'deseret-chips';
@@ -552,6 +574,9 @@ export function initChatWidget() {
               callar();
               window.abrirFichaPersona(o.ficha);
             });
+          }
+          else if (o.prep && typeof window.abrirPreparativos === 'function') {
+            b.addEventListener('click', () => { chatWindow.style.display = 'none'; callar(); window.abrirPreparativos(o.prep, { sugerir: true }); });
           }
           else if (o.ir && typeof window.irAPantalla === 'function') {
             b.addEventListener('click', () => { chatWindow.style.display = 'none'; callar(); window.irAPantalla(o.ir); });
@@ -1055,7 +1080,7 @@ export function initChatWidget() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ mensaje: text, historial: estado.historial, breve: conduccion }),
+        body: JSON.stringify({ mensaje: text, historial: estado.historial, breve: conduccion, tono: store.get('localStorage', 'deseret_tono') || null }),
       });
       const data = await response.json();
       const { respuesta, error, ...extra } = data || {};
@@ -1499,38 +1524,72 @@ export function initChatWidget() {
     recognition.continuous = false;
     recognition.interimResults = false;
     let isListening = false;
+    // 89: dictado largo (actas, notas): no se corta a los pocos segundos; se
+    // reinicia solo hasta que tocas el micrófono para terminar. Se activa al
+    // mantener presionado el micrófono, o si Deseret te pidió dictar.
+    let largo = false; let textoLargo = ''; let parcial = '';
+    const pideDictado = () => { if (conduccion) return false; const u = [...estado.msgs].reverse().find((m) => m.role === 'bot'); return !!u && /\bdict(a|ar|ame|ado)\b/i.test(String(u.texto || '')); };
 
     stopListeningState = () => {
       isListening = false;
-      micBtn.classList.remove('mic-listening');
-      micBtn.title = 'Dictar por voz';
+      micBtn.classList.remove('mic-listening', 'mic-largo');
+      micBtn.title = 'Dictar por voz (mantén presionado para dictado largo)';
       chatInput.placeholder = 'Escribe o habla con Deseret…';
       try { recognition.stop(); } catch { /* ya estaba detenido */ }
     };
+    const terminarLargo = () => {
+      largo = false;
+      stopListeningState();
+      const t = `${textoLargo} ${parcial}`.replace(/\s+/g, ' ').trim();
+      textoLargo = ''; parcial = '';
+      if (t) { chatInput.value = t; ultimaFueDictada = true; enviar(); }
+    };
+    const empezar = (modoLargo) => {
+      callar();
+      largo = modoLargo; textoLargo = modoLargo ? chatInput.value.trim() : ''; parcial = '';
+      recognition.continuous = modoLargo; recognition.interimResults = modoLargo;
+      try { recognition.start(); } catch { /* ya estaba activo */ }
+    };
+    let presion = null; let fueLarga = false;
+    micBtn.addEventListener('pointerdown', () => { fueLarga = false; clearTimeout(presion); presion = setTimeout(() => { fueLarga = true; if (!isListening) empezar(true); }, 550); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => micBtn.addEventListener(ev, () => clearTimeout(presion)));
+    micBtn.addEventListener('contextmenu', (x) => x.preventDefault());
 
     micBtn.addEventListener('click', () => {
-      if (!isListening) {
-        callar();
-        try { recognition.start(); } catch { /* ya estaba activo */ }
-      } else {
-        stopListeningState();
-      }
+      if (fueLarga) { fueLarga = false; return; }
+      if (largo) { terminarLargo(); return; }
+      if (!isListening) empezar(pideDictado());
+      else stopListeningState();
     });
 
     recognition.onstart = () => {
       isListening = true;
       micBtn.classList.add('mic-listening');
-      micBtn.title = 'Escuchando tu voz...';
-      chatInput.placeholder = 'Escuchando…';
+      if (largo) micBtn.classList.add('mic-largo');
+      micBtn.title = largo ? 'Dictado largo: toca para terminar y enviar' : 'Escuchando tu voz...';
+      chatInput.placeholder = largo ? 'Dictado largo: habla todo lo que necesites. Toca el micrófono para terminar.' : 'Escuchando…';
     };
     recognition.onresult = (event) => {
+      if (largo) {
+        parcial = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const r = event.results[i];
+          if (r.isFinal) textoLargo = `${textoLargo} ${r[0].transcript}`.trim(); else parcial += r[0].transcript;
+        }
+        chatInput.value = `${textoLargo} ${parcial}`.trim();
+        chatInput.scrollLeft = chatInput.scrollWidth;
+        return;
+      }
       chatInput.value = event.results[0][0].transcript;
       ultimaFueDictada = true; // si se dictó, la respuesta se lee en voz alta
       clearTimeout(autoSendTimer);
       autoSendTimer = setTimeout(() => enviar(), 1500);
     };
-    recognition.onerror = () => stopListeningState();
-    recognition.onend = () => stopListeningState();
+    recognition.onerror = (ev) => { if (largo && ev && (ev.error === 'no-speech' || ev.error === 'aborted')) return; if (largo) { largo = false; } stopListeningState(); };
+    recognition.onend = () => {
+      if (largo) { textoLargo = `${textoLargo} ${parcial}`.trim(); parcial = ''; try { recognition.start(); return; } catch { /* sigue abajo */ } }
+      stopListeningState();
+    };
   } else {
     micBtn.style.display = 'none';
   }

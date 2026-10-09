@@ -229,13 +229,18 @@
   }
 
   // Desde "Mi semana": abrir directo la lista de una actividad.
-  async function abrirPreparativos(eventId) {
+  async function abrirPreparativos(eventId, opts = {}) {
     const ev = (() => { try { return state.events.find((x) => x.id === Number(eventId)); } catch (x) { return null; } })() || { id: Number(eventId) };
     const { r } = modal('prep-root', 'Preparativos', '<div id="prep-solo"></div>');
     const cont = r.querySelector('#prep-solo');
     let d; try { d = await pedir(`/events/${ev.id}/preparativos`); } catch (x) { cont.innerHTML = `<p class="prep-vacio">${e(x.message)}</p>`; return; }
     r.querySelector('h3').textContent = `Preparativos${ev.title ? ` · ${ev.title}` : ''}`;
     await pintarCaja(cont, ev);
+    // Recién creada la actividad: abre el editor y propone la lista de una vez.
+    if (opts.sugerir && d.puedeEditar && !(d.items || []).length) {
+      cont.querySelector('[data-prep-editar]')?.click();
+      setTimeout(() => $('prep-sugerir')?.click(), 120);
+    }
   }
 
   // ---------------- Ficha de organización ----------------

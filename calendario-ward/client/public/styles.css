@@ -1604,3 +1604,110 @@ html[data-movimiento="reducido"] *, html[data-movimiento="reducido"] *::before, 
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .choque-vivo { background: #3a2a08; color: #fde68a; border-color: #b45309; } }
 :root[data-theme="dark"] .choque-vivo { background: #3a2a08; color: #fde68a; border-color: #b45309; }
 .home-falta { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; background: var(--celeste-lighter); color: var(--celeste-dark); font-size: 11.5px; font-weight: 600; vertical-align: 1px; text-transform: none; letter-spacing: 0; }
+
+/* ================= Tanda "agenda y ayuda memoria" ================= */
+/* 51 · Escala tipográfica y espaciado comunes */
+:root {
+  --fs-xs: 12px; --fs-sm: 13.5px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 22px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+}
+body { font-size: var(--fs-md); line-height: 1.45; -webkit-font-smoothing: antialiased; }
+.view-header h2 { font-size: var(--fs-xl); letter-spacing: -0.01em; margin: 0 0 var(--sp-1); }
+.view-header p { font-size: var(--fs-sm); color: var(--ink-soft); margin: 0; }
+.modal-header h3 { font-size: var(--fs-lg); letter-spacing: -0.01em; }
+.field label { font-size: var(--fs-sm); }
+.home-card-t { font-size: var(--fs-md); display: flex; align-items: center; gap: var(--sp-2); }
+.home-card-t .icon-svg { color: var(--celeste-dark); flex: none; }
+
+/* 53 · Íconos de línea en la navegación */
+.bottom-nav-icon { display: inline-flex; align-items: center; justify-content: center; height: 24px; }
+.bottom-nav-icon .icon-svg { width: 22px; height: 22px; }
+.bottom-nav-btn.active .bottom-nav-icon .icon-svg { stroke-width: 2.4; }
+.bottom-sheet-item .bottom-nav-icon .icon-svg { color: var(--celeste-dark); }
+
+/* 1, 2, 10 · Hoy y Mi agenda con colores por tipo */
+.home-hoy { border-left: 4px solid var(--celeste); }
+.home-hoy-f { margin-left: auto; font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft); }
+.home-hoy-vacio { margin: 2px 0; color: var(--ink-soft); font-size: var(--fs-sm); }
+.home-item-tipo .home-item-hora { display: flex; flex-direction: column; padding-left: 0; }
+.home-item-tipo .home-item-hora small { font-weight: 500; font-size: 11px; opacity: .8; }
+.home-item-ico { flex: none; align-self: center; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.home-item-llevar { font-size: var(--fs-xs); color: var(--c); font-weight: 600; margin-top: 1px; }
+.home-item-pasado { opacity: .55; }
+.home-cols { display: block; }
+.home-cols .home-kpis { margin-top: 0; }
+/* 64 · Dos columnas en tablet y computador */
+@media (min-width: 1024px) {
+  .home-cols { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: var(--sp-4); align-items: start; }
+  .home-col-b { position: sticky; top: 12px; }
+  .home-col-b .home-kpis { grid-template-columns: repeat(2, 1fr); }
+  .modal { max-width: 640px; }
+}
+
+/* 15 · Feriados */
+.cal-feriado { font-size: 10px; line-height: 1.2; font-weight: 600; color: #b91c1c; margin: -2px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agenda-feriado { font-size: 11px; font-weight: 600; color: #b91c1c; background: #fee2e2; border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+
+/* 59 · Color de la organización más visible en las listas */
+.list-card-org { border-left: 4px solid var(--c) !important; background: linear-gradient(90deg, color-mix(in srgb, var(--c) 7%, var(--white)) 0, var(--white) 40%); }
+
+/* 62 · Pantalla de ingreso más cálida */
+.login-wrap { background: radial-gradient(circle at 15% 10%, #fde68a55 0, transparent 35%), radial-gradient(circle at 85% 90%, #7dd3fc66 0, transparent 40%), linear-gradient(160deg, #f0f9ff 0%, #fffbeb 100%); }
+.login-card { border-radius: 24px; }
+.login-logo { width: 76px; height: 76px; filter: drop-shadow(0 4px 10px rgba(234,179,8,.35)); }
+.login-saludo { text-align: center; font-size: 17px; font-weight: 600; color: var(--ink); margin: 6px 0 2px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .login-wrap { background: radial-gradient(circle at 15% 10%, #78350f44 0, transparent 35%), radial-gradient(circle at 85% 90%, #0c4a6e66 0, transparent 40%), #0b1220; } }
+:root[data-theme="dark"] .login-wrap { background: radial-gradient(circle at 15% 10%, #78350f44 0, transparent 35%), radial-gradient(circle at 85% 90%, #0c4a6e66 0, transparent 40%), #0b1220; }
+
+/* 99 · Calendario anual */
+.anio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.anio-mes { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: var(--white); cursor: pointer; }
+.anio-mes:hover { border-color: var(--celeste); }
+.anio-mes h4 { margin: 0 0 6px; font-size: 14px; text-transform: capitalize; display: flex; justify-content: space-between; }
+.anio-mes h4 small { font-weight: 500; color: var(--ink-soft); }
+.anio-dias { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; font-size: 11px; text-align: center; }
+.anio-dias .dow { color: var(--ink-soft); font-weight: 600; }
+.anio-dia { position: relative; padding: 3px 0 7px; border-radius: 6px; color: var(--ink); }
+.anio-dia.hoy { background: var(--celeste); color: #fff; font-weight: 700; }
+.anio-dia.feriado { color: #b91c1c; font-weight: 700; }
+.anio-puntos { position: absolute; left: 0; right: 0; bottom: 1px; display: flex; justify-content: center; gap: 1px; }
+.anio-puntos i { width: 4px; height: 4px; border-radius: 50%; display: block; }
+.anio-cab { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 10px; }
+.anio-cab b { font-size: 18px; }
+
+/* 36 · Tarjeta de confirmación con acciones */
+.toast-guardado { position: fixed; left: 50%; bottom: calc(84px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 3000; width: min(92vw, 420px); background: #14532d; color: #fff; border-radius: 14px; padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25); display: flex; flex-direction: column; gap: 8px; animation: tg-in .25s ease; }
+.toast-guardado .tg-t { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; font-weight: 600; }
+.toast-guardado .tg-acc { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.toast-guardado button { border: 1px solid rgba(255,255,255,.4); background: transparent; color: #fff; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.toast-guardado button.prim { background: #fff; color: #14532d; border-color: #fff; }
+@keyframes tg-in { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* 43 · Ayuda "?" en los campos */
+.ayuda-q { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--border); background: var(--celeste-lighter); color: var(--celeste-dark); font-size: 11px; font-weight: 700; cursor: pointer; vertical-align: 1px; padding: 0; }
+.ayuda-txt { display: block; font-size: 12.5px; font-weight: 400; color: var(--ink-soft); background: var(--celeste-lighter); border-radius: 8px; padding: 6px 9px; margin: 4px 0 2px; }
+
+/* 26 · Pendientes */
+.pend-item { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.pend-item:first-of-type { border-top: 0; }
+.pend-item input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--celeste-dark); flex: none; }
+.pend-item .pend-t { flex: 1; min-width: 0; }
+.pend-item.hecho .pend-t { text-decoration: line-through; color: var(--ink-soft); }
+.pend-item .pend-x { border: 0; background: none; color: var(--ink-soft); font-size: 18px; line-height: 1; cursor: pointer; }
+.pend-nuevo { display: flex; gap: 8px; margin-top: 8px; }
+.pend-nuevo input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; background: var(--white); color: var(--ink); }
+
+/* 31 · Botón "+" con opciones grandes */
+.mas-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 4px 4px 8px; }
+.mas-op { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--white); color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: center; }
+.mas-op span.ic { width: 42px; height: 42px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+.mas-op:hover { border-color: var(--c); }
+.mas-otros { margin-top: 6px; }
+details.mas-campos { border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; margin: 4px 0 14px; }
+details.mas-campos > summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; color: var(--celeste-dark); list-style: none; }
+details.mas-campos > summary::before { content: '+ '; }
+details.mas-campos[open] > summary::before { content: '− '; }
+details.mas-campos[open] > summary { margin-bottom: 10px; }
+.borrador-aviso { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; }
+.home-kpi-l { display: inline-flex; align-items: center; gap: 5px; }
+.home-kpi-l .icon-svg { color: var(--celeste-dark); }

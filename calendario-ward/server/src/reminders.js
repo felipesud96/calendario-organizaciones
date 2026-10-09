@@ -6,6 +6,7 @@
 // No usa ningún paquete de "cron" externo (no hay acceso a npm en este
 // entorno): un simple setInterval alcanza para este volumen de datos.
 
+import { accionHechoCompromiso } from './routes/agenda.js';
 import { load, withDb, nextId } from './db.js';
 import { isEmailConfigured } from './email.js';
 import { canSendWhatsApp } from './whatsapp.js';
@@ -185,9 +186,10 @@ async function checkCommitmentPushAvisos() {
         const [y, mm, d] = c.dueDate.split('-').map(Number);
         const dia = DIAS_SEM[new Date(Date.UTC(y, mm - 1, d, 12)).getUTCDay()];
         try {
+          const acciones = accionHechoCompromiso(m.id, c.id, u.id);
           await sendUserPush(u, aviso === 'porVencer'
-            ? { title: '🎯 Compromiso por vencer', body: `"${c.description}" vence el ${dia} ${d} (en 2 días).`, url: '/?vista=home' }
-            : { title: '⏰ Compromiso vencido', body: `"${c.description}" venció ayer. Si ya lo cumpliste, márcalo como cumplido.`, url: '/?vista=home' });
+            ? { title: 'Compromiso por vencer', body: `"${c.description}" vence el ${dia} ${d} (en 2 días).`, url: '/?vista=home', acciones }
+            : { title: 'Compromiso vencido', body: `"${c.description}" venció ayer. Si ya lo cumpliste, toca "Hecho".`, url: '/?vista=home', acciones });
         } catch { /* sin suscripción */ }
       }
       marcar.push({ m: m.id, c: c.id, aviso });

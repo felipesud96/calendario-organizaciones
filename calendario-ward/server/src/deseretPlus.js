@@ -157,7 +157,18 @@ function textoRecordatorio(mensaje) {
     .replace(/[\s,.;:]+$/, '')
     .trim();
 }
+// 81: "recuérdame la próxima vez que vea a Pedro preguntarle por su hijo".
+const RE_PROXIMA_VEZ = /\b(?:la\s+)?pr[oó]xima\s+vez\s+que\s+(?:vea|hable\s+con|me\s+junte\s+con|entreviste|me\s+reuna\s+con|me\s+reúna\s+con)\s+(?:a\s+la\s+|al\s+|a\s+|con\s+)?(?:(?:hermano|hermana|hno\.?|hna\.?)\s+)?([A-ZÁÉÍÓÚÑa-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)\s*[,:]?\s*(?:que\s+|de\s+|para\s+)?(.*)$/i;
 async function crearRecordatorio({ mensaje, mensajeMin, usuario, hoyObj, borrador }) {
+  const pv = !borrador ? String(mensaje).match(RE_PROXIMA_VEZ) : null;
+  if (pv && pv[2].trim().length > 2) {
+    const persona = pv[1].trim(); const texto = pv[2].replace(/[.!]+$/, '').trim();
+    await withDb((db) => {
+      db.recordatorios = db.recordatorios || [];
+      db.recordatorios.push({ id: nextId(db, 'recordatorios'), userId: usuario.id, persona, texto: texto.charAt(0).toUpperCase() + texto.slice(1), fecha: null, hora: null, enviado: false, createdAt: new Date().toISOString() });
+    });
+    return resp(`Listo. La próxima vez que tengas algo agendado con **${persona}** (entrevista, reunión o actividad), te lo muestro ese día en tu agenda: "${texto}".`);
+  }
   const d = borrador ? { ...borrador.datos } : { plus: 'rec_crear' };
   const norm = normalizeSearchText(mensaje);
   if (borrador?.falta === 'hora') {
@@ -197,7 +208,7 @@ async function crearRecordatorio({ mensaje, mensajeMin, usuario, hoyObj, borrado
   return resp(`⏰ Listo, te recuerdo **${cuando}**: ${d.texto}.${tienePush ? '' : '\n\nOjo: para que te llegue el aviso, activa las **notificaciones** en tu perfil (en este dispositivo).'}`);
 }
 function recordatoriosPendientes(usuario, data) {
-  return (data.recordatorios || []).filter((r) => Number(r.userId) === Number(usuario.id) && !r.enviado)
+  return (data.recordatorios || []).filter((r) => Number(r.userId) === Number(usuario.id) && !r.enviado && !r.persona)
     .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
 }
 function listarRecordatorios(usuario, data) {
@@ -234,7 +245,10 @@ async function borrarRecordatorio(mensaje, usuario, data, borrador) {
 async function enviarRecordatoriosVencidos() {
   const data = load();
   const ahora = ahoraChile();
-  const vencidos = (data.recordatorios || []).filter((r) => !r.enviado && `${r.fecha} ${r.hora}` <= `${ahora.fecha} ${ahora.hora}`);
+  // Los de "la próxima vez que vea a…" se dan por cumplidos cuando ya pasó lo agendado con esa persona.
+  const personaVistos = (data.recordatorios || []).filter((r) => r.persona && !r.enviado && r.mostradoEl && r.mostradoEl < ahora.fecha).map((r) => r.id);
+  if (personaVistos.length) await withDb((db) => { for (const r of db.recordatorios || []) if (personaVistos.includes(r.id)) { r.enviado = true; r.fecha = r.mostradoEl; } });
+  const vencidos = (data.recordatorios || []).filter((r) => !r.enviado && !r.persona && `${r.fecha} ${r.hora}` <= `${ahora.fecha} ${ahora.hora}`);
   if (!vencidos.length) return;
   for (const r of vencidos) {
     const u = data.users.find((x) => x.id === Number(r.userId));
@@ -264,12 +278,20 @@ export function avisosDeHoy(usuario, data = load()) {
   if (r.totales.solicitudes) partes.push(`**${r.totales.solicitudes}** solicitud${r.totales.solicitudes === 1 ? '' : 'es'} de entrevista por confirmar`);
   if (r.totales.sinMarcar) partes.push(`**${r.totales.sinMarcar}** entrevista${r.totales.sinMarcar === 1 ? '' : 's'} pasada${r.totales.sinMarcar === 1 ? '' : 's'} sin marcar`);
   const hoyAgenda = r.totales.entrevistas + r.totales.actividades + recs.length;
-  if (!partes.length && !hoyAgenda) return null;
+  // 84: olvidos frecuentes en lo que esta persona creó (próximos 14 días).
+  const en14 = toISO(sumarDias(new Date(), 14));
+  const sinLugar = (data.events || []).filter((e) => Number(e.createdBy) === Number(usuario.id) && !e.isMeeting && e.date >= ahora.fecha && e.date <= en14 && !String(e.location || '').trim());
+  let sinFecha = 0;
+  for (const m of data.meetings || []) if (m.status === 'active') for (const c of m.commitments || []) if (c.status === 'pending' && !c.dueDate && (Number(c.assignedToUserId) === Number(usuario.id) || Number(m.createdBy) === Number(usuario.id))) sinFecha += 1;
+  const olvidos = [];
+  if (sinLugar.length) olvidos.push(sinLugar.length === 1 ? `"${sinLugar[0].title}" no tiene lugar` : `${sinLugar.length} actividades no tienen lugar`);
+  if (sinFecha) olvidos.push(`${sinFecha} compromiso${sinFecha === 1 ? '' : 's'} sin fecha`);
+  if (!partes.length && !hoyAgenda && !olvidos.length) return null;
   const opciones = [];
   if (hoyAgenda) opciones.push({ label: '📅 ¿Qué tengo hoy?', value: '¿qué tengo hoy?' });
   if (r.totales.atrasados) opciones.push({ label: '✅ Ver mis compromisos', value: '¿qué compromisos tengo esta semana?' });
   if (r.totales.solicitudes) opciones.push({ label: '📥 Ver solicitudes', value: 'mis pendientes' });
-  const texto = `👋 Antes de empezar:${partes.length ? ` tienes ${partes.join(', ')}.` : ''}${hoyAgenda ? ` Hoy tienes ${[r.totales.entrevistas && `${r.totales.entrevistas} entrevista${r.totales.entrevistas === 1 ? '' : 's'}`, r.totales.actividades && `${r.totales.actividades} actividad${r.totales.actividades === 1 ? '' : 'es'}`, recs.length && `${recs.length} recordatorio${recs.length === 1 ? '' : 's'}`].filter(Boolean).join(', ')}.` : ''}`;
+  const texto = `👋 Antes de empezar:${partes.length ? ` tienes ${partes.join(', ')}.` : ''}${hoyAgenda ? ` Hoy tienes ${[r.totales.entrevistas && `${r.totales.entrevistas} entrevista${r.totales.entrevistas === 1 ? '' : 's'}`, r.totales.actividades && `${r.totales.actividades} actividad${r.totales.actividades === 1 ? '' : 'es'}`, recs.length && `${recs.length} recordatorio${recs.length === 1 ? '' : 's'}`].filter(Boolean).join(', ')}.` : ''}${olvidos.length ? ` Ojo: ${olvidos.join(' y ')}.` : ''}`;
   return { texto, opciones };
 }
 

@@ -17,10 +17,10 @@
 // Al cerrar sesión, app.js borra la caché de datos (CACHE_DATOS).
 const CACHE_APP = 'organizasion-app-v1';
 const CACHE_DATOS = 'organizasion-datos-v1';
-const APP_SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/chatWidget.js', '/escucha.js', '/atras.js', '/afiche.js', '/organizar.js', '/deseret.svg', '/logo-bee.png', '/manifest.json', '/icon-192.png', '/vendor/qrcode.js'];
+const APP_SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/chatWidget.js', '/escucha.js', '/atras.js', '/afiche.js', '/organizar.js', '/agenda.js', '/deseret.svg', '/logo-bee.png', '/manifest.json', '/icon-192.png', '/vendor/qrcode.js'];
 // Nunca se guardan: el chat, la voz, la sesión, datos públicos del enlace y archivos.
 // (/api/auth/me sí se guarda: sin él, la app no sabría quién eres al abrirla sin internet.)
-const SIN_CACHE = /^\/api\/(chat|tts|escucha|afiches|auth\/(?!me$)|push|public|deseret|backups|admin-backup)|\/(export|download|pdf|ics)\b/;
+const SIN_CACHE = /^\/api\/(chat|tts|escucha|afiches|version|pendientes|recordatorios|auth\/(?!me$)|push|public|deseret|backups|admin-backup)|\/(export|download|pdf|ics)\b/;
 
 self.addEventListener('install', (event) => {
   // activa esta versión de inmediato, sin esperar a que se cierren las
@@ -81,7 +81,7 @@ self.addEventListener('push', (event) => {
   // Avisos agrupados: si todavía hay avisos sin abrir de la app, se juntan
   // en uno solo ("3 novedades") en vez de llenar la barra de notificaciones.
   event.waitUntil((async () => {
-    const nuevo = { title: data.title || 'OrganizaSion', body: data.body || '', url: data.url || '/' };
+    const nuevo = { title: data.title || 'OrganizaSion', body: data.body || '', url: data.url || '/', acciones: Array.isArray(data.acciones) ? data.acciones : null };
     let previos = [];
     try {
       const abiertas = await self.registration.getNotifications({ tag: 'organizasion' });
@@ -95,7 +95,9 @@ self.addEventListener('push', (event) => {
       badge: '/icon-192.png',
       tag: 'organizasion',
       renotify: true,
-      data: { url: varios ? '/' : nuevo.url, items },
+      // 27: "Hecho" directo desde la notificación (solo cuando es un aviso suelto).
+      ...(!varios && nuevo.acciones ? { actions: nuevo.acciones.slice(0, 2).map((a) => ({ action: a.action, title: a.title })) } : {}),
+      data: { url: varios ? '/' : nuevo.url, items: items.map((x) => ({ title: x.title, body: x.body, url: x.url })), acciones: !varios ? nuevo.acciones : null },
     });
   })());
 });
@@ -103,6 +105,16 @@ self.addEventListener('push', (event) => {
 // Al tocar la notificación: si ya hay una pestaña de la app abierta, la
 // enfoca (y la navega a la URL del aviso); si no, abre una nueva.
 self.addEventListener('notificationclick', (event) => {
+  const acc = event.action && event.notification.data && Array.isArray(event.notification.data.acciones)
+    ? event.notification.data.acciones.find((a) => a.action === event.action) : null;
+  if (acc) {
+    event.notification.close();
+    event.waitUntil(fetch('/api/push-accion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: acc.t }) })
+      .then((r) => self.registration.showNotification(r.ok ? 'Listo, quedó marcado como hecho' : 'No se pudo marcar (quizás ya estaba hecho)', { icon: '/icon-192.png', badge: '/icon-192.png', tag: 'organizasion-ok' }))
+      .then(() => setTimeout(() => self.registration.getNotifications({ tag: 'organizasion-ok' }).then((l) => l.forEach((n) => n.close())), 4000))
+      .catch(() => {}));
+    return;
+  }
   event.notification.close();
   const targetUrl = (event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(

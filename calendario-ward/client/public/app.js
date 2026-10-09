@@ -24,7 +24,16 @@ const state = {
   organizations: [],
   // App 3: la pantalla de inicio es "Mi semana". ?vista=<pestaña> (ej.
   // desde la notificación del resumen semanal) abre directo esa pestaña.
-  view: (() => { try { return new URLSearchParams(location.search).get('vista') || 'home'; } catch (e) { return 'home'; } })(),
+  view: (() => {
+    try {
+      const v = new URLSearchParams(location.search).get('vista');
+      if (v) return v;
+      // 47: si cerraste la app hace menos de 10 minutos, vuelve a la misma pantalla.
+      const u = JSON.parse(localStorage.getItem('ultima_vista') || 'null');
+      if (u && u.v && Date.now() - u.t < 10 * 60 * 1000) return u.v;
+      return 'home';
+    } catch (e) { return 'home'; }
+  })(),
   calMonth: startOfMonth(new Date()),
   activeOrgIds: null, // null = todas
   events: [],
@@ -252,6 +261,19 @@ function phoneWithWhatsAppHtml(rawPhone, displayHtml) {
 // `size` en px; hereda color de texto (stroke="currentColor") para que
 // combine con cualquier botón/tema sin tener que declarar un color aparte.
 const ICON_PATHS = {
+  home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
+  pin: '<path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  clipboard: '<rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 4V2.5h6V4"/><path d="M9 11h6M9 15h6"/>',
+  heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+  wallet: '<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M16 15h2"/>',
+  trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  note: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/>',
+  flag: '<path d="M4 22V4"/><path d="M4 4h13l-2 4 2 4H4"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
@@ -375,6 +397,34 @@ function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 function isSameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function fmtTime(t) { return t ? t.slice(0, 5) : ''; }
+// 67: las librerías pesadas (lector de fotos, imagen para compartir) se cargan
+// solo cuando se usan, en vez de demorar la apertura de la app.
+const scriptsCargados = new Map();
+function cargarScriptExterno(src) {
+  if (!scriptsCargados.has(src)) {
+    scriptsCargados.set(src, new Promise((ok) => {
+      const s = document.createElement('script'); s.src = src; s.async = true;
+      s.onload = () => ok(true); s.onerror = () => { scriptsCargados.delete(src); ok(false); };
+      document.head.appendChild(s);
+    }));
+  }
+  return scriptsCargados.get(src);
+}
+// Feriados nacionales de Chile (2027: revisar si cambia algún traslado).
+const FERIADOS_CL = {
+  '2026-01-01': 'Año Nuevo', '2026-04-03': 'Viernes Santo', '2026-04-04': 'Sábado Santo', '2026-05-01': 'Día del Trabajo',
+  '2026-05-21': 'Glorias Navales', '2026-06-21': 'Pueblos Indígenas', '2026-06-29': 'San Pedro y San Pablo', '2026-07-16': 'Virgen del Carmen',
+  '2026-08-15': 'Asunción de la Virgen', '2026-09-18': 'Independencia Nacional', '2026-09-19': 'Glorias del Ejército', '2026-10-12': 'Encuentro de Dos Mundos',
+  '2026-10-31': 'Iglesias Evangélicas', '2026-11-01': 'Todos los Santos', '2026-12-08': 'Inmaculada Concepción', '2026-12-25': 'Navidad',
+  '2027-01-01': 'Año Nuevo', '2027-03-26': 'Viernes Santo', '2027-03-27': 'Sábado Santo', '2027-05-01': 'Día del Trabajo',
+  '2027-05-21': 'Glorias Navales', '2027-06-21': 'Pueblos Indígenas', '2027-06-28': 'San Pedro y San Pablo', '2027-07-16': 'Virgen del Carmen',
+  '2027-08-15': 'Asunción de la Virgen', '2027-09-18': 'Independencia Nacional', '2027-09-19': 'Glorias del Ejército', '2027-10-11': 'Encuentro de Dos Mundos',
+  '2027-10-31': 'Iglesias Evangélicas', '2027-11-01': 'Todos los Santos', '2027-12-08': 'Inmaculada Concepción', '2027-12-25': 'Navidad',
+};
+function feriadoDe(iso) { return FERIADOS_CL[iso] || ''; }
+// 43: botón "?" junto a un campo, que muestra una explicación corta (ver agenda.js).
+function ayudaCampo(texto) { return `<button type="button" class="ayuda-q" data-ayuda="${esc(texto)}" aria-label="Ayuda">?</button>`; }
+window.feriadoDe = feriadoDe;
 const WEEKDAY_NAMES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 function fmtDateHuman(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -459,7 +509,7 @@ function locationFieldHtml(idPrefix, existingLocation, existingSala) {
   const hasSalaOptions = STANDARD_LOCATIONS.includes(loc);
   return `
     <div class="field">
-      <label>Lugar</label>
+      <label>Lugar${ayudaCampo('Si eliges Capilla o Casa Capilla puedes indicar la sala. Si ese lugar ya está ocupado a esa hora, te aviso apenas lo eliges.')}</label>
       <select name="locationType" id="${idPrefix}-location-type" required>
         <option value="" disabled ${!loc ? 'selected' : ''}>Selecciona un lugar…</option>
         ${STANDARD_LOCATIONS.map((l) => `<option value="${esc(l)}" ${loc === l ? 'selected' : ''}>${esc(l)}</option>`).join('')}
@@ -544,7 +594,7 @@ function involvedOrgsFieldHtml(idPrefix, existingIds) {
   const ids = (existingIds || []).map(Number);
   return `
     <div class="field" id="${idPrefix}-involved-orgs-field">
-      <label>¿Participan otras organizaciones? (opcional)</label>
+      <label>¿Participan otras organizaciones? (opcional)${ayudaCampo('Marca las organizaciones que también participan: así no les aparece como choque y la ven en su calendario.')}</label>
       <div id="${idPrefix}-involved-orgs" style="display:flex; flex-wrap:wrap; gap:8px 14px; padding:4px 2px;">
         ${state.organizations.map((o) => `
           <label data-org-id="${o.id}" style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:400; cursor:pointer;">
@@ -627,7 +677,7 @@ function stakeAwarePrefix(item) {
 function eventTypeFieldHtml(idPrefix, isMeeting) {
   return `
     <div class="field">
-      <label>Tipo</label>
+      <label>Tipo${ayudaCampo('Actividad: abierta a los miembros (aparece en el calendario de todos). Reunión: solo para quienes la integran, como una presidencia.')}</label>
       <select id="${idPrefix}-type-select">
         <option value="activity" ${!isMeeting ? 'selected' : ''}>Actividad (la ve todo el barrio)</option>
         <option value="meeting" ${isMeeting ? 'selected' : ''}>🔒 Reunión (solo la ven los líderes de la organización)</option>
@@ -2027,7 +2077,8 @@ function renderLogin() {
       <div class="login-card">
         <img class="login-logo" src="/logo-bee.png" alt="${esc(APP_NAME)}" />
         <h1 class="brand-wordmark">${BRAND_WORDMARK_HTML}</h1>
-        <p class="subtitle">Calendario, entrevistas, presupuesto, reuniones, asignaciones y logros de todas las organizaciones en un solo lugar</p>
+        <p class="login-saludo">${(() => { const h = new Date().getHours(); return h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches'; })()}, qué bueno verte.</p>
+        <p class="subtitle">Tu agenda del barrio: actividades, reuniones, entrevistas y recordatorios en un solo lugar.</p>
         <div id="login-error"></div>
         <form id="login-form">
           <div class="field">
@@ -2448,12 +2499,12 @@ function canSeeMinisteringFocusTab() {
 // `label` de siempre ya trae su propio emoji al principio (Bienestar), para
 // no repetirlo junto al ícono de la barra.
 const TAB_DEFS = {
-  home: { label: 'Mi semana', icon: '🏠', navLabel: 'Inicio', visible: () => !!state.user },
-  calendar: { label: 'Calendario', icon: '📅', visible: () => true },
-  myActivities: { label: 'Mis Actividades', icon: '📌', visible: canSeeMyActivitiesTab },
-  interviews: { label: 'Entrevistas', icon: '👤', visible: canSeeInterviewsTab },
-  meetings: { label: 'Reuniones y Consejos', icon: '📋', navLabel: 'Reuniones', visible: canSeeMeetingsTab },
-  welfare: { label: '🤲 Bienestar', icon: '🤲', navLabel: 'Bienestar', visible: canSeeWelfareTab },
+  home: { label: 'Inicio', icon: icon('home', 22), navLabel: 'Inicio', visible: () => !!state.user },
+  calendar: { label: 'Calendario', icon: icon('calendar', 22), visible: () => true },
+  myActivities: { label: 'Mis Actividades', icon: icon('pin', 22), visible: canSeeMyActivitiesTab },
+  interviews: { label: 'Entrevistas', icon: icon('user', 22), visible: canSeeInterviewsTab },
+  meetings: { label: 'Reuniones y Consejos', icon: icon('clipboard', 22), navLabel: 'Reuniones', visible: canSeeMeetingsTab },
+  welfare: { label: 'Bienestar', icon: icon('heart', 22), navLabel: 'Bienestar', visible: canSeeWelfareTab },
   // El Directorio del barrio (lista de miembros) YA NO es una pestaña
   // propia — pasó a ser una sub-pestaña de "Crecimiento del Barrio", solo
   // para Obispado/Administrador (ver renderWardGrowthView), a pedido
@@ -2462,11 +2513,11 @@ const TAB_DEFS = {
   // cuadrante "Enfoque Ministración" tampoco vive acá — es una sub-pestaña
   // de Estadísticas, con un público más acotado (ver
   // canSeeMinisteringFocusTab).
-  cleaning: { label: 'Asignaciones', icon: '🧹', visible: canSeeAssignmentsTab },
-  budget: { label: 'Presupuesto', icon: '💰', visible: canSeeBudgetTab },
-  stats: { label: 'Estadísticas', icon: '📊', visible: canSeeStatsTab },
-  wardGrowth: { label: 'Crecimiento del Barrio', icon: '📈', navLabel: 'Crecimiento', visible: canSeeWardGrowthTab },
-  admin: { label: 'Administración', icon: '⚙️', navLabel: 'Admin', visible: () => !!state.user && state.user.role === 'admin' },
+  cleaning: { label: 'Asignaciones', icon: icon('list', 22), visible: canSeeAssignmentsTab },
+  budget: { label: 'Presupuesto', icon: icon('wallet', 22), visible: canSeeBudgetTab },
+  stats: { label: 'Estadísticas', icon: icon('chart', 22), visible: canSeeStatsTab },
+  wardGrowth: { label: 'Crecimiento del Barrio', icon: icon('trend', 22), navLabel: 'Crecimiento', visible: canSeeWardGrowthTab },
+  admin: { label: 'Administración', icon: icon('settings', 22), navLabel: 'Admin', visible: () => !!state.user && state.user.role === 'admin' },
 };
 
 // Orden de pestañas según perfil — Calendario siempre primero; el resto se
@@ -2616,8 +2667,42 @@ function render() {
 // el resto — así nunca hay más de 5 botones compitiendo por espacio, sin
 // importar cuántas pestañas le correspondan al perfil.
 const BOTTOM_NAV_MAX_PRIMARY = 4;
+// 37: el menú de abajo se ordena solo según lo que más usas. Inicio siempre
+// primero; se reordena como máximo una vez por semana (desde la primera
+// semana de uso) y avisa con "Deshacer".
+const CLAVE_MENU = 'menu_orden_v1';
+const SEMANA_MS = 7 * 24 * 3600 * 1000;
+function ordenMenuPersonal(base) {
+  const uid = state.user ? state.user.id : '';
+  const guardado = leerJSON(CLAVE_MENU, null);
+  const g = guardado && guardado.uid === uid ? guardado : { uid, inicio: Date.now(), orden: null, t: 0 };
+  if (!guardado || guardado.uid !== uid) guardarJSON(CLAVE_MENU, g);
+  const aplicar = (orden) => {
+    const vis = new Set(base);
+    const lista = (orden || []).filter((k) => vis.has(k));
+    return ['home', ...lista.filter((k) => k !== 'home'), ...base.filter((k) => k !== 'home' && !lista.includes(k))].filter((k) => vis.has(k));
+  };
+  const actual = aplicar(g.orden || base);
+  const uso = leerJSON(CLAVE_USO, {});
+  const total = Object.values(uso).reduce((a, b) => a + b, 0);
+  if (Date.now() - g.inicio < SEMANA_MS || Date.now() - (g.t || 0) < SEMANA_MS || total < 15) return actual;
+  // Más usadas primero; en empate, el orden de siempre.
+  const nuevo = ['home', ...base.filter((k) => k !== 'home').sort((a, b) => (uso[b] || 0) - (uso[a] || 0) || base.indexOf(a) - base.indexOf(b))];
+  const primeras = (l) => l.slice(0, BOTTOM_NAV_MAX_PRIMARY).join(',');
+  // Se "enfría" el conteo para que lo reciente pese más la próxima vez.
+  const enfriado = {}; Object.entries(uso).forEach(([k, n]) => { enfriado[k] = Math.floor(n / 2); });
+  guardarJSON(CLAVE_USO, enfriado);
+  if (primeras(nuevo) === primeras(actual)) { guardarJSON(CLAVE_MENU, { ...g, t: Date.now() }); return actual; }
+  guardarJSON(CLAVE_MENU, { ...g, orden: nuevo, previo: actual, t: Date.now() });
+  setTimeout(() => {
+    const deshacer = () => { const x = leerJSON(CLAVE_MENU, g); guardarJSON(CLAVE_MENU, { ...x, orden: x.previo || null, t: Date.now() }); render(); };
+    if (typeof window.toastGuardado === 'function') window.toastGuardado('Ordenamos tu menú según lo que más usas', [{ n: 'Deshacer', f: deshacer }]);
+    else toast('Ordenamos tu menú según lo que más usas');
+  }, 1200);
+  return nuevo;
+}
 function bottomNavHtml() {
-  const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
+  const order = ordenMenuPersonal(tabOrderFor().filter((k) => TAB_DEFS[k].visible()));
   if (!order.length) return '';
   const primary = order.slice(0, BOTTOM_NAV_MAX_PRIMARY);
   const overflow = order.slice(BOTTOM_NAV_MAX_PRIMARY);
@@ -2631,7 +2716,7 @@ function bottomNavHtml() {
       ${primary.map(itemHtml).join('')}
       ${overflow.length ? `
         <button type="button" class="bottom-nav-btn ${overflow.includes(state.view) ? 'active' : ''}" id="bottom-nav-more">
-          <span class="bottom-nav-icon">☰</span>
+          <span class="bottom-nav-icon">${icon('menu', 22)}</span>
           <span class="bottom-nav-label">Más</span>
         </button>` : ''}
     </nav>`;
@@ -2818,6 +2903,13 @@ function wireMobileFab() {
 // de GET /api/mi-semana (server/src/semana.js), con los mismos permisos de
 // cada módulo. Cada elemento lleva a la pestaña donde se gestiona.
 const TIPO_ICONO = { entrevista: '🙋', solicitud: '📥', compromiso: '✅', actividad: '📅', aseo: '🧹', preparativo: '☑️', recordatorio: '⏰' };
+// Colores e íconos por tipo en "Mi agenda".
+const TIPO_AGENDA = {
+  entrevista: { c: '#2563eb', i: 'user', n: 'Entrevista' }, solicitud: { c: '#0891b2', i: 'inbox', n: 'Solicitud' },
+  compromiso: { c: '#ea580c', i: 'flag', n: 'Compromiso' }, actividad: { c: '#16a34a', i: 'calendar', n: 'Actividad' },
+  aseo: { c: '#64748b', i: 'list', n: 'Aseo' }, preparativo: { c: '#0d9488', i: 'check', n: 'Preparativo' },
+  recordatorio: { c: '#7c3aed', i: 'clock', n: 'Recordatorio' },
+};
 
 function puedeVerFichasCliente() {
   return !!state.user && ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(state.user.role);
@@ -2876,11 +2968,11 @@ async function renderHomeView() {
     </button>`;
   const lider = ['admin', 'leader', 'executive_secretary'].includes(state.user.role);
   const kpis = [
-    kpi('🙋', t.entrevistas, t.entrevistas === 1 ? 'entrevista' : 'entrevistas', 'interviews'),
-    lider ? kpi('📥', t.solicitudes, 'por confirmar', 'interviews', t.solicitudes ? 'home-kpi-warn' : '', '', 'requests') : '',
-    kpi('✅', t.compromisos, t.compromisos === 1 ? 'compromiso' : 'compromisos', 'meetings', t.atrasados ? 'home-kpi-bad' : '', t.atrasados ? `${t.atrasados} atrasado${t.atrasados === 1 ? '' : 's'}` : ''),
-    kpi('📅', t.actividades, t.actividades === 1 ? 'actividad' : 'actividades', 'calendar'),
-    lider && t.sinMarcar ? kpi('⏳', t.sinMarcar, 'sin marcar', 'interviews', 'home-kpi-warn', 'entrevistas pasadas') : '',
+    kpi(icon('user', 14), t.entrevistas, t.entrevistas === 1 ? 'entrevista' : 'entrevistas', 'interviews'),
+    lider ? kpi(icon('inbox', 14), t.solicitudes, 'por confirmar', 'interviews', t.solicitudes ? 'home-kpi-warn' : '', '', 'requests') : '',
+    kpi(icon('flag', 14), t.compromisos, t.compromisos === 1 ? 'compromiso' : 'compromisos', 'meetings', t.atrasados ? 'home-kpi-bad' : '', t.atrasados ? `${t.atrasados} atrasado${t.atrasados === 1 ? '' : 's'}` : ''),
+    kpi(icon('calendar', 14), t.actividades, t.actividades === 1 ? 'actividad' : 'actividades', 'calendar'),
+    lider && t.sinMarcar ? kpi(icon('clock', 14), t.sinMarcar, 'sin marcar', 'interviews', 'home-kpi-warn', 'entrevistas pasadas') : '',
   ].join('');
 
   // Línea de tiempo: todo junto, agrupado por día.
@@ -2890,23 +2982,35 @@ async function renderHomeView() {
     .map((x) => ({ ...x, fechaGrupo: x.fechaGrupo || (x.atrasado ? 'atrasado' : x.fecha) }));
   const grupos = new Map();
   for (const x of todo) { if (!grupos.has(x.fechaGrupo)) grupos.set(x.fechaGrupo, []); grupos.get(x.fechaGrupo).push(x); }
+  grupos.delete(r.hoy); // lo de hoy va en su propia tarjeta
+  for (const [k, l] of grupos) if (k !== 'atrasado') l.sort((x, y) => (x.hora || '99').localeCompare(y.hora || '99'));
   const orden = [...grupos.keys()].sort((a, b) => (a === 'atrasado' ? -1 : b === 'atrasado' ? 1 : a.localeCompare(b)));
-  const etiquetaDia = (k) => (k === 'atrasado' ? '⚠️ Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : fmtDateHuman(k));
+  const etiquetaDia = (k) => (k === 'atrasado' ? 'Atrasado' : k === r.hoy ? `Hoy · ${fmtDateHuman(k)}` : `${fmtDateHuman(k)}${feriadoDe(k) ? ` · ${feriadoDe(k)}` : ''}`);
   // Cuenta regresiva: "mañana", "faltan 3 días".
   const faltan = (k) => {
     if (k === 'atrasado' || k === r.hoy || !/^\d{4}-\d{2}-\d{2}$/.test(k)) return '';
     const n = Math.round((new Date(`${k}T12:00:00`) - new Date(`${r.hoy}T12:00:00`)) / 86400000);
     return n === 1 ? 'mañana' : n > 1 ? `faltan ${n} días` : '';
   };
-  const itemHtml = (x) => `
-    <button type="button" class="home-item" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${/^#[0-9a-f]{3,6}$/i.test(x.color || '') ? x.color : 'var(--celeste)'}">
+  const itemHtml = (x) => {
+    const ta = TIPO_AGENDA[x.tipo] || TIPO_AGENDA.actividad;
+    const sub = [x.lugar, x.org].filter(Boolean).join(' · ');
+    return `
+    <button type="button" class="home-item home-item-tipo" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${ta.c}">
       <span class="home-item-bar"></span>
-      <span class="home-item-hora">${esc(x.hora || '')}</span>
-      <span class="home-item-main"><span class="home-item-t">${TIPO_ICONO[x.tipo] || ''} ${esc(x.titulo)}</span><span class="home-item-s">${esc(x.org || '')}</span></span>
+      <span class="home-item-hora">${esc(x.hora || '')}${x.fin ? `<small>${esc(fmtTime(x.fin))}</small>` : ''}</span>
+      <span class="home-item-ico" title="${ta.n}">${icon(ta.i, 15)}</span>
+      <span class="home-item-main"><span class="home-item-t">${esc(x.titulo)}</span><span class="home-item-s">${esc(sub)}</span>${x.queLlevar ? `<span class="home-item-llevar">Llevar: ${esc(String(x.queLlevar).split(/\n+/).filter(Boolean).join(', '))}</span>` : ''}</span>
     </button>`;
+  };
+  // Hoy: lo de hoy primero, con hora y lugar (punto 2).
+  const deHoy = todo.filter((x) => x.fechaGrupo === r.hoy).sort((a, b) => (a.hora || '99').localeCompare(b.hora || '99'));
+  const ahoraHM = (() => { const d = new Date(); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })();
+  const hoyHtml = `<div class="card home-card home-hoy"><div class="home-card-t">${icon('sun', 18)} Hoy <span class="home-hoy-f">${esc(fmtDateHuman(r.hoy))}${feriadoDe(r.hoy) ? ` · ${esc(feriadoDe(r.hoy))}` : ''}</span></div>
+    ${deHoy.length ? deHoy.map((x) => itemHtml(x).replace('class="home-item home-item-tipo"', `class="home-item home-item-tipo ${x.hora && (x.fin || x.hora) < ahoraHM ? 'home-item-pasado' : ''}"`)).join('') : '<p class="home-hoy-vacio">Hoy no tienes nada agendado.</p>'}</div>`;
   const timeline = orden.length
     ? orden.map((k) => `<div class="home-dia ${k === 'atrasado' ? 'home-dia-bad' : ''}"><div class="home-dia-t">${esc(etiquetaDia(k))}${faltan(k) ? `<span class="home-falta">${faltan(k)}</span>` : ''}</div>${grupos.get(k).map(itemHtml).join('')}</div>`).join('')
-    : emptyStateHtml('No tienes nada agendado para esta semana', canManageAnyEvents() ? { id: 'home-empty-new', label: '+ Agendar algo' } : null, '🌤️', false, lider ? 'Dame 3 ideas de actividades sencillas para esta semana en mi organización' : null);
+    : emptyStateHtml('No tienes nada más agendado esta semana', canManageAnyEvents() ? { id: 'home-empty-new', label: '+ Agendar algo' } : null, '🌤️', true, lider ? 'Dame 3 ideas de actividades sencillas para esta semana en mi organización' : null);
 
   container.innerHTML = `
     <div class="view-header">
@@ -2919,10 +3023,15 @@ async function renderHomeView() {
     </div>
     ${primerosPasosHtml(r.primerosPasos)}
     ${accesosRapidosHtml()}
+    <div class="home-cols"><div class="home-col-a">
+    ${hoyHtml}
+    <div class="card home-card"><div class="home-card-t">${icon('calendar', 18)} Mi agenda <span class="home-hoy-f">próximos 7 días</span></div>${timeline}</div>
+    <div id="home-pendientes"></div>
+    </div><div class="home-col-b">
     <div class="home-kpis">${kpis}</div>
+    ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">${icon('inbox', 18)} Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
     <div id="home-sugerencias"></div>
-    ${r.solicitudes.length ? `<div class="card home-card"><div class="home-card-t">📥 Solicitudes de entrevista por confirmar</div>${r.solicitudes.slice(0, 5).map(itemHtml).join('')}</div>` : ''}
-    <div class="card home-card"><div class="home-card-t">🗓️ Tu semana</div>${timeline}</div>`;
+    </div></div>`;
 
   container.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => {
     if (el.dataset.prepEv && typeof window.abrirPreparativos === 'function') { window.abrirPreparativos(Number(el.dataset.prepEv)); return; }
@@ -2932,6 +3041,7 @@ async function renderHomeView() {
   }));
   document.getElementById('home-mi-org')?.addEventListener('click', () => { if (typeof window.abrirFichaOrganizacion === 'function') window.abrirFichaOrganizacion(miOrgParaFicha()); });
   wireAccesosRapidos();
+  if (typeof window.pintarPendientesHome === 'function') window.pintarPendientesHome();
   const b1 = document.getElementById('home-buscar-persona');
   if (b1) b1.addEventListener('click', () => abrirBuscadorPersonas());
   wirePrimerosPasos();
@@ -3139,6 +3249,7 @@ window.irAPantalla = (ir = {}) => {
   const abrir = () => {
     if (ir.abrir === 'nueva-actividad' && canManageAnyEvents()) openEventModal();
     else if (ir.abrir === 'perfil') openProfileModal();
+    else if (ir.abrir === 'recordatorio' && typeof window.abrirRecordatorioRapido === 'function') window.abrirRecordatorioRapido();
     else if (ir.abrir === 'informe' && typeof window.abrirInforme === 'function') window.abrirInforme();
     else if (ir.abrir === 'afiche' && typeof window.abrirAfiche === 'function') window.abrirAfiche({});
     else if (ir.abrir === 'afiche-semana' && typeof window.abrirAfiche === 'function') window.abrirAfiche({ semana: true });
@@ -3174,13 +3285,14 @@ function renderCurrentView() {
   // datos dentro de una misma vista (sub-pestañas, filtros, etc.), que se
   // renderizan llamando directo a su propia función y no pasan por acá.
   const viewRoot = document.getElementById('view-root');
-  if (viewRoot) {
+  if (viewRoot && !window.__sinFundido) {
     viewRoot.classList.remove('view-fade-in');
     void viewRoot.offsetWidth;
     viewRoot.classList.add('view-fade-in');
   }
   if (!TAB_DEFS[state.view] && state.view !== 'bishopricPanel') state.view = 'home';
   registrarAcceso(state.view);
+  try { localStorage.setItem('ultima_vista', JSON.stringify({ v: state.view, t: Date.now() })); } catch (e) { /* nada */ }
   if (state.view === 'home') renderHomeView();
   else if (state.view === 'calendar') renderCalendarView();
   else if (state.view === 'bishopricPanel') renderBishopricPanelView();
@@ -3276,7 +3388,7 @@ async function renderCalendarView() {
 
     cellsHtml += `
       <div class="cal-cell ${otherMonth ? 'other-month' : ''} ${isToday ? 'today' : ''}" data-date="${iso}">
-        <div class="cal-daynum">${cellDate.getDate()}</div>
+        <div class="cal-daynum">${cellDate.getDate()}</div>${feriadoDe(iso) ? `<div class="cal-feriado" title="Feriado: ${esc(feriadoDe(iso))}">${esc(feriadoDe(iso))}</div>` : ''}
         ${visible.map((it) => {
           // Solo se puede arrastrar una actividad real (no entrevistas
           // privadas ni lo sincronizado de Estaca, que es de solo lectura) y
@@ -3302,10 +3414,10 @@ async function renderCalendarView() {
 
   const agendaHtml = agendaDays.length ? agendaDays.map((day) => `
     <div class="agenda-day">
-      <div class="agenda-day-header ${day.isToday ? 'is-today' : ''}">${esc(fmtDateHuman(day.iso))}</div>
+      <div class="agenda-day-header ${day.isToday ? 'is-today' : ''}">${esc(fmtDateHuman(day.iso))}${feriadoDe(day.iso) ? ` <span class="agenda-feriado">Feriado: ${esc(feriadoDe(day.iso))}</span>` : ''}</div>
       <div class="card-list">
         ${day.items.map((it) => `
-          <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+          <div class="list-card list-card-org" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;--c:${it.kind === 'stake' ? '#7c3aed' : esc(it.organizationColor || '#94a3b8')}">
             <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
             <div class="lc-main">
               <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
@@ -3339,13 +3451,14 @@ async function renderCalendarView() {
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'week' ? 'active' : ''}" id="cal-view-week" title="Vista semanal por horas (arrastrar para mover)">🕘 Semana</button>
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'agenda' ? 'active' : ''}" id="cal-view-agenda" title="Vista de lista">📋 Agenda</button>
         <button type="button" class="view-toggle-btn ${state.calViewMode === 'rooms' ? 'active' : ''}" id="cal-view-rooms" title="Ocupación de salas">🚪 Salas</button>
+        <button type="button" class="view-toggle-btn ${state.calViewMode === 'year' ? 'active' : ''}" id="cal-view-year" title="Todo el año">📆 Año</button>
       </div>
       ${canManageAnyEvents() ? `<button class="btn btn-secondary" id="cal-afiche-semana" title="Afiche con las actividades de los próximos 7 días">${icon('image')} Afiche de la semana</button><button class="btn btn-primary" id="cal-new-event">+ Nueva actividad</button>` : ''}
     </div>
     <div id="mini-cal-panel" class="mini-cal-panel" hidden></div>
     ${await stakeStatusBarHtml()}
     <div class="org-filters">${chips}</div>
-    ${state.calViewMode === 'week' ? weekViewHtml() : state.calViewMode === 'rooms' ? roomsViewHtml() : state.calViewMode === 'agenda' ? `
+    ${state.calViewMode === 'year' ? '<div id="cal-anio"><div class="skeleton-line" style="height:240px;border-radius:12px"></div></div>' : state.calViewMode === 'week' ? weekViewHtml() : state.calViewMode === 'rooms' ? roomsViewHtml() : state.calViewMode === 'agenda' ? `
     <div class="agenda-list">${agendaHtml}</div>
     ` : `
     <div class="cal-grid-wrap">
@@ -3433,6 +3546,8 @@ async function renderCalendarView() {
     });
   }
   document.getElementById('cal-view-month').addEventListener('click', () => { state.calViewMode = 'month'; renderCalendarView(); });
+  document.getElementById('cal-view-year').addEventListener('click', () => { state.calViewMode = 'year'; renderCalendarView(); });
+  if (state.calViewMode === 'year' && typeof window.pintarAnio === 'function') window.pintarAnio(document.getElementById('cal-anio'), state.calMonth.getFullYear(), orgFilterActive, (y, m) => { state.calMonth = new Date(y, m, 1); state.calViewMode = 'month'; loadCalendarData().then(renderCalendarView); });
   document.getElementById('cal-view-agenda').addEventListener('click', () => { state.calViewMode = 'agenda'; renderCalendarView(); });
   document.getElementById('cal-view-week').addEventListener('click', async () => {
     state.calViewMode = 'week';
@@ -3919,7 +4034,7 @@ function openDayModal(iso) {
         <div class="modal-body">
           <div class="card-list">
             ${items.length ? items.map((it) => `
-              <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+              <div class="list-card list-card-org" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;--c:${it.kind === 'stake' ? '#7c3aed' : esc(it.organizationColor || '#94a3b8')}">
                 <span class="org-dot" style="background:${it.kind === 'stake' ? '#7c3aed' : it.organizationColor}"></span>
                 <div class="lc-main">
                   <div class="lc-title">${it.kind === 'interview' ? '👤 ' : it.kind === 'stake' ? '🏛️ ' : eventTitlePrefix(it)}${esc(it.title)}</div>
@@ -4030,7 +4145,8 @@ function wireUnsavedChangesGuard(formEl) {
   formEl.addEventListener('change', () => { dirty = true; });
   return async () => {
     if (dirty) {
-      const ok = await confirmModal('Tienes cambios sin guardar en este formulario. ¿Cerrar de todas formas?', { title: 'Cambios sin guardar', confirmText: 'Cerrar sin guardar', danger: true });
+      const conBorrador = ['ev-form', 'iv-form'].includes(formEl.id) && !document.getElementById(formEl.id === 'ev-form' ? 'ev-delete' : 'iv-delete');
+      const ok = await confirmModal(conBorrador ? 'Tienes cambios sin guardar. Si cierras, te los guardo como borrador y la próxima vez te ofrezco seguir donde quedaste.' : 'Tienes cambios sin guardar en este formulario. ¿Cerrar de todas formas?', { title: 'Cambios sin guardar', confirmText: conBorrador ? 'Cerrar' : 'Cerrar sin guardar', cancelText: 'Seguir editando', danger: !conBorrador });
       if (!ok) return;
     }
     closeModal();
@@ -4783,7 +4899,7 @@ async function renderMyActivitiesLeaderView() {
         <div style="margin-bottom:6px;">
           <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
           ${grouped[d].map((it) => `
-            <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+            <div class="list-card list-card-org" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;--c:${it.kind === 'stake' ? '#7c3aed' : esc(it.organizationColor || '#94a3b8')}">
               <span class="org-dot" style="background:${esc(it.organizationColor)}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
@@ -4881,7 +4997,7 @@ async function renderMyActivitiesMemberView() {
         <div style="margin-bottom:6px;">
           <div style="font-size:12.5px; font-weight:700; color:var(--celeste-dark); text-transform:capitalize; margin:14px 0 6px;">${esc(fmtDateHuman(d))}${d < todayIso ? ' <span style="font-weight:500; color:var(--ink-soft); text-transform:none;">· pasada</span>' : ''}</div>
           ${grouped[d].map((it) => `
-            <div class="list-card" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;">
+            <div class="list-card list-card-org" data-kind="${it.kind}" data-id="${it.id}" style="cursor:pointer;--c:${it.kind === 'stake' ? '#7c3aed' : esc(it.organizationColor || '#94a3b8')}">
               <span class="org-dot" style="background:${esc(it.organizationColor)}"></span>
               <div class="lc-main">
                 <div class="lc-title">${it.kind === 'interview' ? '👤 ' : eventTitlePrefix(it)}${esc(it.title)}</div>
@@ -5038,26 +5154,6 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
               <label>Descripción de la actividad</label>
               <input type="text" name="title" required placeholder="Ej: Reunión de presidencia de Cuórum" value="${esc(existing?.title || '')}" />
             </div>
-            ${advancedOptionsToggleHtml('ev', hasAdvancedData)}
-            <div id="ev-advanced-fields" style="${hasAdvancedData ? '' : 'display:none;'}">
-              ${eventTypeFieldHtml('ev', !!existing?.isMeeting)}
-              ${wardActivityFieldHtml('ev', !!existing?.isWardActivity)}
-              ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
-              ${!isEdit ? recurrenceFieldHtml('ev') : ''}
-            </div>
-            <div class="field">
-              <label>Propósito</label>
-              <select name="purpose" required>
-                <option value="" disabled ${!existing?.purpose ? 'selected' : ''}>Selecciona un propósito…</option>
-                ${PURPOSE_OPTIONS.map((p) => `<option value="${p}" ${existing?.purpose === p ? 'selected' : ''}>${p}</option>`).join('')}
-              </select>
-            </div>
-            ${locationFieldHtml('ev', existing?.location ?? (presetLocation || undefined), existing?.sala ?? (presetSala || undefined))}
-            <div id="ev-conflict-warning"></div>
-            <div class="field">
-              <label>Notas adicionales (opcional)</label>
-              <textarea name="description">${esc(existing?.description || '')}</textarea>
-            </div>
             <div class="field">
               <label>Día</label>
               <input type="date" name="date" required value="${prefillDate}" />
@@ -5074,6 +5170,33 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
             </div>
             <div id="ev-monday-warning"></div>
             <div id="ev-choque-vivo" aria-live="polite"></div>
+            ${advancedOptionsToggleHtml('ev', hasAdvancedData)}
+            <div id="ev-advanced-fields" style="${hasAdvancedData ? '' : 'display:none;'}">
+              ${eventTypeFieldHtml('ev', !!existing?.isMeeting)}
+              ${wardActivityFieldHtml('ev', !!existing?.isWardActivity)}
+              ${involvedOrgsFieldHtml('ev', existing?.involvedOrganizationIds || (existing?.involvedOrganizations || []).map((o) => o.id))}
+              ${!isEdit ? recurrenceFieldHtml('ev') : ''}
+            </div>
+            <div class="field">
+              <label>Propósito${ayudaCampo('Para qué sirve la actividad: Espiritual (fortalecer la fe), Físico (deporte, salud), Académico (aprender algo), Social (convivir) o Servicio (ayudar a otros). Sirve para equilibrar el año.')}</label>
+              <select name="purpose" required>
+                <option value="" disabled ${!existing?.purpose ? 'selected' : ''}>Selecciona un propósito…</option>
+                ${PURPOSE_OPTIONS.map((p) => `<option value="${p}" ${existing?.purpose === p ? 'selected' : ''}>${p}</option>`).join('')}
+              </select>
+            </div>
+            ${locationFieldHtml('ev', existing?.location ?? (presetLocation || undefined), existing?.sala ?? (presetSala || undefined))}
+            <div id="ev-conflict-warning"></div>
+            <details class="mas-campos" ${existing?.description || existing?.queLlevar ? 'open' : ''}>
+              <summary>Notas y qué llevar (opcional)</summary>
+              <div class="field">
+                <label>Notas adicionales</label>
+                <textarea name="description">${esc(existing?.description || '')}</textarea>
+              </div>
+              <div class="field">
+                <label>Qué llevar${ayudaCampo('Una cosa por línea (ej: proyector, ensaladas). El día anterior, a las 19:00, se le recuerda a quien organiza, a los responsables de preparativos y a quienes confirmaron que van.')}</label>
+                <textarea name="queLlevar" rows="2" placeholder="Ej: proyector&#10;ensaladas">${esc(existing?.queLlevar || '')}</textarea>
+              </div>
+            </details>
           </form>
           ${isEdit ? agendadaHtml(existing) : ''}
           ${isEdit && !existing.isMeeting ? '<div id="prep-caja"></div>' : ''}
@@ -5252,11 +5375,13 @@ function openEventModal(existing = null, { duplicate = false, presetDate = '', p
     saveBtn.disabled = true;
     saveBtn.innerHTML = `<span class="btn-spinner"></span>Guardando…`;
     try {
+      let creado = null;
       if (isEdit) await api(`/events/${existing.id}`, { method: 'PUT', body });
       else if (dates.length > 1) await api('/events/recurring', { method: 'POST', body: { ...body, dates } });
-      else await api('/events', { method: 'POST', body });
+      else creado = await api('/events', { method: 'POST', body });
       closeModal();
-      toast(isEdit ? 'Actividad actualizada' : (dates.length > 1 ? `${dates.length} actividades creadas` : 'Actividad creada'));
+      if (creado && creado.id && typeof window.confirmarGuardado === 'function') window.confirmarGuardado('actividad', creado);
+      else toast(isEdit ? 'Actividad actualizada' : (dates.length > 1 ? `${dates.length} actividades creadas` : 'Actividad creada'));
       await refreshAfterEventChange();
     } catch (e) {
       // Esto puede pasar sobre todo con una repetición: la revisión rápida
@@ -6249,10 +6374,13 @@ async function openInterviewModal(existing = null) {
       }
     }
     try {
+      let creada = null;
       if (isEdit) await api(`/interviews/${existing.id}`, { method: 'PUT', body });
-      else await api('/interviews', { method: 'POST', body });
+      else creada = await api('/interviews', { method: 'POST', body });
       closeModal();
-      toast(isEdit ? 'Entrevista actualizada' : 'Entrevista agendada');
+      const unaCreada = Array.isArray(creada) ? creada[0] : creada;
+      if (unaCreada && unaCreada.id && typeof window.confirmarGuardado === 'function') window.confirmarGuardado('entrevista', unaCreada);
+      else toast(isEdit ? 'Entrevista actualizada' : 'Entrevista agendada');
       await refreshAfterInterviewChange();
     } catch (e) {
       document.getElementById('iv-error').innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
@@ -8217,6 +8345,7 @@ async function openPizarraOcrPanel(file, assignable, onAccept) {
   const root = document.getElementById('ocr-root');
   const close = () => { root.innerHTML = ''; };
 
+  if (typeof Tesseract === 'undefined') await cargarScriptExterno('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
   if (typeof Tesseract === 'undefined') {
     toast('No se pudo cargar el lector de fotos (revisa tu conexión a internet) — puedes seguir escribiendo los compromisos a mano.', 'error');
     return;
@@ -9117,6 +9246,7 @@ function buildActaImageNode(m) {
 // cualquier "tarjeta" compartible — cada llamador solo aporta cómo armar su
 // nodo/texto y su nombre de archivo.
 async function shareCardAsImage({ triggerBtn, buildNode, buildText, filenamePrefix, orgName, date, shareTitle }) {
+  if (typeof html2canvas === 'undefined') await cargarScriptExterno('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
   if (typeof html2canvas === 'undefined') {
     // Sin internet (o el CDN no cargó): cae de vuelta a compartir como texto
     // en vez de dejar el botón sin hacer nada.

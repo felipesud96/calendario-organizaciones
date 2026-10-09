@@ -22,6 +22,7 @@
 //   GET  /api/events/:id/preparativos/sugerir     (?deseret=1 para ideas con IA)
 //   GET  /api/organizaciones/:id/resumen
 // ----------------------------------------------------------------------
+import { tokenAccion } from './agenda.js';
 import { sendJson } from '../router.js';
 import { requireAuth } from '../guard.js';
 import { load, withDb } from '../db.js';
@@ -72,7 +73,8 @@ async function avisar(userIds, ev, data) {
   for (const id of userIds) {
     const u = data.users.find((x) => x.id === Number(id));
     if (!u || !pushEnabledFor(u, 'commitments')) continue;
-    try { await sendUserPush(u, { title: 'Te asignaron un preparativo', body: `${ev.title} (${ev.date}): revisa tu tarea en Mi semana.`, url: '/?vista=home' }); } catch (e) { /* sin suscripción */ }
+    const t = (ev.preparativos || []).find((x) => Number(x.responsableId) === Number(id) && !x.hecho) || {};
+    try { await sendUserPush(u, { title: 'Te asignaron un preparativo', body: `${t.texto ? `${t.texto} — ` : ''}${ev.title} (${ev.date})`, url: '/?vista=home', acciones: t.id ? [{ action: 'hecho', title: 'Hecho', t: tokenAccion('preparativo', { e: ev.id, p: t.id }, u.id, 30) }] : undefined }); } catch (e) { /* sin suscripción */ }
   }
 }
 

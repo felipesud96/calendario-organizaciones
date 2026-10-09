@@ -11,6 +11,7 @@ import { detectarAccion, manejarAccion, HERRAMIENTAS_ACCIONES, accionPorReferenc
 import { TIPOS_ENTREVISTA, tipoPorKey, validarTipoEntrevista, inferirTipoEntrevista } from './tiposEntrevista.js';
 import { detectarConsultaExtra, manejarConsultaExtra, registrarSinRespuesta, RE_COMO_APP } from './deseretExtra.js';
 import { detectarPlus, manejarPlus } from './deseretPlus.js';
+import { detectarAgenda, manejarAgenda, separarRecordatorio } from './deseretAgenda.js';
 import { detectarComparar, manejarComparar } from './deseretComparar.js';
 import { consultaLibre, pareceConsultaDeDatos } from './deseretConsulta.js';
 
@@ -528,7 +529,7 @@ async function guardarActividad(d, usuario, data) {
   vaciarCache();
   return resp(`✅ **¡Listo! Actividad agendada:** **${evento.title}**, ${fechaLegible(evento.date)} a las ${evento.startTime} (${org?.name || ''}).\n\n_Ya aparece en el calendario._`, {
     items: [{ tipo: 'actividad', titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null }],
-    ...(usuario.role !== 'member' ? { opciones: [{ label: 'Crear un afiche', value: 'afiche', afiche: { eventId: evento.id, titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null } }] } : {}),
+    ...(usuario.role !== 'member' ? { opciones: [{ label: 'Armar preparativos', value: 'preparativos', prep: evento.id }, { label: 'Crear un afiche', value: 'afiche', afiche: { eventId: evento.id, titulo: evento.title, fecha: evento.date, hora: evento.startTime, org: org?.name || '', color: org?.color || null } }] } : {}),
   });
 }
 
@@ -940,7 +941,13 @@ async function jsonConIA(sistema, texto) {
   return null;
 }
 
-async function redactarConIA(systemInstruction, historial, mensaje) {
+// 86: tono elegido por la persona (formal / cercano).
+export function instruccionTono() {
+  const t = contextoDeseret.getStore()?.tono;
+  return t === 'formal' ? '\nTONO: formal y respetuoso; trata a la persona de "usted".' : t === 'cercano' ? '\nTONO: cercano y cálido; trata a la persona de "tú", como un amigo del barrio.' : '';
+}
+async function redactarConIA(systemInstructionBase, historial, mensaje) {
+  const systemInstruction = `${systemInstructionBase || ''}${instruccionTono()}`;
   const gemini = clienteGemini();
   if (gemini) {
     try {
@@ -1327,6 +1334,18 @@ export function sinPastoral(texto) {
 }
 
 export async function procesarPreguntaChat(mensaje, historial = [], usuario = null, opciones = {}) {
+  // 88: "agenda X … y recuérdame Y" → se hacen las dos cosas.
+  const sep = usuario ? separarRecordatorio(mensaje) : null;
+  if (sep) {
+    const a = await procesarPreguntaChatSinFiltro(sep.resto, historial, usuario, opciones);
+    if (!leerBorrador(usuario)) {
+      const b = await procesarPreguntaChatSinFiltro(sep.recordatorio, historial, usuario, opciones);
+      const { texto: ta, ...ea } = a || {}; const { texto: tb, ...eb } = b || {};
+      return { ...eb, ...ea, opciones: (ea.opciones && ea.opciones.length) ? ea.opciones : eb.opciones, texto: sinPastoral(`${ta || ''}\n\n${tb || ''}`.trim()) };
+    }
+    const { texto: ta, ...ea } = a || {};
+    return { ...ea, texto: sinPastoral(`${ta || ''}\n\n(Cuando terminemos esto, pídeme el recordatorio: "${sep.recordatorio}".)`) };
+  }
   const r0 = await procesarPreguntaChatSinFiltro(mensaje, historial, usuario, opciones);
   const r1 = r0 && typeof r0.texto === 'string' ? { ...r0, texto: sinPastoral(r0.texto) } : r0;
   try { return conAccionesSugeridas(r1, mensaje, usuario, opciones); } catch { return r1; }
@@ -1337,7 +1356,7 @@ export async function procesarPreguntaChat(mensaje, historial = [], usuario = nu
 function conAccionesSugeridas(r, mensaje, usuario, opciones = {}) {
   if (!r || !usuario || opciones.breve || typeof r.texto !== 'string') return r;
   if ((r.opciones && r.opciones.length) || r.tarjeta || (r.items && r.items.length) || r.tabla || leerBorrador(usuario)) return r;
-  if (r.texto.length < 120 || /^\s*(✅|👌|🗑️|⏰|🔒|❌|⚠️)/.test(r.texto)) return r;
+  if (r.texto.length < 120 || /^\s*(✅|👌|🗑️|⏰|🔒|❌|⚠️|Listo|Esto es lo que|Lo que encontr|Tu domingo|Para \*\*|\*\*Tu semana)/.test(r.texto)) return r;
   const n = normalizeSearchText(mensaje);
   const lider = ['admin', 'leader', 'executive_secretary', 'ward_clerk'].includes(usuario.role);
   const chips = [];
@@ -1390,6 +1409,13 @@ async function procesarInterno(mensaje, historial = [], usuario = null, opciones
     // 1a. Continuación de un agendamiento a medias (respuesta a "¿a qué
     // hora?", "¿a quién?", "¿lo agendo así?", etc.).
     const borrador = leerBorrador(usuario);
+    // Ayuda memoria (deseretAgenda.js): "¿qué tenía que hacer?", "anota esto: …", etc.
+    const dictandoActa = borrador?.tipo === 'plus' && borrador.datos?.plus === 'dictar';
+    const agenda = usuario && !dictandoActa ? detectarAgenda(norm) : null;
+    if (agenda) {
+      const r = await manejarAgenda(agenda, { mensaje, norm, usuario, historial, hoyObj });
+      if (r) { borrarBorrador(usuario); return r; }
+    }
     const matchAgendar = mensajeMinusculas.match(/(agendar|agenda|agéndame|agendame|crear|crea|programar|programa|añadir|añade|agregar|agrega)\s+(?:una?|la|el|mi)?\s*(actividad|reuni[oó]n|evento|entrevista|asado|convivencia|paseo|taller|capacitaci[oó]n|devocional|campamento|cena|once|noche de hogar|charla|clase)/);
     // Un pedido nuevo ("organiza un asado…") reemplaza al borrador en curso.
     const pedidoNuevo = /^(?:(?:quiero|necesito|puedes|podrias|me|por favor)\s+)*(agend|anot|organiz|program|crea|reserv|agreg|anad)\w*/.test(norm);
