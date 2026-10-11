@@ -26,7 +26,7 @@ import { requireRole } from '../guard.js';
 import { load, withDb, nextId } from '../db.js';
 import { assignableUsersFor, canEditMeeting, EMPTY_AGENDA_ITEM_NOTES } from './meetings.js';
 import { isObispadoLeader } from './stake.js';
-import { clienteGemini, GEMINI_MODEL, hoyEnChile, vaciarCache, toISO } from '../chat.js';
+import { clienteGemini, GEMINI_MODEL, hoyEnChile, vaciarCache, toISO, jsonConIA } from '../chat.js';
 import { ordenarActa, guardarActaCore, camposDeTema } from '../deseretPlus.js';
 
 const CAMPOS = ['notas', 'acuerdo', 'necesidad', 'analisis', 'seguimiento', 'quienNecesita', 'queSeHara', 'quienLoHara'];
@@ -48,6 +48,8 @@ const ROLES = ['admin', 'leader', 'ward_clerk'];
 const MAX_TROZO = 20 * 1024 * 1024;
 const MAX_TROZOS = 60;             // ~5 horas a 5 minutos por trozo
 const VIGENCIA_MS = 2 * 24 * 3600 * 1000; // sesiones olvidadas se borran a los 2 días
+const GUARDADA_MS = 7 * 24 * 3600 * 1000; // ya guardadas: la transcripción se conserva 7 días para poder reordenarla
+const vigente = (x, ahora = Date.now()) => (x.guardadaEn ? ahora - new Date(x.guardadaEn).getTime() < GUARDADA_MS : ahora - new Date(x.creado).getTime() < VIGENCIA_MS);
 
 export const transcripcionDisponible = () => !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY);
 
@@ -109,6 +111,77 @@ async function transcribir(buffer, mime, nombre, data) {
 const ALUCINACIONES = /^(gracias por ver( el video)?|suscr[ií]bete|subt[ií]tulos (realizados )?por|amara\.org|¡?gracias!?\.?)$/i;
 const limpiarTexto = (t) => String(t || '').split(/(?<=[.!?])\s+/).filter((f) => !ALUCINACIONES.test(f.trim())).join(' ').trim();
 
+// ---------------- Reuniones largas: por partes ----------------
+// Una transcripción de ~1 hora tiene 50.000+ caracteres: demasiado para
+// pedírsela de una vez a la IA (se cae o se corta). Se resume por partes de
+// ~9.000 caracteres (cada parte: temas, acuerdos y compromisos) y después se
+// arma el acta final con esos resúmenes. Si la IA está ocupada se reintenta;
+// si aun así no responde, se avisa (la grabación queda guardada para volver
+// a intentarlo) en vez de pegar el texto crudo en el acta.
+const PARTE = 9000;
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+function partirTexto(texto) {
+  const frases = texto.split(/(?<=[.!?\n])\s+/);
+  const partes = []; let actual = '';
+  for (const f of frases) {
+    if (actual && actual.length + f.length > PARTE) { partes.push(actual); actual = ''; }
+    actual += (actual ? ' ' : '') + f;
+  }
+  if (actual.trim()) partes.push(actual);
+  return partes;
+}
+async function jsonConReintentos(sistema, texto, intentos = 3) {
+  for (let i = 0; i < intentos; i++) {
+    const j = await jsonConIA(sistema, texto).catch(() => null);
+    if (j && typeof j === 'object') return j;
+    await esperar(6000 * (i + 1)); // los límites por minuto de la IA gratuita se liberan solos
+  }
+  return null;
+}
+async function resumirParte(parte, i, total, asignables) {
+  const sistema = `Resumes una PARTE (${i + 1} de ${total}) de la transcripción automática de una reunión de un barrio de La Iglesia en Chile (puede tener errores de reconocimiento y varias personas hablando).
+Devuelve SOLO JSON: {"temas":[{"tema":"título corto","resumen":"1 a 3 frases claras con lo esencial","acuerdos":["acuerdo concreto", "..."]}],
+"compromisos":[{"responsable":"nombre tal como se dijo, o vacío","descripcion":"acción concreta en infinitivo (5 a 20 palabras)","fecha_limite":"AAAA-MM-DD o vacío","cita":"frase corta textual donde se asignó"}]}
+Reglas: no copies la transcripción, resume en buen español. Ignora saludos, oraciones y conversación sin relación. Un compromiso es una tarea que alguien aceptó o le asignaron; si dudas, ponlo como acuerdo. No inventes nada.
+Personas del barrio: ${asignables.join(', ')}.`;
+  return jsonConReintentos(sistema, parte);
+}
+export async function ordenarTranscripcion(texto, usuario, data, hoyObj, opciones) {
+  if (texto.length <= PARTE * 1.5) return ordenarActa(texto, usuario, data, hoyObj, { ...opciones, transcripcion: true, sinRespaldo: true });
+  const asignables = assignableUsersFor(usuario, data).map((u) => u.name);
+  const partes = partirTexto(texto);
+  const resumenes = [];
+  for (let i = 0; i < partes.length; i++) {
+    const r = await resumirParte(partes[i], i, partes.length, asignables);
+    if (r) resumenes.push({ parte: i + 1, ...r });
+    else {
+      console.warn(`[escucha] no se pudo resumir la parte ${i + 1} de ${partes.length}`);
+      // Si la IA no responde ni a la primera parte, no tiene sentido esperar por las demás.
+      if (!resumenes.length) return null;
+    }
+  }
+  if (!resumenes.length) return null;
+  const faltaron = partes.length - resumenes.length;
+  const textoPartes = resumenes.map((r) => `PARTE ${r.parte}:\n${JSON.stringify({ temas: r.temas || [], compromisos: r.compromisos || [] })}`).join('\n\n');
+  let acta = await ordenarActa(textoPartes, usuario, data, hoyObj, { ...opciones, transcripcion: true, desdePartes: true, sinRespaldo: true });
+  if (!acta) {
+    // Respaldo sin IA, pero ordenado: los temas y compromisos de cada parte.
+    const temas = []; const compromisos = [];
+    for (const r of resumenes) {
+      for (const t of r.temas || []) {
+        const ya = temas.find((x) => x.tema.toLowerCase() === String(t.tema || '').toLowerCase());
+        const notas = [t.resumen, ...(t.acuerdos || []).map((a) => `Acuerdo: ${a}`)].filter(Boolean).join('\n');
+        if (ya) ya.notas = `${ya.notas}\n${notas}`; else if (t.tema) temas.push({ tema: String(t.tema).slice(0, 150), ref: null, notas, acuerdo: (t.acuerdos || []).join('; ') });
+      }
+      for (const c of r.compromisos || []) if (c.descripcion && !compromisos.some((x) => x.descripcion.toLowerCase() === String(c.descripcion).toLowerCase())) compromisos.push(c);
+    }
+    acta = { titulo: '', tipo: opciones.tipoFijo || 'general', fecha: toISO(hoyObj), temas: temas.map((t) => ({ ...t, notas: t.notas.slice(0, 1400) })) };
+    acta.compromisos = compromisos.map((c) => ({ userId: usuario.id, nombre: null, dicho: c.responsable || '', descripcion: String(c.descripcion).slice(0, 300), fecha: /^\d{4}-\d{2}-\d{2}$/.test(c.fecha_limite || '') ? c.fecha_limite : toISO(new Date(Date.now() + 7 * 864e5)), sinFecha: !c.fecha_limite }));
+  }
+  if (faltaron) acta.aviso = `No pude resumir ${faltaron} de ${partes.length} partes de la reunión: revisa la transcripción completa por si falta algo.`;
+  return acta;
+}
+
 function sesionDe(data, id, user) {
   const s = (data.escuchas || []).find((x) => x.id === Number(id));
   if (!s || Number(s.userId) !== Number(user.id)) return null;
@@ -124,7 +197,7 @@ export function registerEscuchaRoutes(router) {
     if (!transcripcionDisponible()) return sendJson(res, 503, { error: 'Falta configurar la transcripción (GROQ_API_KEY o GEMINI_API_KEY en el servidor).' });
     const ahora = Date.now();
     const s = await withDb((db) => {
-      db.escuchas = (db.escuchas || []).filter((x) => ahora - new Date(x.creado).getTime() < VIGENCIA_MS);
+      db.escuchas = (db.escuchas || []).filter((x) => vigente(x, ahora));
       const nueva = {
         id: nextId(db, 'escuchas'), userId: req.user.id, creado: new Date().toISOString(),
         fuente: body?.fuente === 'online' ? 'online' : 'sala', titulo: String(body?.titulo || '').slice(0, 100), trozos: [],
@@ -195,10 +268,14 @@ export function registerEscuchaRoutes(router) {
         .map((t, i) => ({ ref: i + 1, tema: t.slice(0, 150) }));
     }
     const inicio = new Date(s.creado);
+    // Fin de la grabación: el último trozo recibido (sirve también al reordenar días después).
+    const ultimoTrozo = Math.max(0, ...s.trozos.map((t) => Date.parse(t.at) || 0));
+    const finGrab = ultimoTrozo && !s.guardadaEn ? new Date(Math.max(ultimoTrozo, Date.now())) : (ultimoTrozo ? new Date(ultimoTrozo) : new Date());
     const fechaInicio = new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TZ_APP || 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(inicio);
-    const acta = await ordenarActa(`${s.titulo ? `Reunión: ${s.titulo}\n` : ''}${texto}`, req.user, data, hoyEnChile(), {
-      transcripcion: true, tipoFijo: tipoActa, agendaBase: base.filter((b) => !ORACION.test(b.tema)).map((b) => ({ ref: b.ref, tema: b.tema })),
+    const acta = await ordenarTranscripcion(`${s.titulo ? `Reunión: ${s.titulo}\n` : ''}${texto}`, req.user, data, hoyEnChile(), {
+      tipoFijo: tipoActa, agendaBase: base.filter((b) => !ORACION.test(b.tema)).map((b) => ({ ref: b.ref, tema: b.tema })),
     });
+    if (!acta) return sendJson(res, 503, { error: 'Deseret está con mucha demanda y no alcanzó a ordenar la reunión. Tu grabación quedó guardada: toca "Intentar de nuevo" en un minuto.' });
     // Temas finales: los de la agenda (en su orden, con lo conversado en cada
     // uno) y después los temas nuevos que no calzaron.
     const vacio = { notas: '', acuerdo: '', necesidad: '', analisis: '', seguimiento: '', quienNecesita: '', queSeHara: '', quienLoHara: '' };
@@ -216,12 +293,13 @@ export function registerEscuchaRoutes(router) {
     sendJson(res, 200, {
       acta: {
         ...acta, tipo: tipoActa, temas: temas.map((t) => alPatron(t, tipoActa)),
-        titulo: meeting ? meeting.title : (s.titulo || acta.titulo),
+        titulo: meeting ? meeting.title : (s.titulo || acta.titulo || `Reunión del ${fechaInicio}`),
         fecha: meeting ? meeting.date : fechaInicio,
-        horaInicio: horaChile(inicio), horaFin: horaChile(new Date()),
+        horaInicio: horaChile(inicio), horaFin: horaChile(finGrab),
       },
       destino: meeting ? { tipo: 'existente', meetingId: meeting.id, titulo: meeting.title } : { tipo: 'nueva' },
       asignables, transcripcion: texto, tipos: tiposPermitidos(req.user, data),
+      trozos: s.trozos.length, minutos: Math.max(1, Math.round((finGrab.getTime() - inicio.getTime()) / 60000)),
     });
   }));
 
@@ -242,6 +320,9 @@ export function registerEscuchaRoutes(router) {
       nombre: 'ok', dicho: '', descripcion: String(c.descripcion).trim().slice(0, 300), fecha: c.fecha,
     }));
     const destino = body?.destino || {};
+    // Opcional: guardar la transcripción completa junto al acta (solo la ve quien puede ver el acta completa).
+    const transcripcion = body?.guardarTranscripcion
+      ? [...s.trozos].sort((x, y) => x.n - y.n).map((t) => t.texto).filter(Boolean).join('\n').slice(0, 400000) : '';
     let resultado;
     if (destino.tipo === 'existente') {
       // Agregar a una acta que ya existe: lo conversado se suma a cada tema
@@ -271,6 +352,7 @@ export function registerEscuchaRoutes(router) {
           });
         }
         m.escuchadoConDeseret = true;
+        if (transcripcion) m.transcripcion = m.transcripcion ? `${m.transcripcion}\n\n— — —\n\n${transcripcion}` : transcripcion;
         m.lastEditedBy = req.user.id; m.lastEditedAt = new Date().toISOString();
         return { meetingId: m.id, temas: m.agendaItems.length, nuevosTemas, compromisos: compromisos.length };
       });
@@ -281,15 +363,38 @@ export function registerEscuchaRoutes(router) {
         titulo: String(a.titulo || '').trim().slice(0, 100) || 'Reunión', tipo, fecha: fechaOk(a.fecha) || toISO(hoyEnChile()),
         temas, compromisos,
       }, req.user, {
-        escuchadoConDeseret: true, confidential: !!a.confidencial,
+        escuchadoConDeseret: true, confidential: !!a.confidencial, ...(transcripcion ? { transcripcion } : {}),
         ...(horaOk(a.horaInicio) ? { startTime: a.horaInicio } : {}), ...(horaOk(a.horaFin) ? { endTime: a.horaFin } : {}),
       });
       resultado = { meetingId: m.id, temas: m.agendaItems.length, compromisos: m.commitments.length };
     }
-    // Listo: se borra la transcripción.
-    await withDb((db) => { db.escuchas = (db.escuchas || []).filter((x) => x.id !== s.id); });
+    // Listo. La transcripción se conserva 7 días (solo para quien grabó) por si
+    // hay que volver a ordenarla; después se borra sola.
+    await withDb((db) => {
+      db.escuchas = (db.escuchas || []).filter((x) => vigente(x));
+      const x = (db.escuchas || []).find((y) => y.id === s.id);
+      if (x) { x.guardadaEn = new Date().toISOString(); x.meetingId = resultado.meetingId || x.meetingId || null; }
+    });
     vaciarCache();
     sendJson(res, 201, { ok: true, ...resultado });
+  }));
+
+  // Grabaciones ya guardadas de los últimos 7 días (para reordenarlas o leerlas).
+  router.get('/api/escucha/recientes', requireRole(ROLES, async (req, res) => {
+    const data = load();
+    const l = (data.escuchas || []).filter((x) => Number(x.userId) === Number(req.user.id) && x.guardadaEn && vigente(x))
+      .sort((a, b) => String(b.creado).localeCompare(String(a.creado)))
+      .map((x) => {
+        const m = x.meetingId ? (data.meetings || []).find((y) => y.id === Number(x.meetingId)) : null;
+        const palabras = x.trozos.map((t) => t.texto).join(' ').split(/\s+/).filter(Boolean).length;
+        return { id: x.id, creado: x.creado, guardadaEn: x.guardadaEn, meetingId: x.meetingId || null, acta: m ? m.title : null, palabras, vence: new Date(new Date(x.guardadaEn).getTime() + GUARDADA_MS).toISOString() };
+      });
+    sendJson(res, 200, l);
+  }));
+  router.get('/api/escucha/:id/texto', requireRole(ROLES, async (req, res, params) => {
+    const s = sesionDe(load(), params.id, req.user);
+    if (!s) return sendJson(res, 404, { error: 'No encontrada (las transcripciones se borran 7 días después de guardar el acta)' });
+    sendJson(res, 200, { texto: [...s.trozos].sort((a, b) => a.n - b.n).map((t) => t.texto).filter(Boolean).join('\n') });
   }));
 
   router.delete('/api/escucha/:id', requireRole(ROLES, async (req, res, params) => {

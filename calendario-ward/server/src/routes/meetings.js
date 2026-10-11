@@ -228,6 +228,9 @@ export function withMeetingInfo(m, data, viewer) {
     agendaItems: (m.agendaItems || []).map((a) => (fullAccess ? a : { id: a.id, topic: '(Tema confidencial)', presenter: '', ...EMPTY_AGENDA_ITEM_NOTES })),
     commitments: (m.commitments || []).map((c) => withCommitmentInfo(c, data, m, viewer)),
     contentRedacted: !fullAccess,
+    // La transcripción completa (si se guardó) se pide aparte: es larga.
+    transcripcion: undefined,
+    tieneTranscripcion: fullAccess && !!m.transcripcion,
   };
 }
 
@@ -432,6 +435,14 @@ export function registerMeetingRoutes(router) {
       return sendJson(res, 403, { error: 'No puedes ver las actas de otra organización' });
     }
     sendJson(res, 200, withMeetingInfo(meeting, data, req.user));
+  }));
+
+  // Transcripción completa guardada desde "Deseret escucha la reunión".
+  router.get('/api/meetings/:id/transcripcion', requireRole(['admin', 'leader', 'ward_clerk'], async (req, res, params) => {
+    const data = load();
+    const meeting = data.meetings.find((m) => m.id === Number(params.id));
+    if (!meeting || !canSeeMeetingRecord(req.user, meeting, data) || !canSeeMeetingFullContent(req.user, meeting, data)) return sendJson(res, 404, { error: 'No encontrada' });
+    sendJson(res, 200, { texto: meeting.transcripcion || '' });
   }));
 
   // Crea el acta — puede nacer solo como AGENDA (Punto 7: temas a tratar y

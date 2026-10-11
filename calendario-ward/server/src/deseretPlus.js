@@ -533,7 +533,7 @@ const TODOS_CAMPOS = ['notas', 'acuerdo', 'necesidad', 'analisis', 'seguimiento'
 // `tipoFijo`: el tipo de acta ya elegido (no lo decide la IA).
 // `agendaBase`: temas ya puestos (plantilla o acta existente), [{ ref, tema }]:
 // la IA ubica lo conversado en esos temas (por `ref`) y agrega aparte lo que no calce.
-export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion = false, tipoFijo = null, agendaBase = [] } = {}) {
+export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion = false, tipoFijo = null, agendaBase = [], sinRespaldo = false, desdePartes = false } = {}) {
   const asignables = assignableUsersFor(usuario, data);
   const obispado = isObispadoLeader(usuario, data);
   const tipoPedido = tipoFijo && TIPOS_ACTA[tipoFijo] ? tipoFijo : null;
@@ -542,18 +542,31 @@ export async function ordenarActa(texto, usuario, data, hoyObj, { transcripcion 
   const agendaTxt = agendaBase.length
     ? `\nLa reunión tenía esta AGENDA (usa "ref" para poner lo conversado en el tema que corresponda; lo que no calce en ninguno va como tema nuevo con "ref": null; no repitas temas de la agenda sin contenido):\n${agendaBase.map((a) => `${a.ref}. ${a.tema}`).join('\n')}`
     : '';
-  const origen = transcripcion
-    ? `la TRANSCRIPCIÓN AUTOMÁTICA de una reunión grabada (puede tener errores de reconocimiento, frases cortadas y varias personas hablando; quien preside suele resumir los acuerdos y asignar los compromisos). Agrupa lo conversado en temas; ignora saludos, oraciones de apertura/cierre y conversación sin relación`
-    : 'un dictado';
+  const origen = desdePartes
+    ? 'los RESÚMENES POR PARTES de una reunión larga (cada parte ya resumida, en orden). Une los temas que se repiten entre partes, conserva todos los acuerdos y junta los compromisos repetidos en uno solo'
+    : transcripcion
+      ? `la TRANSCRIPCIÓN AUTOMÁTICA de una reunión grabada (puede tener errores de reconocimiento, frases cortadas y varias personas hablando; quien preside suele resumir los acuerdos y asignar los compromisos). Agrupa lo conversado en temas; ignora saludos, oraciones de apertura/cierre y conversación sin relación`
+      : 'un dictado';
+  const reglasActa = transcripcion || desdePartes
+    ? `\nCómo redactar:
+- Cada campo de un tema es un RESUMEN claro de 1 a 4 frases, en tercera persona y en buen español ("Se acordó invitar a…"). NUNCA copies frases de la transcripción ni dejes muletillas, nombres repetidos o frases cortadas.
+- Los compromisos van SOLO en "compromisos" (no los repitas dentro de los temas). Un compromiso es una tarea concreta que una persona aceptó o que le asignaron ("yo me encargo", "hermano X, ¿puede…?" "sí"). Redáctalo como acción clara en infinitivo, de 5 a 20 palabras, con el detalle necesario (ej. "Invitar a las familias Pérez y Soto al bautismo del domingo 18 a las 10:35").
+- Si no estás seguro de que algo fue un compromiso, déjalo como acuerdo del tema, no como compromiso. No inventes responsables: si no se dijo quién, deja "responsable" vacío.`
+    : '';
   const sistema = `Ordenas el acta de una reunión de un barrio de La Iglesia (Chile) a partir de ${origen}. Hoy es ${toISO(hoyObj)}.
 Devuelve SOLO un JSON con esta forma:
 {"titulo": "...", ${tipoPedido ? '' : '"tipo": "general|consejo_barrio|coordinacion_ministracion", '}"fecha": "AAAA-MM-DD (hoy si no la dijo)",
  "temas": [${formaTema}],
  "compromisos": [{"responsable": "nombre tal como lo dijo, o 'yo'", "descripcion": "qué hará", "fecha_limite": "AAAA-MM-DD o vacío"}]}
 Reglas: no inventes nada que no se haya dicho; un compromiso es algo que una persona concreta quedó en hacer; si no se dijo fecha límite, déjala vacía. "El sábado" = el próximo sábado desde hoy.
-Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.${agendaTxt}`;
-  let acta = await jsonConIA(sistema, texto.slice(0, transcripcion ? 120000 : 20000));
-  if (!acta || typeof acta !== 'object') acta = actaSinIA(texto, hoyObj);
+Personas que se pueden asignar: ${asignables.map((u) => u.name).join(', ')}.${agendaTxt}${reglasActa}`;
+  let acta = await jsonConIA(sistema, texto.slice(0, transcripcion || desdePartes ? 120000 : 20000));
+  if (!acta || typeof acta !== 'object') {
+    // En una grabación no se arma un acta "a la fuerza" con el texto crudo:
+    // quien llama decide (reintentar o avisar).
+    if (sinRespaldo) return null;
+    acta = actaSinIA(texto, hoyObj);
+  }
   // Validar y resolver responsables.
   const fechaOk = (f) => (typeof f === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : null);
   const tipo = tipoPedido || (TIPOS_ACTA[acta.tipo] && (acta.tipo === 'general' || obispado) ? acta.tipo : 'general');

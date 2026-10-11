@@ -118,7 +118,8 @@
     }
     const puedeOnline = !!navigator.mediaDevices?.getDisplayMedia && !/Android|iPhone|iPad/i.test(navigator.userAgent);
     modal('🎙️ Deseret escucha la reunión', `
-      <p style="margin-top:0">Deseret escucha la reunión, la transcribe y al final te propone el <b>acta</b> con los temas, acuerdos y compromisos. <b>Tú la revisas antes de guardarla.</b> El audio no se guarda: solo el texto, y se borra al guardar el acta.</p>
+      <p style="margin-top:0">Deseret escucha la reunión, la transcribe y al final te propone el <b>acta</b> con los temas, acuerdos y compromisos. <b>Tú la revisas antes de guardarla.</b> El audio no se guarda: solo el texto, que se conserva 7 días después de guardar el acta (por si quieres volver a ordenarla) y luego se borra.</p>
+      <div id="esc-recientes"></div>
       <div class="field"><label for="esc-tit">Nombre de la reunión (opcional)</label><input id="esc-tit" type="text" maxlength="100" placeholder="Ej. Reunión de presidencia del Cuórum" value="${esc(tituloInicial)}" /></div>
       <label style="font-weight:600">¿Dónde es la reunión?</label>
       <div class="esc-fuentes">
@@ -134,6 +135,7 @@
       <label class="a11y-op" style="margin-top:12px"><input type="checkbox" id="esc-ok" ${yaAvisado() ? 'checked' : ''} /> <span>Avisé a los presentes que Deseret tomará notas de la reunión.</span></label>`,
     '<button class="btn btn-secondary" id="esc-no">Cancelar</button><button class="btn btn-primary" id="esc-empezar" disabled>🎙️ Empezar a escuchar</button>');
     document.getElementById('esc-no').addEventListener('click', cerrarModal);
+    pintarRecientes(document.getElementById('esc-recientes'));
     const ok = document.getElementById('esc-ok'); const btn = document.getElementById('esc-empezar');
     ok.addEventListener('change', () => { btn.disabled = !ok.checked; });
     btn.disabled = !ok.checked;
@@ -318,6 +320,8 @@
 
   async function descartar() {
     if (!st) return;
+    // Reordenando una grabación ya guardada: solo se cierra (no se borra nada).
+    if (st.reorden) { st = null; cerrarModal(); return; }
     if (!window.confirm('¿Descartar la grabación y todo lo transcrito? No se guardará nada.')) return;
     const id = st.id;
     st.grabando = false;
@@ -404,7 +408,7 @@
 
   async function armarActa(destino) {
     if (!st) return;
-    modal('🧠 Armando el acta…', '<div class="esc-grabando"><div class="deseret-typing"><span></span><span></span><span></span></div><p class="esc-estado">Ordenando temas, acuerdos y compromisos…</p></div>');
+    modal('🧠 Armando el acta…', '<div class="esc-grabando"><div class="deseret-typing"><span></span><span></span><span></span></div><p class="esc-estado">Ordenando temas, acuerdos y compromisos…</p><p class="esc-estado">En reuniones largas leo la transcripción por partes: puede tardar 1 a 3 minutos. No cierres esta ventana.</p></div>');
     try {
       const r = await api(`/escucha/${st.id}/terminar`, { method: 'POST', body: { destino } });
       pantallaRevision(r);
@@ -422,8 +426,10 @@
     consejo_barrio: [['necesidad', '🧩 Necesidad'], ['analisis', '🔎 Análisis'], ['acuerdo', '✅ Acuerdo'], ['seguimiento', '👣 Seguimiento']],
     coordinacion_ministracion: [['quienNecesita', '🙋 Quién necesita ayuda'], ['queSeHara', '🛠️ Qué se hará'], ['quienLoHara', '🤝 Quién lo hará']],
   };
-  function pantallaRevision({ acta, asignables, transcripcion, tipos, destino }) {
+  function pantallaRevision({ acta, asignables, transcripcion, tipos, destino, trozos, minutos }) {
     const existente = destino?.tipo === 'existente';
+    let guardarTx = false;
+    const palabras = String(transcripcion || '').split(/\s+/).filter(Boolean).length;
     const b = { ...acta, temas: acta.temas.map((t) => ({ ...t })), compromisos: acta.compromisos.map((c) => ({ ...c, incluir: true })) };
     const campos = () => CAMPOS[b.tipo] || CAMPOS.general;
     const opcionesResp = (sel) => asignables.map((u) => `<option value="${u.id}" ${Number(sel) === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
@@ -440,6 +446,8 @@
           <div class="field"><label>Hora de término</label><input id="esc-r-hf" type="time" value="${esc(b.horaFin || '')}" /></div>
         </div>
         <label class="a11y-op"><input type="checkbox" id="esc-r-conf" ${b.confidencial ? 'checked' : ''} /> <span>Acta confidencial (solo la ven quien la crea y el Obispado)</span></label>`}
+        <p class="esc-estado" style="margin:8px 0 0">Escuché ${minutos ? `${minutos} min` : 'la reunión'}${trozos ? ` (${trozos} trozo${trozos === 1 ? '' : 's'})` : ''} · ${palabras.toLocaleString('es-CL')} palabras transcritas. Revisa los resúmenes y compromisos: puedes corregir todo antes de guardar.</p>
+        ${acta.aviso ? `<p class="esc-dicho" style="margin-top:6px">${esc(acta.aviso)}</p>` : ''}
         <div class="esc-sec">Temas (${b.temas.length})</div>
         ${b.temas.map((t, i) => `
           <div class="esc-item" data-tema="${i}">
@@ -463,9 +471,11 @@
             ${c.sinFecha ? '<div class="esc-dicho">No se dijo fecha: puse una semana. Ajústala si hace falta.</div>' : ''}
           </div>`).join('')}
         <button class="btn btn-secondary btn-sm" id="esc-mas-comp">+ Agregar compromiso</button>
-        <details style="margin-top:14px"><summary>Ver lo que transcribí</summary><textarea readonly style="width:100%; min-height:160px; margin-top:6px">${esc(transcripcion)}</textarea></details>`,
+        <details style="margin-top:14px"><summary>Ver la transcripción completa (${palabras.toLocaleString('es-CL')} palabras)</summary><textarea readonly style="width:100%; min-height:220px; margin-top:6px">${esc(transcripcion)}</textarea></details>
+        <label class="a11y-op" style="margin-top:10px"><input type="checkbox" id="esc-r-tx" ${guardarTx ? 'checked' : ''} /> <span>Guardar también la transcripción completa junto al acta (la verán solo quienes pueden ver el acta)</span></label>`,
       '<button class="btn btn-secondary" id="esc-r-desc">Descartar</button><button class="btn btn-primary" id="esc-r-guardar">💾 Guardar acta</button>');
       const leer = () => {
+        guardarTx = !!document.getElementById('esc-r-tx')?.checked;
         if (!existente) {
           b.titulo = document.getElementById('esc-r-tit').value; b.tipo = document.getElementById('esc-r-tipo').value;
           b.fecha = document.getElementById('esc-r-fecha').value; b.confidencial = document.getElementById('esc-r-conf').checked;
@@ -488,7 +498,7 @@
         leer();
         const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Guardando…';
         try {
-          const r = await api(`/escucha/${st.id}/guardar`, { method: 'POST', body: { destino, acta: { ...b, compromisos: b.compromisos.filter((c) => String(c.descripcion).trim()) } } });
+          const r = await api(`/escucha/${st.id}/guardar`, { method: 'POST', body: { destino, guardarTranscripcion: guardarTx, acta: { ...b, compromisos: b.compromisos.filter((c) => String(c.descripcion).trim()) } } });
           st = null;
           cerrarModal();
           aviso(existente ? `Listo: agregué lo conversado al acta (${r.compromisos} compromiso(s) nuevo(s)).` : `Acta guardada: ${r.temas} tema(s) y ${r.compromisos} compromiso(s).`);
@@ -498,6 +508,38 @@
     };
     pintar();
   }
+
+  // ---------------- Grabaciones guardadas (7 días) ----------------
+  const fechaCorta = (iso) => { try { return new Date(iso).toLocaleDateString('es-CL', { weekday: 'short', day: 'numeric', month: 'short' }); } catch { return ''; } };
+  async function pintarRecientes(cont, soloActa = null) {
+    if (!cont) return;
+    let l = [];
+    try { l = await api('/escucha/recientes'); } catch { return; }
+    if (soloActa) l = l.filter((x) => Number(x.meetingId) === Number(soloActa));
+    if (!l.length || !cont.isConnected) { cont.innerHTML = ''; return; }
+    cont.innerHTML = `<div class="hint-box" style="margin:10px 0">
+      <b>${soloActa ? 'Grabación de Deseret de esta acta' : 'Grabaciones guardadas (últimos 7 días)'}</b>
+      ${l.map((x) => `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px">
+        <span style="flex:1;min-width:150px;font-size:13px">${soloActa ? '' : `${esc(x.acta || 'Reunión')} · `}${esc(fechaCorta(x.creado))} · ${x.palabras.toLocaleString('es-CL')} palabras<br><small>Se borra el ${esc(fechaCorta(x.vence))}</small></span>
+        <button type="button" class="btn btn-ghost btn-sm" data-esc-ver="${x.id}">Ver texto</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-esc-reord="${x.id}">Volver a ordenar</button></div>`).join('')}</div>`;
+    cont.querySelectorAll('[data-esc-ver]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        const r = await api(`/escucha/${b.dataset.escVer}/texto`);
+        modal('Transcripción', `<p class="esc-estado" style="margin-top:0">Transcripción automática: puede tener errores.</p><textarea readonly style="width:100%;min-height:340px">${esc(r.texto)}</textarea>`, '<button class="btn btn-primary" id="esc-tx-ok">Cerrar</button>');
+        document.getElementById('esc-tx-ok').addEventListener('click', cerrarModal);
+      } catch (e) { aviso(e.message, 'error'); }
+    }));
+    cont.querySelectorAll('[data-esc-reord]').forEach((b) => b.addEventListener('click', () => window.reordenarEscucha(Number(b.dataset.escReord))));
+  }
+  window.pintarGrabacionesActa = (cont, meetingId) => { estilos(); pintarRecientes(cont, meetingId); };
+  // Vuelve a ordenar una grabación ya guardada (arma un acta nueva o agrega a una existente).
+  window.reordenarEscucha = async (id) => {
+    if (st && st.grabando) { aviso('Hay una grabación en curso: termínala primero.', 'error'); return; }
+    estilos();
+    st = { id, reorden: true, cola: [], grabando: false, subiendo: false, listos: 0 };
+    await pantallaDestino();
+  };
 
   window.abrirEscuchaReunion = function abrirEscuchaReunion(opciones = {}) {
     if (opciones.onGuardado) onGuardadoCb = opciones.onGuardado;

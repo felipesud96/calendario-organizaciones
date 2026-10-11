@@ -9493,9 +9493,11 @@ async function openMeetingDetailModal(m) {
           ${canEdit ? `<div style="margin-top:14px;"><button type="button" class="btn btn-secondary btn-sm" id="md-add-commitment">+ Agregar compromiso</button></div>` : ''}
           `}
         </div>
+        <div id="md-escucha" style="padding:0 20px"></div>
         <div class="modal-footer">
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             ${hasShareableActa ? `<button class="btn btn-ghost" id="md-share-acta">🖼️ Compartir acta</button><button class="btn btn-ghost btn-sm" id="md-share-acta-text" title="Compartir como texto en vez de imagen">📝 Como texto</button>` : ''}
+            ${m.tieneTranscripcion ? `<button class="btn btn-ghost btn-sm" id="md-transcripcion">${icon('file')} Transcripción completa</button>` : ''}
             ${canEdit ? `<button class="btn btn-ghost" id="md-edit-meeting">✏️ Editar acta</button>` : ''}
             ${!m.contentRedacted && (m.agendaItems || []).some((a) => a.topic && !isFixedPrayerTopic(a.topic)) ? `<button class="btn btn-ghost btn-sm" id="md-save-template" title="Reutilizar estos temas en próximas reuniones">📑 Guardar temas como plantilla</button>` : ''}
             ${canEdit ? `<button class="btn btn-danger" id="md-archive">✅ Verificar y Archivar</button>` : ''}
@@ -9522,6 +9524,22 @@ async function openMeetingDetailModal(m) {
   // cualquier miembro de la presidencia podría ser quien la comparta.
   document.getElementById('md-share-acta')?.addEventListener('click', (e) => {
     shareActaAsImage(m, e.currentTarget);
+  });
+  if (typeof window.pintarGrabacionesActa === 'function') window.pintarGrabacionesActa(document.getElementById('md-escucha'), m.id);
+  document.getElementById('md-transcripcion')?.addEventListener('click', async () => {
+    let t = '';
+    try { t = (await api(`/meetings/${m.id}/transcripcion`)).texto || ''; } catch (e) { toast(e.message, 'error'); return; }
+    const raizTx = document.getElementById('confirm-root') || document.body;
+    const caja = document.createElement('div');
+    caja.innerHTML = `<div class="modal-backdrop" id="tx-fondo" style="z-index:1200"><div class="modal" role="dialog" aria-label="Transcripción completa">
+      <div class="modal-header"><h3>Transcripción completa</h3><button class="modal-close" id="tx-x" aria-label="Cerrar">×</button></div>
+      <div class="modal-body"><p class="hint-box" style="margin-top:0">${t.split(/\s+/).filter(Boolean).length.toLocaleString('es-CL')} palabras · transcripción automática, puede tener errores.</p><div style="white-space:pre-wrap; font-size:14px; line-height:1.55">${esc(t)}</div></div>
+      <div class="modal-footer" style="justify-content:flex-end"><button class="btn btn-secondary" id="tx-copiar">Copiar</button><button class="btn btn-primary" id="tx-cerrar">Cerrar</button></div></div></div>`;
+    raizTx.appendChild(caja);
+    const cerrar = () => caja.remove();
+    caja.querySelector('#tx-x').addEventListener('click', cerrar); caja.querySelector('#tx-cerrar').addEventListener('click', cerrar);
+    caja.querySelector('#tx-fondo').addEventListener('click', (e) => { if (e.target.id === 'tx-fondo') cerrar(); });
+    caja.querySelector('#tx-copiar').addEventListener('click', async () => { try { await navigator.clipboard.writeText(t); toast('Transcripción copiada'); } catch (e) { toast('No se pudo copiar', 'error'); } });
   });
   document.getElementById('md-share-acta-text')?.addEventListener('click', () => {
     window.open(`https://wa.me/?text=${encodeURIComponent(buildActaShareText(m))}`, '_blank');
