@@ -141,6 +141,20 @@ export function registerAgendaRoutes(router) {
     sendJson(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Ya estaba hecho o no se encontró' });
   });
 
+  // Resumen del mes para la cabecera de "Mi Perfil".
+  router.get('/api/mis-estadisticas', requireAuth(async (req, res) => {
+    const d = load(); const uid = Number(req.user.id); const mes = ahora().fecha.slice(0, 7);
+    let compromisosHechos = 0;
+    for (const m of d.meetings || []) for (const c of m.commitments || []) {
+      if (Number(c.assignedToUserId) === uid && c.status === 'completed' && String(c.completedAt || '').slice(0, 7) === mes) compromisosHechos += 1;
+    }
+    const org = Number(req.user.organizationId);
+    const actividades = (d.events || []).filter((e) => !e.isMeeting && String(e.date || '').slice(0, 7) === mes
+      && (Number(e.createdBy) === uid || Number(e.organizationId) === org || e.isWardActivity)).length;
+    const pendientes = (d.pendientes || []).filter((p) => Number(p.userId) === uid && !p.hecho).length;
+    sendJson(res, 200, { compromisosHechos, actividades, pendientes });
+  }));
+
   router.get('/api/version', requireAuth(async (req, res) => {
     let v = 0;
     try { v = Math.round(fs.statSync(DB_PATH).mtimeMs); } catch { v = 0; }

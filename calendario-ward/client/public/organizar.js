@@ -124,7 +124,7 @@
       try {
         const nd = await pedir(`/events/${ev.id}/preparativos/${c.dataset.prepMarcar}/marcar`, { method: 'POST', body: { hecho: c.checked } });
         cont.innerHTML = htmlCaja(ev, nd); pintarCaja(cont, ev);
-        if (nd.total && nd.hechos === nd.total) aviso('¡Todo listo! La actividad está preparada.');
+        if (nd.total && nd.hechos === nd.total) { aviso('¡Todo listo! La actividad está preparada.'); if (c.checked && typeof window.confeti === 'function') window.confeti(); }
         actualizarEvento(ev.id, nd);
       } catch (x) { aviso(x.message, 'error'); c.checked = !c.checked; c.disabled = false; }
     }));
@@ -194,7 +194,7 @@
     };
     const pintar = () => {
       lista.innerHTML = items.length ? items.map((x) => `<div class="prep-ed" data-id="${x.id || ''}">
-        <div class="r1"><input type="checkbox" ${x.hecho ? 'checked' : ''} aria-label="Hecho" /><input type="text" class="prep-texto" maxlength="120" placeholder="Qué hay que hacer" value="${e(x.texto)}" /><button type="button" class="prep-quitar" aria-label="Quitar">×</button></div>
+        <div class="r1"><span class="asa-orden" aria-label="Arrastrar para ordenar" title="Arrastrar para ordenar"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span><input type="checkbox" ${x.hecho ? 'checked' : ''} aria-label="Hecho" /><input type="text" class="prep-texto" maxlength="120" placeholder="Qué hay que hacer" value="${e(x.texto)}" /><button type="button" class="prep-quitar" aria-label="Quitar">×</button></div>
         <div class="r2"><div class="prep-quien-box"><input type="text" class="prep-quien" maxlength="60" autocomplete="off" placeholder="Responsable (escribe un nombre)" aria-label="Responsable" value="${e(nombreDe(x))}" data-uid="${x.responsableId || ''}" /></div><input type="date" class="prep-fecha" value="${e(x.fecha || '')}" max="${e(ev.date || '')}" title="Hasta cuándo" aria-label="Hasta cuándo" /></div>
         </div>`).join('') : '<p class="prep-vacio">Aún no hay tareas. Agrega una o usa "Sugerir lista".</p>';
       lista.querySelectorAll('.prep-ed').forEach((row, i) => {
@@ -204,6 +204,8 @@
         f.addEventListener('click', () => { try { f.showPicker(); } catch (x) { /* navegadores antiguos */ } });
         row.querySelector('.prep-quitar').addEventListener('click', () => { leer(); items.splice(i, 1); pintar(); });
       });
+      // Arrastrar la manija para cambiar el orden (se guarda en el orden en pantalla).
+      if (typeof window.ordenarArrastrando === 'function') window.ordenarArrastrando(lista, '.prep-ed', '.asa-orden');
     };
     pintar();
     const agregarTextos = (textos) => { leer(); const ya = new Set(items.map((x) => x.texto.trim().toLowerCase())); textos.forEach((t) => { if (!ya.has(t.toLowerCase())) items.push({ texto: t, responsableId: null, fecha: null, hecho: false }); }); pintar(); };

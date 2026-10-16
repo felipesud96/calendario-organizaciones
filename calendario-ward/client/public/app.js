@@ -35,7 +35,8 @@ const state = {
     } catch (e) { return 'home'; }
   })(),
   calMonth: startOfMonth(new Date()),
-  activeOrgIds: null, // null = todas
+  // 7: el filtro de organizaciones del Calendario se recuerda en este dispositivo.
+  activeOrgIds: (() => { try { const l = JSON.parse(localStorage.getItem('filtro_orgs_v1') || 'null'); return Array.isArray(l) && l.length ? new Set(l.map(Number)) : null; } catch (e) { return null; } })(), // null = todas
   events: [],
   interviews: [],
   stakeEvents: [],
@@ -261,6 +262,11 @@ function phoneWithWhatsAppHtml(rawPhone, displayHtml) {
 // `size` en px; hereda color de texto (stroke="currentColor") para que
 // combine con cualquier botón/tema sin tener que declarar un color aparte.
 const ICON_PATHS = {
+  xcirc: '<circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
   home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/>',
   pin: '<path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -1108,8 +1114,23 @@ function wireSwipeNavigation() {
     return false;
   };
 
+  // 4: deslizar desde el borde izquierdo = "volver" (cierra la ventana abierta o vuelve a Inicio, ver atras.js).
+  let bordeX = null; let bordeY = null;
+  document.addEventListener('touchstart', (e) => {
+    bordeX = null;
+    if (e.touches.length === 1 && state.user && e.touches[0].clientX <= 22) { bordeX = e.touches[0].clientX; bordeY = e.touches[0].clientY; }
+  }, { passive: true, capture: true });
+  document.addEventListener('touchend', (e) => {
+    if (bordeX === null) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - bordeX; const dy = Math.abs(t.clientY - bordeY);
+    bordeX = null;
+    if (dx > 70 && dy < dx * 0.6 && history.state && history.state.organizasionAtras) { touchStartX = null; history.back(); }
+  }, { passive: true, capture: true });
+
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1 || !state.user) { touchStartX = null; return; }
+    if (e.touches[0].clientX <= 22) { touchStartX = null; return; } // es el gesto de volver
     const modalRoot = document.getElementById('modal-root');
     if (modalRoot && modalRoot.innerHTML.trim()) { touchStartX = null; return; }
     if (startsInsideHorizontalScroller(e.touches[0].target)) { touchStartX = null; return; }
@@ -1143,6 +1164,15 @@ function wireSwipeNavigation() {
     touchStartX = null;
     if (Math.abs(dx) < SWIPE_MIN_DISTANCE) return;
     if (Math.abs(dy) > Math.abs(dx) * SWIPE_MAX_OFF_AXIS_RATIO) return;
+    // 3: si la pantalla tiene pestañas internas, primero se pasa entre ellas;
+    // recién en la primera o la última se cambia de módulo.
+    const fila = [...document.querySelectorAll('#view-root .subtabs')].find((f) => f.offsetParent !== null && f.querySelector('.subtab-btn.active'));
+    if (fila) {
+      const botones = [...fila.querySelectorAll('.subtab-btn')].filter((b) => b.offsetParent !== null && !b.disabled);
+      const i = botones.findIndex((b) => b.classList.contains('active'));
+      const sig = botones[dx < 0 ? i + 1 : i - 1];
+      if (i >= 0 && sig) { sig.click(); sig.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); return; }
+    }
     const order = tabOrderFor().filter((k) => TAB_DEFS[k].visible());
     const idx = order.indexOf(state.view);
     if (idx === -1) return;
@@ -1580,9 +1610,17 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
           ${mandatory ? '' : '<button class="modal-close" id="prof-modal-close">×</button>'}
         </div>
         <div class="modal-body">
+          ${mandatory ? '' : `<div class="perfil-cab">
+            ${photoDataUri ? `<img class="perfil-cab-foto" src="${esc(photoDataUri)}" alt="" />` : `<div class="user-avatar perfil-cab-foto">${esc(initials(u.name))}</div>`}
+            <div class="perfil-cab-txt">
+              <strong>${esc(u.name || '')}</strong>
+              <span>${esc([u.calling, orgById(u.organizationId)?.name].filter(Boolean).join(' · '))}</span>
+            </div>
+          </div>
+          <div class="perfil-stats" id="prof-stats"></div>`}
           <div id="prof-error"></div>
           <div class="field" style="margin-bottom:16px;">
-            <label>🔤 Tamaño de letra de la app (en este celular/computador)</label>
+            <label>Tamaño de letra de la app (en este celular/computador)</label>
             <div class="font-scale-picker" id="prof-font-scale-picker">
               ${FONT_SCALE_OPTIONS.map((opt) => `<button type="button" class="font-scale-btn ${getFontScale() === opt.value ? 'active' : ''}" data-scale="${opt.value}" style="font-size:${14 + Number(opt.value) * 6}px;" title="${esc(opt.title)}">A</button>`).join('')}
             </div>
@@ -1682,6 +1720,12 @@ function openProfileModal({ mandatory = false, onDone } = {}) {
     document.getElementById('prof-cancel').addEventListener('click', guardedClose);
     document.getElementById('prof-modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'prof-modal-backdrop') guardedClose(); });
     wireProfilePushToggle();
+    api('/mis-estadisticas').then((st) => {
+      const box = document.getElementById('prof-stats');
+      if (!box || !st) return;
+      const it = (n, t) => `<div><b>${n}</b><span>${t}</span></div>`;
+      box.innerHTML = it(st.compromisosHechos, 'compromisos cumplidos este mes') + it(st.actividades, 'actividades este mes') + it(st.pendientes, 'pendientes por hacer');
+    }).catch(() => {});
   }
   document.getElementById('prof-photo-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
@@ -2954,6 +2998,16 @@ function wirePrimerosPasos() {
   }));
 }
 
+// Saludo e ilustración según la hora (mañana, tarde, noche).
+function momentoDelDia() { const h = new Date().getHours(); return h >= 6 && h < 12 ? 'manana' : h >= 12 && h < 19 ? 'tarde' : 'noche'; }
+function saludoMomento() { return { manana: 'Buenos días', tarde: 'Buenas tardes', noche: 'Buenas noches' }[momentoDelDia()]; }
+function ilustracionMomento() {
+  const m = momentoDelDia();
+  if (m === 'manana') return '<svg viewBox="0 0 48 48" width="44" height="44"><circle cx="24" cy="24" r="9" fill="#fbbf24"/><g stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round"><path d="M24 6v5M24 37v5M6 24h5M37 24h5M11.3 11.3l3.5 3.5M33.2 33.2l3.5 3.5M11.3 36.7l3.5-3.5M33.2 14.8l3.5-3.5"/></g></svg>';
+  if (m === 'tarde') return '<svg viewBox="0 0 48 48" width="44" height="44"><path d="M13 31a11 11 0 0 1 22 0z" fill="#fb923c"/><g stroke="#f97316" stroke-width="2.5" stroke-linecap="round"><path d="M6 31h36M12 36h24M18 41h12"/></g><g stroke="#fdba74" stroke-width="2.2" stroke-linecap="round"><path d="M24 9v5M11 15l3 3M37 15l-3 3"/></g></svg>';
+  return '<svg viewBox="0 0 48 48" width="44" height="44"><path d="M30 8a16 16 0 1 0 10 26A13 13 0 0 1 30 8z" fill="#c7d2fe"/><circle cx="12" cy="12" r="1.6" fill="#a5b4fc"/><circle cx="40" cy="14" r="1.2" fill="#a5b4fc"/><circle cx="36" cy="40" r="1.4" fill="#a5b4fc"/></svg>';
+}
+
 async function renderHomeView() {
   const container = document.getElementById('view-root');
   container.innerHTML = skeletonViewHtml('Mi semana', { cards: 4, stats: 4 });
@@ -2996,7 +3050,7 @@ async function renderHomeView() {
     const ta = TIPO_AGENDA[x.tipo] || TIPO_AGENDA.actividad;
     const sub = [x.lugar, x.org].filter(Boolean).join(' · ');
     return `
-    <button type="button" class="home-item home-item-tipo" data-view="${x.vista}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${ta.c}">
+    <button type="button" class="home-item home-item-tipo" data-view="${x.vista}" data-tipo="${esc(x.tipo || '')}" data-id="${x.id || ''}" ${x.tipo === 'solicitud' ? 'data-sub="requests"' : ''} ${x.tipo === 'preparativo' ? `data-prep-ev="${x.eventId}"` : ''} style="--c:${ta.c}">
       <span class="home-item-bar"></span>
       <span class="home-item-hora">${esc(x.hora || '')}${x.fin ? `<small>${esc(fmtTime(x.fin))}</small>` : ''}</span>
       <span class="home-item-ico" title="${ta.n}">${icon(ta.i, 15)}</span>
@@ -3013,8 +3067,9 @@ async function renderHomeView() {
     : emptyStateHtml('No tienes nada más agendado esta semana', canManageAnyEvents() ? { id: 'home-empty-new', label: '+ Agendar algo' } : null, '🌤️', true, lider ? 'Dame 3 ideas de actividades sencillas para esta semana en mi organización' : null);
 
   container.innerHTML = `
-    <div class="view-header">
-      <div><h2>Hola, ${esc(nombre)} 👋</h2><p>Tu semana: ${esc(fmtDateHuman(r.desde))} al ${esc(fmtDateHuman(r.hasta))}</p></div>
+    <div class="view-header home-cab home-cab-${momentoDelDia()}">
+      <div class="home-cab-ilus" aria-hidden="true">${ilustracionMomento()}</div>
+      <div><h2>${saludoMomento()}, ${esc(nombre)}</h2><p>Tu semana: ${esc(fmtDateHuman(r.desde))} al ${esc(fmtDateHuman(r.hasta))}</p></div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         ${puedeVerFichasCliente() ? '<button class="btn btn-secondary" id="home-buscar-persona">🔎 Buscar persona</button>' : ''}
         ${puedeVerFichaOrganizacion() ? `<button class="btn btn-secondary" id="home-mi-org">${icon('users')} Mi organización</button>` : ''}
@@ -3345,6 +3400,7 @@ function toggleOrgFilter(orgId) {
   if (state.activeOrgIds.has(orgId)) state.activeOrgIds.delete(orgId);
   else state.activeOrgIds.add(orgId);
   if (state.activeOrgIds.size === state.organizations.length) state.activeOrgIds = null;
+  try { localStorage.setItem('filtro_orgs_v1', JSON.stringify(state.activeOrgIds ? [...state.activeOrgIds] : null)); } catch (e) { /* nada */ }
   renderCalendarView();
 }
 
@@ -6670,6 +6726,14 @@ function budgetCategoryCardHtml(cat, isCurrentQuarter, isObispado) {
           <div><span class="bf-label">Saldo</span><strong style="color:${balanceColor};">${fmtMoney(cat.balance)}</strong></div>
         </div>
       </div>
+      ${(() => {
+        // 43: barra de lo gastado sobre lo asignado; aviso al pasar el 80 %.
+        if (!cat.assigned) return cat.spent ? `<div class="bud-barra-txt bud-sin">Sin monto asignado este trimestre</div>` : '';
+        const pct = Math.round((cat.spent / cat.assigned) * 100);
+        const nivel = pct > 100 ? 'pasado' : pct >= 80 ? 'alerta' : 'ok';
+        return `<div class="bud-barra bud-${nivel}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Gastado ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></div>
+          <div class="bud-barra-txt bud-${nivel}">${pct}% usado${nivel === 'pasado' ? ' · se pasó del presupuesto' : nivel === 'alerta' ? ' · queda poco' : ''}</div>`;
+      })()}
       ${canAllocate ? `
         <div class="budget-alloc-row">
           <input type="number" min="0" step="1" inputmode="numeric" class="budget-alloc-input" value="${cat.assigned}" />
@@ -7816,7 +7880,7 @@ function assignmentCardHtml(c) {
             </div>
           </div>
           <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
-            <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
+            <span class="status-pill ${isOverdue ? 'status-red' : 'status-amber'}">${icon(isOverdue ? 'alert' : 'clock', 12)}${isOverdue ? 'Atrasado' : 'Pendiente'}</span>
             ${commitmentPriorityBadgeHtml(c.priority)}
           </div>
         </div>
@@ -8247,7 +8311,8 @@ function commitmentStatusPillHtml(c) {
     not_fulfilled: ['status-gray', 'No cumplida'],
   };
   const [cls, label] = map[c.displayStatus] || ['status-gray', c.status];
-  return `<span class="status-pill ${cls}">${label}</span>`;
+  const ic = { pending: 'clock', overdue: 'alert', completed: 'check', not_fulfilled: 'xcirc' }[c.displayStatus];
+  return `<span class="status-pill ${cls}">${ic ? icon(ic, 12) : ''}${label}</span>`;
 }
 
 // ---------------- "Leer pizarra" (compromisos por foto, OCR gratis) ----------------
@@ -13037,7 +13102,7 @@ function bpCommitmentRowHtml(c) {
           <div class="lc-sub">${esc(c.organizationName)} · "${esc(c.meetingTitle)}" · responsable: ${esc(c.assignedToName)} · vencía ${esc(fmtDateHuman(c.dueDate))}</div>
         </div>
         <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
-          <span class="status-pill status-red">Atrasado</span>
+          <span class="status-pill status-red">${icon('alert', 12)}Atrasado</span>
           ${commitmentPriorityBadgeHtml(c.priority)}
         </div>
       </div>

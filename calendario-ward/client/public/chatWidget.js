@@ -165,9 +165,9 @@ const ESTILOS = `
     -webkit-font-smoothing: antialiased;
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #2a3f52; --d-soft: #1b2a38; --d-bubble: #1e3a4f; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
+    :root:not([data-theme="light"]) #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #24395a; --d-soft: #172a45; --d-bubble: #1d3557; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
   }
-  :root[data-theme="dark"] #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #2a3f52; --d-soft: #1b2a38; --d-bubble: #1e3a4f; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
+  :root[data-theme="dark"] #chat-window { --d-muted: #9db0c2; --d-faint: #7890a6; --d-line: #24395a; --d-soft: #172a45; --d-bubble: #1d3557; --d-bubble-ink: #e7eef4; --d-brand: #0284c7; --d-brand-soft: #1b3346; }
   /* En el computador: panel lateral de alto completo, integrado a la app */
   @media (min-width: 900px) {
     #chat-window { top: 0; right: 0; bottom: 0; height: 100vh; max-height: none; width: 410px; border-radius: 0; border: 0; border-left: 1px solid var(--d-line); box-shadow: -12px 0 32px rgba(15,23,42,.10); animation: d-entrar .18s ease-out; }
@@ -270,6 +270,8 @@ const ESTILOS = `
   .deseret-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--d-faint); animation: deseret-bounce 1.2s infinite ease-in-out; }
   .deseret-typing span:nth-child(2) { animation-delay: .15s; }
   .deseret-typing span:nth-child(3) { animation-delay: .3s; }
+  .deseret-pensando-txt { font-size: 12.5px; color: var(--d-muted); margin-left: 8px; animation: dpaso-in .3s ease; }
+  @keyframes dpaso-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
   @keyframes deseret-bounce { 0%, 80%, 100% { opacity: .35; } 40% { opacity: 1; } }
 
   /* Cuadros comparativos */
@@ -1068,9 +1070,26 @@ export function initChatWidget() {
 
     const typing = document.createElement('div');
     typing.className = 'msg bot';
-    typing.innerHTML = '<span class="deseret-typing" aria-label="Deseret está escribiendo"><span></span><span></span><span></span></span>';
+    typing.innerHTML = '<span class="deseret-typing" aria-label="Deseret está escribiendo"><span></span><span></span><span></span></span><span class="deseret-pensando-txt"></span>';
     messagesDiv.appendChild(typing);
     scrollAbajo();
+    // Pasos que se van mostrando mientras Deseret piensa.
+    const q = String(text || '').toLowerCase();
+    const pasos = [
+      /acta|compromiso|reuni|acuerd/.test(q) ? 'Buscando en las actas…' : null,
+      /calendario|actividad|semana|mañana|hoy|cuándo|cuando|agenda|fecha/.test(q) ? 'Revisando el calendario…' : null,
+      /entrevista/.test(q) ? 'Revisando las entrevistas…' : null,
+      /presupuesto|gasto|plata|dinero/.test(q) ? 'Revisando el presupuesto…' : null,
+      'Ordenando la respuesta…',
+    ].filter(Boolean);
+    const txtPaso = typing.querySelector('.deseret-pensando-txt');
+    let iPaso = 0;
+    const timerPaso = setInterval(() => {
+      if (!typing.isConnected) return clearInterval(timerPaso);
+      txtPaso.textContent = pasos[Math.min(iPaso, pasos.length - 1)];
+      txtPaso.style.animation = 'none'; void txtPaso.offsetWidth; txtPaso.style.animation = '';
+      iPaso += 1;
+    }, 1500);
 
     let msgBot;
     try {
@@ -1093,6 +1112,7 @@ export function initChatWidget() {
     } catch (e) {
       msgBot = { role: 'bot', texto: 'Error de conexión. Revisa tu internet e intenta de nuevo.', error: true };
     }
+    clearInterval(timerPaso);
     typing.remove();
     estado.msgs.push(msgBot);
     pintarMensaje(msgBot);

@@ -6,14 +6,15 @@
   --celeste-lighter: #f0f9ff;
   --white: #ffffff;
   --ink: #0f172a;
-  --ink-soft: #475569;
-  --border: #dbeafe;
+  --ink-soft: #4b5a6e;
+  --border: #e3e8ef;
+  --acento: #6366f1;
   --danger: #ef4444;
   --danger-light: #fef2f2;
   --success: #16a34a;
-  --shadow: 0 1px 3px rgba(14, 165, 233, 0.12), 0 1px 2px rgba(14, 165, 233, 0.08);
-  --shadow-lg: 0 10px 30px rgba(3, 105, 161, 0.18);
-  --radius: 12px;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
+  --radius: 14px;
   /* Le dice al navegador que esta página soporta ambos temas, para que los
      controles nativos (scrollbar, calendario del <input type="date">, etc.)
      seleccionen su versión clara u oscura sin que tengamos que hacer nada. */
@@ -1270,12 +1271,14 @@ tr.wg-cat-row td {
     --celeste: #38bdf8;
     --celeste-dark: #7dd3fc;
     --celeste-darker: #bae6fd;
-    --celeste-light: #1e3a4f;
-    --celeste-lighter: #16283a;
-    --white: #16212c;
-    --ink: #e7eef4;
-    --ink-soft: #9db0c2;
-    --border: #2a3f52;
+    --celeste-light: #1d3557;
+    --celeste-lighter: #172a45;
+    --white: #132036;
+    --ink: #e8eef7;
+    --ink-soft: #a3b3c9;
+    --border: #24395a;
+    --acento: #a5b4fc;
+    --fondo: #0c1626;
     --danger: #f87171;
     --danger-light: #3a1414;
     --success: #4ade80;
@@ -1337,12 +1340,14 @@ tr.wg-cat-row td {
   --celeste: #38bdf8;
   --celeste-dark: #7dd3fc;
   --celeste-darker: #bae6fd;
-  --celeste-light: #1e3a4f;
-  --celeste-lighter: #16283a;
-  --white: #16212c;
-  --ink: #e7eef4;
-  --ink-soft: #9db0c2;
-  --border: #2a3f52;
+  --celeste-light: #1d3557;
+  --celeste-lighter: #172a45;
+  --white: #132036;
+  --ink: #e8eef7;
+  --ink-soft: #a3b3c9;
+  --border: #24395a;
+  --acento: #a5b4fc;
+  --fondo: #0c1626;
   --danger: #f87171;
   --danger-light: #3a1414;
   --success: #4ade80;
@@ -1715,3 +1720,116 @@ details.mas-campos[open] > summary { margin-bottom: 10px; }
 .borrador-aviso { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; }
 .home-kpi-l { display: inline-flex; align-items: center; gap: 5px; }
 .home-kpi-l .icon-svg { color: var(--celeste-dark); }
+
+
+/* ==================================================================
+   Mejoras de diseño (lote UX): paleta, sombras, modo oscuro, espaciado,
+   cabecera de Inicio, perfil, barras de presupuesto, animaciones.
+   ================================================================== */
+/* Modo oscuro: fondo general un tono más profundo que las tarjetas. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body { background: var(--fondo, #0c1626); }
+  :root:not([data-theme="light"]) .cal-cell.other-month { background: #0f1b2e; }
+}
+:root[data-theme="dark"] body { background: var(--fondo, #0c1626); }
+:root[data-theme="dark"] .cal-cell.other-month { background: #0f1b2e; }
+
+/* Tarjetas: sombra suave y radio uniforme */
+.card, .list-card, .home-card { border-radius: var(--radius); box-shadow: var(--shadow); }
+.list-card { transition: transform .15s ease, box-shadow .15s ease; }
+@media (hover: hover) { .list-card:hover { box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08); } }
+.modal { border-radius: 20px; }
+
+/* Espaciado uniforme en formularios y modales */
+.modal-header { padding: 18px 20px 6px; }
+.modal-body { padding: 10px 20px 20px; }
+.field { margin-bottom: 14px; }
+.field label { display: block; margin-bottom: 6px; font-weight: 600; }
+.field input, .field select, .field textarea { min-height: 42px; border-radius: 10px; }
+.modal-footer, .form-actions { gap: 10px; }
+.two-col { gap: 12px; }
+
+/* Cabecera de Inicio con ilustración */
+.home-cab { display: grid !important; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 12px; }
+.home-cab > div:nth-child(2) { min-width: 0; }
+.home-cab > div:nth-child(2) h2 { margin: 0; }
+@media (max-width: 720px) { .home-cab { grid-template-columns: auto 1fr; } .home-cab > div:nth-child(3) { grid-column: 1 / -1; margin-top: 10px; } }
+.home-cab-ilus { width: 52px; height: 52px; border-radius: 16px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.home-cab-manana .home-cab-ilus { background: #fef3c7; }
+.home-cab-tarde .home-cab-ilus { background: #ffedd5; }
+.home-cab-noche .home-cab-ilus { background: #1e1b4b; }
+.home-cab-ilus svg { animation: ilus-in .6s ease both; }
+@keyframes ilus-in { from { transform: translateY(6px) scale(.9); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Cabecera de Mi Perfil */
+.perfil-cab { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: var(--radius); background: linear-gradient(135deg, var(--celeste-lighter), var(--celeste-light)); margin-bottom: 10px; }
+.perfil-cab-foto { width: 60px; height: 60px; border-radius: 50%; object-fit: cover; font-size: 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.perfil-cab-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.perfil-cab-txt strong { font-size: 17px; color: var(--ink); }
+.perfil-cab-txt span { font-size: 13px; color: var(--ink-soft); }
+.perfil-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.perfil-stats:empty { display: none; }
+.perfil-stats > div { border: 1px solid var(--border); border-radius: 12px; padding: 8px; text-align: center; display: flex; flex-direction: column; gap: 2px; }
+.perfil-stats b { font-size: 20px; color: var(--celeste-darker); }
+.perfil-stats span { font-size: 11px; color: var(--ink-soft); line-height: 1.25; }
+
+/* Barras de presupuesto */
+.bud-barra { height: 8px; border-radius: 99px; background: var(--celeste-lighter); border: 1px solid var(--border); overflow: hidden; margin-top: 8px; }
+.bud-barra > i { display: block; height: 100%; border-radius: 99px; transition: width .6s ease; }
+.bud-ok > i { background: #22c55e; }
+.bud-alerta > i { background: #f59e0b; }
+.bud-pasado > i { background: #ef4444; }
+.bud-barra-txt { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+.bud-barra-txt.bud-sin { font-style: italic; }
+
+/* Íconos en las píldoras de estado */
+.status-pill svg { vertical-align: -2px; margin-right: 3px; }
+
+/* Iconos de línea que reemplazan emojis */
+.ico-auto { display: inline-flex; vertical-align: -3px; margin-right: 5px; opacity: .9; }
+
+/* Botón "Guardado" después de guardar */
+.btn.btn-ok { background: #16a34a !important; border-color: #16a34a !important; color: #fff !important; transition: background .2s; }
+
+/* Animación al completar */
+.anim-hecho { animation: hecho-pulso .55s ease; }
+@keyframes hecho-pulso { 0% { transform: scale(1); } 35% { transform: scale(1.03); box-shadow: 0 0 0 4px rgba(34,197,94,.35); } 100% { transform: scale(1); box-shadow: none; } }
+.anim-salir { animation: hecho-salir .4s ease forwards; }
+@keyframes hecho-salir { to { transform: translateX(40px); opacity: 0; } }
+
+/* Tirar para actualizar */
+.ptr { position: fixed; left: 50%; top: 0; transform: translate(-50%, -48px); z-index: 900; width: 38px; height: 38px; border-radius: 50%; background: var(--white); box-shadow: var(--shadow-lg); display: flex; align-items: center; justify-content: center; color: var(--celeste-dark); transition: transform .2s ease; pointer-events: none; }
+.ptr.girando svg { animation: ptr-gira .8s linear infinite; }
+@keyframes ptr-gira { to { transform: rotate(360deg); } }
+
+/* Menú al mantener presionado */
+.menu-lp-fondo { position: fixed; inset: 0; z-index: 2500; background: rgba(15, 23, 42, .25); }
+.menu-lp { position: fixed; z-index: 2501; min-width: 200px; max-width: 86vw; background: var(--white); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 6px; animation: tg-in .15s ease; }
+.menu-lp-t { font-size: 12px; color: var(--ink-soft); padding: 6px 10px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-lp button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; background: none; color: var(--ink); font-size: 14.5px; border-radius: 10px; text-align: left; }
+.menu-lp button:hover, .menu-lp button:active { background: var(--celeste-lighter); }
+.menu-lp button.peligro { color: var(--danger); }
+
+/* Confeti */
+.confeti { position: fixed; inset: 0; pointer-events: none; z-index: 4000; overflow: hidden; }
+.confeti i { position: absolute; top: -12px; width: 8px; height: 12px; border-radius: 2px; animation: confeti-cae 1.6s ease-in forwards; }
+@keyframes confeti-cae { to { transform: translateY(105vh) rotate(540deg); opacity: .8; } }
+
+/* Horas rápidas */
+.horas-rapidas { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.horas-rapidas button { border: 1px solid var(--border); background: var(--celeste-lighter); color: var(--celeste-darker); border-radius: 99px; padding: 4px 10px; font-size: 12.5px; font-weight: 600; }
+.horas-rapidas button.activa { background: var(--celeste); color: #fff; border-color: var(--celeste); }
+
+/* Arrastrar para ordenar */
+.asa-orden { cursor: grab; touch-action: none; color: var(--ink-soft); display: inline-flex; padding: 4px; flex-shrink: 0; }
+.ordenando { opacity: .9; box-shadow: var(--shadow-lg); position: relative; z-index: 5; background: var(--white); }
+
+/* Indicador de borrador guardado */
+.borrador-ind { font-size: 12px; color: var(--ink-soft); }
+
+/* Deseret pensando */
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-hecho, .anim-salir, .confeti i, .home-cab-ilus svg, .ptr.girando svg { animation: none !important; }
+}
+.home-cab h2 { font-size: 21px; line-height: 1.25; }
